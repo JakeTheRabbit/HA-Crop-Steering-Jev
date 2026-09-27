@@ -159,6 +159,23 @@ describe("watched entities", () => {
     expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_phase");
     expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_jev");
   });
+  it("includes each probe a zone's combined reading names, used or left out", () => {
+    const ids = watchedEntities({
+      ...home(),
+      ...states(
+        entity("sensor.crop_steering_vwc_zone_1", "58", {
+          used: ["sensor.z1_front_vwc"],
+          excluded: { "sensor.z1_back_vwc": "not reporting", "sensor.gone": "no reading" },
+        }),
+        entity("sensor.z1_front_vwc", "58.8"),
+        entity("sensor.z1_back_vwc", "57.2"),
+      ),
+    });
+    expect(ids).toContain("sensor.z1_front_vwc");
+    expect(ids).toContain("sensor.z1_back_vwc");
+    // A probe Home Assistant does not have would make it reject the whole subscription.
+    expect(ids).not.toContain("sensor.gone");
+  });
   it("is empty without crop-steering entities, so nothing subscribes to all of Home Assistant", () => {
     expect(watchedEntities(states(entity("light.kitchen", "on")))).toEqual([]);
   });

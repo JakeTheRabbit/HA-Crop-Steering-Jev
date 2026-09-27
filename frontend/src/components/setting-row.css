@@ -176,3 +176,47 @@
     display: none;
   }
 }
+/* Setup › Water & calibration: a catch test, tried in the calculation only. */
+.catch-test {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.catch-test h3 {
+  font-size: var(--text-sm);
+}
+.catch-test-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  align-items: end;
+  gap: 12px;
+}
+.catch-test-fields > div:not(.catch-test-result) {
+  display: grid;
+  gap: 6px;
+}
+.catch-test-result {
+  display: grid;
+  gap: 2px;
+}
+.catch-test-result > span,
+.catch-test-result > small {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+.catch-test-result strong {
+  font-size: 18px;
+}
+.catch-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .catch-test-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

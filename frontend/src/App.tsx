@@ -46,7 +46,7 @@ import { ZonePage } from "@/pages/zone";
 import { Today } from "@/pages/today";
 import { Strategy, type Drafts } from "@/pages/strategy";
 import { Timeline } from "@/pages/timeline";
-import { Sensors } from "@/pages/sensors";
+import { Probes } from "@/pages/probes";
 import { Settings } from "@/pages/settings";
 import { Help } from "@/pages/help";
 import { GrowPlanner } from "@/pages/grow-planner";
@@ -359,7 +359,9 @@ export default function App() {
             {page === "history/compare" && (
               <Comparison key={pageKey} controller={controller} navigate={navigate} />
             )}
-            {page === "equipment/probes" && <Sensors key={pageKey} controller={controller} />}
+            {page === "equipment/probes" && (
+              <Probes key={pageKey} controller={controller} navigate={navigate} />
+            )}
             {page === "equipment/stock" && (
               <StockTanks key={pageKey} controller={controller} navigate={navigate} />
             )}

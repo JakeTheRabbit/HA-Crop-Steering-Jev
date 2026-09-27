@@ -14,7 +14,6 @@ import {
   parseJevSetpoints,
   parseJevStage,
   parseJevZone,
-  type JevEntry,
 } from "./jev";
 import type { EntityState } from "./types";
 

@@ -18,13 +18,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { Change, Controller, LogEvent, Metric, Series, Zone } from "@/lib/types";
+import type { Change, Controller, LogEvent, Series, Zone } from "@/lib/types";
 import { errorText } from "@/lib/utils";
-import { budgetShare } from "@/lib/dryback";
-import { coreWaterValue, dailyWater, waterParameters } from "@/lib/water-delivery";
+import { coreWaterValue, waterParameters } from "@/lib/water-delivery";
 import type { Page } from "@/lib/routes";
-import { mlPerPlant, plantAmount, roomPerPlant, type WaterView } from "@/lib/water-view";
-import { Pill, type MiniBar, type PillTone, type Tone } from "./mini-visuals";
+import { plantAmount } from "@/lib/water-view";
+import { Pill, type PillTone } from "./mini-visuals";
 
 export type { Page };
 export const number = (value: number | null, digits = 1) =>
@@ -40,14 +39,6 @@ export const time = (value?: string | number | null) =>
           hour: "2-digit",
           minute: "2-digit",
         });
-export function MetricValue({ metric }: { metric: Metric }) {
-  return (
-    <>
-      {number(metric.value)}
-      {metric.value !== null && <span className="unit"> {metric.unit}</span>}
-    </>
-  );
-}
 export function Heading({
   title,
   description,
@@ -112,76 +103,6 @@ export function EventType({ type }: { type: LogEvent["type"] }) {
  * safety bounds. */
 export const dailyLimit = (controller: Controller, zoneId: number) =>
   coreWaterValue("max_daily_volume", waterParameters(controller, zoneId).max_daily_volume).value;
-/** Water used against the daily limit: amber from 80 %, red once it is spent. */
-export const budgetTone = (share: number | null): Tone =>
-  share === null ? "normal" : share >= 100 ? "over" : share >= 80 ? "high" : "normal";
-
-/** A room metric's zones as mini bars, and the line under the headline number. */
-export function zoneBreakdown(
-  metric: Metric,
-  zones: Zone[],
-  limits: Record<number, number | null>,
-  /** Water per plant (Settings → Appearance): each zone's configured plant count. */
-  perPlant?: { view: WaterView; plants: Record<number, number | null> },
-): { caption: string | null; bars: MiniBar[]; max: number; label: string } {
-  const key = metric.key!;
-  const known = zones.flatMap((zone) => (zone[key].value === null ? [] : [zone[key].value!]));
-  const average = known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
-  const unit = key === "shots" ? " shots" : ` ${metric.unit}`;
-  const limited = key === "water" && zones.some((zone) => (limits[zone.id] ?? null) !== null);
-  const plants = key === "water" && perPlant?.view === "plant" ? perPlant.plants : null;
-  const room = plants && roomPerPlant(zones, plants);
-  const bars = zones.map((zone): MiniBar => {
-    const value = zone[key].value;
-    const limit = limits[zone.id] ?? null;
-    const share = limited ? budgetShare(value, limit) : null;
-    const each = plants && dailyWater(zone, plants[zone.id] ?? null).mlPerPlant;
-    const limitEach = plants && mlPerPlant(limit, plants[zone.id] ?? null);
-    return {
-      id: String(zone.id),
-      label: String(zone.id),
-      value: limited ? share : (each ?? value),
-      tone: limited ? budgetTone(share) : "normal",
-      title:
-        each !== null && each !== undefined
-          ? `${zone.name}: ${plantText(each)} per plant` +
-            (share === null || limitEach === null
-              ? ""
-              : ` of ${plantText(limitEach)}, ${number(share, 0)}% of its daily limit`)
-          : `${zone.name}: ${number(value)}${value === null ? "" : unit}` +
-            (share === null
-              ? ""
-              : ` of ${number(limit)} L, ${number(share, 0)}% of its daily limit`),
-    };
-  });
-  const lo = Math.min(...known),
-    hi = Math.max(...known);
-  return {
-    caption:
-      average === null
-        ? null
-        : room
-          ? `Per plant, across ${number(room.plants, 0)} plants`
-          : key === "water" || key === "shots"
-            ? `Avg ${number(average)}${unit} per zone`
-            : known.length > 1
-              ? `Range ${number(lo)}–${number(hi)}${unit}`
-              : null,
-    bars,
-    // Totals start from zero; averages leave headroom so the smallest zone still shows.
-    max: limited
-      ? 100
-      : plants
-        ? Math.max(0, ...bars.map((bar) => bar.value ?? 0))
-        : key === "shots" || key === "water"
-          ? hi
-          : hi * 1.1,
-    label:
-      (limited ? "Share of each zone's daily water limit. " : `${metric.label} by zone. `) +
-      bars.map((bar) => bar.title).join("; "),
-  };
-}
-
 const HISTORY_RANGES = [
   { hours: 6, label: "Last 6 hours" },
   { hours: 24, label: "Last 24 hours" },
@@ -390,7 +311,10 @@ export function HistoryChart({
                       ? time(value)
                       : hours <= 72
                         ? `${new Date(value).toLocaleDateString([], { weekday: "short" })} ${time(value)}`
-                        : new Date(value).toLocaleDateString([], { weekday: "short", day: "numeric" })
+                        : new Date(value).toLocaleDateString([], {
+                            weekday: "short",
+                            day: "numeric",
+                          })
                   }
                   minTickGap={65}
                   tickLine={false}
@@ -468,24 +392,6 @@ export function HistoryChart({
   );
 }
 
-/** A phase in its timeline colour; anything else in grey. */
-export function PhasePill({ phase }: { phase: string }) {
-  return /^P[0-3]$/.test(phase) ? (
-    <span className="pill" data-phase={phase}>
-      {phase}
-    </span>
-  ) : (
-    <span className="pill" data-tone="unknown">
-      {phase === "Unavailable" || !phase ? "Phase unavailable" : phase}
-    </span>
-  );
-}
-
-/** Water for one plant: mL below a litre, litres from one up. */
-const plantText = (ml: number) => {
-  const { value, unit, digits } = plantAmount(ml);
-  return `${number(value, digits)} ${unit}`;
-};
 export function PlantAmount({ ml }: { ml: number }) {
   const { value, unit, digits } = plantAmount(ml);
   return (

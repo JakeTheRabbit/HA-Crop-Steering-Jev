@@ -1,13 +1,17 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { ArrowRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ReviewDialog, number, type ReviewItem } from "@/components/dashboard";
 import { SettingRow } from "@/components/setting-row";
 import { WaterDelivery } from "@/components/water-delivery";
+import { calibrateDripper } from "@/lib/catch-test";
 import { buildSetpointPreview, validateSetpoint } from "@/lib/setpoint-preview";
 import { setpointParam } from "@/lib/sensor-context";
 import { GROUP_HELP, settingWords } from "@/lib/setting-words";
 import type { Controller, Setting } from "@/lib/types";
+import { waterParameters } from "@/lib/water-delivery";
 import "./setting-row.css";
 
 type Drafts = Record<string, { value: string; original: number | string | null }>;
@@ -28,6 +32,11 @@ export function ControllerSettings({
   const [drafts, setDrafts] = useState<Drafts>({});
   const [review, setReview] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Water & calibration: a catch test tried in the calculation only, never written.
+  const [catchMl, setCatchMl] = useState(""),
+    [catchMinutes, setCatchMinutes] = useState(""),
+    [useCatchFlow, setUseCatchFlow] = useState(false);
+  useEffect(() => setUseCatchFlow(false), [zoneId]);
   const dirty = Object.keys(drafts).length > 0;
   useLayoutEffect(() => {
     onDirtyChange(dirty);
@@ -39,6 +48,16 @@ export function ControllerSettings({
   ).filter((field) => ["Substrate", "Hardware sizing", "Safety"].includes(field.group));
   const connected = ["live", "demo"].includes(controller.connection);
   const preview = zone ? buildSetpointPreview(room, states, zone.id, drafts) : null;
+  const configuredFlow = zone ? waterParameters(controller, zone.id).dripper_flow_rate : null;
+  const catchFlow =
+    catchMl.trim() && catchMinutes.trim()
+      ? calibrateDripper(Number(catchMl), Number(catchMinutes))
+      : null;
+  // The controller's water today over its shots today: the day's mean shot, in litres.
+  const meanShot =
+    zone && zone.water.value !== null && zone.shots.value !== null && zone.shots.value > 0
+      ? zone.water.value / zone.shots.value
+      : null;
   const label = (setting: Setting) => {
     const param = setpointParam(setting.entityId, room.room.prefix);
     return (param && settingWords(param)?.label) || setting.label;
@@ -166,13 +185,93 @@ export function ControllerSettings({
         </>
       )}
       {zone && preview && (
-        <div className="setpoint-water">
+        <div className="setpoint-water" aria-label="Water and calibration">
           <WaterDelivery
             controller={controller}
             zoneId={zone.id}
             parameters={preview.draft.parameters}
-            fieldOverrides={preview.fieldOverrides}
+            fieldOverrides={
+              useCatchFlow && catchFlow !== null
+                ? { ...preview.fieldOverrides, dripper_flow_rate: catchFlow }
+                : preview.fieldOverrides
+            }
           />
+          {useCatchFlow && (
+            <p className="notice-inline">Using your catch-test flow in this calculation only.</p>
+          )}
+          <div className="catch-test">
+            <h3>Catch-test calibration</h3>
+            <p className="small muted">
+              Collect water from a representative dripper for a measured time, and enter what one
+              dripper gave.
+            </p>
+            <div className="catch-test-fields">
+              <div>
+                <Label htmlFor="catch-volume">Collected water per dripper · mL</Label>
+                <Input
+                  id="catch-volume"
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="e.g. 200"
+                  value={catchMl}
+                  onChange={(event) => {
+                    setCatchMl(event.target.value);
+                    setUseCatchFlow(false);
+                  }}
+                />
+              </div>
+              <div>
+                <Label htmlFor="catch-time">Collection time · minutes</Label>
+                <Input
+                  id="catch-time"
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  placeholder="e.g. 3"
+                  value={catchMinutes}
+                  onChange={(event) => {
+                    setCatchMinutes(event.target.value);
+                    setUseCatchFlow(false);
+                  }}
+                />
+              </div>
+              <div className="catch-test-result">
+                <span>Estimated flow per dripper</span>
+                <strong>
+                  {catchFlow === null ? "—" : number(catchFlow, 2)}{" "}
+                  <small>{catchFlow !== null ? "L/h" : ""}</small>
+                </strong>
+                {catchFlow !== null && configuredFlow !== null && configuredFlow > 0 && (
+                  <small>
+                    {number(Math.abs(((catchFlow - configuredFlow) / configuredFlow) * 100), 1)}%{" "}
+                    {catchFlow < configuredFlow ? "below" : "above"} the configured{" "}
+                    {number(configuredFlow, 2)} L/h
+                  </small>
+                )}
+              </div>
+            </div>
+            <div className="catch-test-actions">
+              <Button
+                variant="outline"
+                disabled={catchFlow === null}
+                onClick={() => setUseCatchFlow(true)}
+              >
+                Use estimate in the calculation
+              </Button>
+              {useCatchFlow && (
+                <Button variant="ghost" onClick={() => setUseCatchFlow(false)}>
+                  Return to configured flow
+                </Button>
+              )}
+            </div>
+            <p className="small muted">
+              This does not write calibration or operate irrigation: check several drippers, then
+              set the flow in the zone's mapping above. The controller's recorded mean shot today:{" "}
+              {number(meanShot, 2)} {meanShot !== null ? "L" : ""}, which differs by phase and
+              controller adjustment and is not a calibration.
+            </p>
+          </div>
         </div>
       )}
       <ReviewDialog

@@ -35,6 +35,7 @@ import {
   type EntityUpdate,
   type LiveConnection,
 } from "./live";
+import { roomProbeIds } from "./probes";
 import { historySamples, type WaterRecord, type WaterRecordRequest } from "./water-use";
 
 type Listener = () => void;
@@ -576,10 +577,12 @@ export class ControllerStore {
   history = async (entityIds: string[], hours: number, signal?: AbortSignal) => {
     if (!Number.isFinite(hours) || hours <= 0 || hours > 720)
       throw new Error("History range must be between 0 and 720 hours.");
-    // The room's own entities, and the tank probes its descriptor maps for display.
+    // The room's own entities, the probes its zones' readings combine, and the tank probes its
+    // descriptor maps for display.
     const mapped = descriptor(this.states, this.snapshot.room.room)?.attributes;
     const allowed = new Set([
       ...this.snapshot.room.entities.map((e) => e.entity_id),
+      ...roomProbeIds(this.snapshot.room.zones, this.states),
       ...[mapped?.tank_ec_sensor, mapped?.tank_ph_sensor].filter(
         (id): id is string => typeof id === "string" && !!id,
       ),

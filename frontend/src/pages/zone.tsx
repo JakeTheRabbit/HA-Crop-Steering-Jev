@@ -28,7 +28,8 @@ import {
 import { referenceLines } from "@/lib/sensor-context";
 import { buildSetpointPreview } from "@/lib/setpoint-preview";
 import { jevChip, TARGET_GROUPS } from "@/lib/targets";
-import type { Controller, EntityState, Zone } from "@/lib/types";
+import { PROBE_TONE, zoneProbes } from "@/lib/probes";
+import type { Controller, Zone } from "@/lib/types";
 import { dayWord } from "@/lib/utils";
 import "./zone.css";
 
@@ -350,8 +351,8 @@ function ZoneTargets({
   );
 }
 
-/** The probes behind the zone's two readings: each one's reading, and whether the combined reading
- * uses it. From the integration's combined sensors; an older one reports only the combined value. */
+/** The probes behind the zone's two readings: each one's reading, whether the combined reading uses
+ * it, and whether to believe it (lib/probes, as Equipment › Probes shows them). */
 function ZoneProbes({
   controller,
   zone,
@@ -362,11 +363,7 @@ function ZoneProbes({
   navigate: (page: Page) => void;
 }) {
   const { states } = controller;
-  const groups = (["vwc", "ec"] as const).map((kind) => {
-    const metric = zone[kind];
-    const fused = metric.entityId ? states[metric.entityId] : undefined;
-    return { kind, metric, fused, probes: probeRows(fused, states) };
-  });
+  const probes = zoneProbes(zone, states, Date.now());
   return (
     <section className="panel zone-probes" aria-labelledby="zone-probes-title">
       <div className="panel-heading">
@@ -379,9 +376,12 @@ function ZoneProbes({
         </Button>
       </div>
       <div className="zone-panel-body">
-        {groups.map(({ kind, metric, fused, probes }) => {
+        {(["vwc", "ec"] as const).map((kind) => {
+          const metric = zone[kind];
+          const fused = metric.entityId ? states[metric.entityId] : undefined;
           const spread =
             typeof fused?.attributes.spread === "number" ? fused.attributes.spread : null;
+          const mine = probes.filter((probe) => probe.kind === kind);
           return (
             <div className="zone-probe-group" key={kind}>
               <h3>
@@ -391,73 +391,41 @@ function ZoneProbes({
                     ? "· no usable reading"
                     : `· zone reads ${number(metric.value, kind === "ec" ? 2 : 1)}${kind === "vwc" ? "%" : ""}`}
                   {spread !== null &&
-                    probes.filter((probe) => probe.used).length > 1 &&
+                    mine.filter((probe) => probe.used).length > 1 &&
                     ` · probes ${number(spread, kind === "ec" ? 2 : 1)} apart`}
                 </span>
               </h3>
-              {probes.length ? (
-                <ul className="zone-probe-list">
-                  {probes.map((probe) => (
-                    <li key={probe.id}>
-                      <span className="zone-probe-name">
-                        {probe.name}
-                        <code>{probe.id}</code>
-                      </span>
-                      <span className="numeric">{probe.reading}</span>
-                      <Pill dot tone={probe.used ? "on" : "warn"}>
-                        {probe.used ? "Used" : `Left out: ${probe.reason}`}
-                      </Pill>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <ul className="zone-probe-list">
-                  <li>
+              <ul className="zone-probe-list">
+                {mine.map((probe) => (
+                  <li key={probe.id}>
                     <span className="zone-probe-name">
-                      {String(fused?.attributes.friendly_name ?? metric.entityId ?? "Not mapped")}
-                      {metric.entityId && <code>{metric.entityId}</code>}
+                      {probe.name}
+                      <code>{probe.id}</code>
                     </span>
                     <span className="numeric">
-                      {fused
-                        ? `${fused.state} ${String(fused.attributes.unit_of_measurement ?? "")}`
-                        : "—"}
+                      {probe.value === null ? "—" : `${probe.value} ${probe.unit}`.trim()}
                     </span>
-                    <Pill dot tone={metric.value === null ? "off" : "on"}>
-                      {metric.value === null ? "Not reporting" : "Reporting"}
+                    <Pill dot tone={PROBE_TONE[probe.health]} data-probe-health={probe.health}>
+                      {probe.health !== "ok"
+                        ? probe.text
+                        : probe.used === null
+                          ? "Reporting"
+                          : "Used"}
                     </Pill>
                   </li>
-                </ul>
-              )}
+                ))}
+                {!mine.length && (
+                  <li>
+                    <span className="zone-probe-name">Not mapped</span>
+                  </li>
+                )}
+              </ul>
             </div>
           );
         })}
       </div>
     </section>
   );
-}
-/** Each probe of a combined sensor (its `used` and `excluded`), with its own reading. */
-export function probeRows(fused: EntityState | undefined, states: Controller["states"]) {
-  const used = Array.isArray(fused?.attributes.used)
-    ? (fused!.attributes.used as unknown[]).filter((id): id is string => typeof id === "string")
-    : [];
-  const excluded =
-    fused?.attributes.excluded &&
-    typeof fused.attributes.excluded === "object" &&
-    !Array.isArray(fused.attributes.excluded)
-      ? (fused.attributes.excluded as Record<string, unknown>)
-      : {};
-  return [...used, ...Object.keys(excluded).filter((id) => !used.includes(id))].map((id) => {
-    const entity = states[id];
-    return {
-      id,
-      name: String(entity?.attributes.friendly_name ?? id),
-      reading: entity
-        ? `${entity.state} ${String(entity.attributes.unit_of_measurement ?? "")}`.trim()
-        : "not in Home Assistant",
-      used: used.includes(id),
-      reason: typeof excluded[id] === "string" && excluded[id] ? String(excluded[id]) : "left out",
-    };
-  });
 }
 
 /** Pause the zone's scheduling, and move it to a phase by hand: each through its review. */

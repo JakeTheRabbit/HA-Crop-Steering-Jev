@@ -249,6 +249,12 @@ export function watchedEntities(states: States): string[] {
     if (!/^[a-z_]+\.crop_steering_/.test(id)) continue;
     ids.add(id);
     if (/^sensor\.crop_steering_.*ai_heartbeat$/.test(id)) visit(entity.attributes.enable_flag);
+    // A zone's probes, as its combined reading names them: Equipment › Probes shows each one.
+    if (/^sensor\.crop_steering_.*(vwc|ec)_zone_\d+$/.test(id)) {
+      visit(entity.attributes.used);
+      const excluded = entity.attributes.excluded;
+      if (excluded && typeof excluded === "object") visit(Object.keys(excluded));
+    }
     if (!/^sensor\.crop_steering_.*engine_config$/.test(id)) continue;
     visit(entity.attributes);
     const { prefix, num_zones } = entity.attributes;

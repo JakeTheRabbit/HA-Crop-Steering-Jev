@@ -15,6 +15,7 @@ import { Empty, Heading, number, type Page } from "@/components/dashboard";
 import {
   batchesLeft,
   draftErrors,
+  nextToRunOut,
   stockShare,
   stockTone,
   type StockDocument,
@@ -397,6 +398,13 @@ export function StockTanks({
           {doc.error}
         </p>
       )}
+      {doc && nextToRunOut(doc.tanks, doc.doses) && (
+        <p className="stock-next" data-stock-next>
+          Next to run out: <strong>{nextToRunOut(doc.tanks, doc.doses)!.tank.name}</strong>, about{" "}
+          {nextToRunOut(doc.tanks, doc.doses)!.batches}{" "}
+          {nextToRunOut(doc.tanks, doc.doses)!.batches === 1 ? "batch" : "batches"} left.
+        </p>
+      )}
       {doc && (
         <p className="stock-source" data-stock-source>
           {doc.fill_entity ? (
@@ -446,42 +454,49 @@ export function StockTanks({
         </div>
       )}
       {doc && !!doc.history.length && (
-        <section className="panel stock-history">
-          <div className="panel-heading">
-            <h2>Recent batches</h2>
-          </div>
-          <div className="table-scroll" tabIndex={0} aria-label="Recent batches">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>Counted from</th>
-                  {doc.tanks.map((tank) => (
-                    <th key={tank.id}>{tank.name}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {doc.history.slice(0, 10).map((batch) => (
-                  <tr key={batch.at + batch.source}>
-                    <td>{when(batch.at)}</td>
-                    <td>
-                      <span className="pill" data-tone="unknown">
-                        {batch.source === "fill" ? "Tank fill" : "By hand"}
-                      </span>
-                    </td>
+        <details className="stock-history-more">
+          <summary>Recent batches ({doc.history.length})</summary>
+          <section className="panel stock-history">
+            <div className="panel-heading">
+              <h2>Recent batches</h2>
+            </div>
+            <div className="table-scroll" tabIndex={0} aria-label="Recent batches">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Counted from</th>
                     {doc.tanks.map((tank) => (
-                      <td key={tank.id} className="numeric">
-                        {batch.draw_ml[tank.id] === undefined ? "—" : number(batch.draw_ml[tank.id], 0)}
-                        {batch.draw_ml[tank.id] !== undefined && <span className="unit"> mL</span>}
-                      </td>
+                      <th key={tank.id}>{tank.name}</th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                </thead>
+                <tbody>
+                  {doc.history.slice(0, 10).map((batch) => (
+                    <tr key={batch.at + batch.source}>
+                      <td>{when(batch.at)}</td>
+                      <td>
+                        <span className="pill" data-tone="unknown">
+                          {batch.source === "fill" ? "Tank fill" : "By hand"}
+                        </span>
+                      </td>
+                      {doc.tanks.map((tank) => (
+                        <td key={tank.id} className="numeric">
+                          {batch.draw_ml[tank.id] === undefined
+                            ? "—"
+                            : number(batch.draw_ml[tank.id], 0)}
+                          {batch.draw_ml[tank.id] !== undefined && (
+                            <span className="unit"> mL</span>
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </details>
       )}
       {editing && doc && (
         <Editor
@@ -501,8 +516,8 @@ export function StockTanks({
             <DialogHeader>
               <DialogTitle>Record a batch by hand?</DialogTitle>
               <DialogDescription>
-                Batches are already counted from {doc.fill_entity}. Record one here only for a
-                batch that entity missed, or it is counted twice.
+                Batches are already counted from {doc.fill_entity}. Record one here only for a batch
+                that entity missed, or it is counted twice.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
