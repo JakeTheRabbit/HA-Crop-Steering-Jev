@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.0.0 - 2026-09-27
+
+- Jev now judges the moments the controller used to decide by fixed rules: when the morning ramp starts and ends, when the day's watering stops, why pore EC moved, and whether a probe or a shot can be trusted.
+- Your own crop-steering doctrine and stage arc are part of every judgement, and each zone is checked against today's stage of flower.
+- Every judgement shows on its zone with how sure Jev was and what the controller did with it. Without a Jev key the controller runs exactly as before.
+- Bug fixes and improvements.
+
 ## 2.25.1 - 2026-09-27
 
 - A zone with more than one moisture probe reads the middle one, and no longer jumps when a probe drops out or stops reporting.

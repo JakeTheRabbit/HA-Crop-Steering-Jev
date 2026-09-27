@@ -1,3 +1,7 @@
+# 3.0.0
+
+The Jev edition. Pair with integration 3.0.0. **C3.** Jev judges the engine's decisions inside a code envelope (docs/JEV.md); with no Jev key it runs exactly as 2.25.1. New options: `typesafe_api_key`, `jev_enabled`, `jev_judges`, `jev_daily_calls`, `jev_flower_start`, `jev_flower_days`. No state-file change. Not run on hardware.
+
 # 2.25.1
 
 Pair with integration 2.25.1. **No controller change:** the version moves with the pair (the integration's zone sensors now combine a zone's probes, #130). No change to add-on options or the state file.

@@ -9,6 +9,47 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-09-27
+
+**The Jev edition.** Pair: **controller 3.0.0**. Class **C3**. This repository starts from Crop Steering 2.25.1 and
+adds TypeSafe Jev, a typed-decision model, as the judge of every decision the engine made with a fixed rule, inside a
+deterministic envelope. With no Jev key, or Jev off, slow or down, the engine runs exactly as 2.25.1. Not run on
+hardware; checked by the lean, controller, engine, real-Home-Assistant and browser suites, and against the real Jev
+(14 of 14 situations answered as an experienced grower would). What it is and what "truly insane and amazing" means
+here: docs/JEV.md.
+
+### 🌱 In plain English
+
+- **Jev judges ten decisions** the engine used to make by fixed rules: when the morning ramp starts and when it is
+  done, why pore EC moved and how to steer it, when the day's watering stops, whether a probe tells the truth,
+  whether each shot landed, whether an overnight low is a probe fault, why one zone drinks differently, whether the
+  zone is on the stage's arc for today's day of flower, and which alerts buzz a phone.
+- **The owner's own crop-steering doctrine** (his GrowLabs wiki: TEROS-12, closed loop, flowering stages, rockwool,
+  one steering law, slab strategy, ripening) is written into every question, with the stage arc for each day of flower.
+- **Code keeps everything physical.** Jev never opens a valve, sizes a shot, crosses the daily floor or cap, or stops
+  a rescue. It can bring a phase forward, set a lying probe aside (on the dead-probe path), choose the EC steer's mode
+  and raise advice; each of those passes a code check first. A zone steered vegetative is never stopped early.
+- **A council, not a coin toss:** every question is asked in two phrasings, and Jev acts only when both lead to the
+  same action.
+- **Everything is shown:** a Jev sensor per zone and per room, and a log of what acted and how it turned out.
+- **Two ways to reach Jev:** a TypeSafe API key, or a Cloudflare Workers AI account and token.
+
+### 🔧 Technical notes
+
+- **Runtime (`addons/f2_control/f2_control/jev/`):** `client` (a background asker with a daily budget; TypeSafe direct
+  or Cloudflare), `council` (two phrasings, `firm_in` action groups), `context`, `envelope`, `ledger`
+  (`/data/jev_ledger.jsonl`), `brain` (decides once per answer, re-admits the standing directive each pass), `triage`,
+  `doctrine` (99 cited rules, the slab-guide stage arc). Judges: dawn, ramp, salt, dusk, probe, shot, night, zones,
+  stage. `jev_bridge.py` feeds the controller's pass; the controller calls it in `_loop_room`, `_advance_shot_counters`
+  and `_alert`, each inside a try that leaves the base engine's decision.
+- **New alerts:** CS-701 water not reaching a zone, CS-702 a zone's water per plant out of line, CS-703 an overnight
+  low that looks like a probe fault, CS-704 a probe Jev set aside, CS-705 a zone off its stage's arc.
+- **Options:** `typesafe_api_key`, `jev_enabled`, `jev_judges`, `jev_daily_calls`, `jev_flower_start`,
+  `jev_flower_days` (with the existing `cf_*`). Sensors: `sensor.crop_steering_<prefix>zone_N_jev`,
+  `sensor.crop_steering_<prefix>jev`.
+- **Upgrade from the original:** a different repository, so the controller app moves once, carrying `/data/state.json`
+  and its options (docs/INSTALL.md); the integration keeps its domain and entity ids. No state-file change.
+
 ## [2.25.1] - 2026-09-27
 
 Pair: **controller 2.25.1**. Class **C2**. One pull request (#130): each zone's VWC and EC sensor combines
