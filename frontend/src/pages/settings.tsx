@@ -1,14 +1,5 @@
 import { useState } from "react";
-import {
-  ArrowUpRight,
-  Check,
-  Droplets,
-  LoaderCircle,
-  Moon,
-  Sprout,
-  Sun,
-  Monitor,
-} from "lucide-react";
+import { Check, Droplets, LoaderCircle, Moon, Sprout, Sun, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,10 +15,12 @@ import { Heading, ReviewDialog, Status } from "@/components/dashboard";
 import { Pill, type PillTone } from "@/components/mini-visuals";
 import type { Controller } from "@/lib/types";
 import { errorText } from "@/lib/utils";
-import { RoomPower } from "@/components/room-controls";
+import { AllZonesSwitch, RoomPower } from "@/components/room-controls";
+import { SizingUnitPickers, useSizingUnits } from "@/components/zone-sizing";
 import { RunRecords } from "@/components/run-records";
 import type { ThemePreference, ThemeSource } from "@/lib/ha-theme";
 import { useWaterView, type WaterView } from "@/lib/water-view";
+import "./settings.css";
 
 /** The connection in the top bar's words, with the colour of its state. */
 const CONNECTION: Record<Controller["connection"], { label: string; tone: PillTone }> = {
@@ -37,17 +30,6 @@ const CONNECTION: Record<Controller["connection"], { label: string; tone: PillTo
   offline: { label: "Offline", tone: "off" },
 };
 
-export function workspaceLink(view: string): string {
-  const routes: Record<string, string> = {
-    timeline: "grow-plan",
-    recipes: "grow-plan",
-    tune: "strategy",
-    climate: "sensors",
-    floor: "setup",
-    substrate: "insights",
-  };
-  return "#/" + (routes[view] || "help");
-}
 export function Settings({
   controller,
   theme,
@@ -63,6 +45,7 @@ export function Settings({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const water = useWaterView();
+  const units = useSizingUnits();
   const [waterBusy, setWaterBusy] = useState(false);
   const [waterError, setWaterError] = useState("");
   async function chooseWater(view: WaterView) {
@@ -102,25 +85,6 @@ export function Settings({
     <>
       <Heading title="Settings" />
       <div className="settings-stack">
-        {controller.demo && (
-          <section className="panel settings-section">
-            <div className="settings-label">
-              <h2>Sample workspace</h2>
-              <p>
-                Synthetic sensor readings, example plans and historical runs let you explore the
-                interface.
-              </p>
-            </div>
-            <div>
-              <Button variant="outline" onClick={() => setResetDemo(true)}>
-                Reset demo session…
-              </Button>
-              <p className="small muted mt-3">
-                Restore the sample rooms and runs. Saved recipes stay in this browser.
-              </p>
-            </div>
-          </section>
-        )}
         <section className="panel settings-section">
           <div className="settings-label">
             <h2>Home Assistant connection</h2>
@@ -257,6 +221,16 @@ export function Settings({
               starts with watering off, so nothing is watered before its hardware has been checked.
               This is not an emergency stop.
             </p>
+            {controller.room.zones.length > 0 && (
+              <div className="settings-zones">
+                <h3>Every zone’s scheduling</h3>
+                <AllZonesSwitch controller={controller} />
+                <p className="small muted">
+                  Pause or switch on every zone of {controller.room.room.name} at once, through a
+                  review. Each zone also has its own switch on its page.
+                </p>
+              </div>
+            )}
           </div>
         </section>
         <section className="panel settings-section">
@@ -339,7 +313,7 @@ export function Settings({
                   ? `For ${controller.room.room.name}: everyone who opens it sees water today this way, and the controller’s vitals notification follows it. `
                   : "This needs the updated Crop Steering integration. "}
                 Per plant is each zone’s water today, and its daily limit, divided by its plant
-                count from Rooms &amp; setup, as if every plant got the same. Water use over the
+                count from Equipment › Setup, as if every plant got the same. Water use over the
                 grow stays in litres per zone.
               </p>
             </div>
@@ -347,28 +321,30 @@ export function Settings({
         </section>
         <section className="panel settings-section">
           <div className="settings-label">
-            <h2>Advanced workflows</h2>
-            <p>Planning, diagnostics and room configuration share this workspace.</p>
+            <h2>Units</h2>
+            <p>How pot volume and dripper flow are shown and typed in this browser.</p>
           </div>
-          <div className="tool-link-list">
-            {!workspaceLink("tune") && (
-              <p className="notice-inline">{"Open the matching workflow in this dashboard."}</p>
-            )}
-            <a href={workspaceLink("tune")} aria-disabled={!workspaceLink("tune")}>
-              Manual setpoints <ArrowUpRight size={16} />
-            </a>
-            <a href={workspaceLink("climate")} aria-disabled={!workspaceLink("climate")}>
-              Climate detail <ArrowUpRight size={16} />
-            </a>
-            <a href={workspaceLink("floor")} aria-disabled={!workspaceLink("floor")}>
-              Room floor plan <ArrowUpRight size={16} />
-            </a>
-            <p className="small muted">
-              Classic controls retain their existing behavior. Manual-shot events and phase
-              overrides are not verified commands for this add-on.
-            </p>
-          </div>
+          <SizingUnitPickers units={units} disabled={false} />
         </section>
+        {controller.demo && (
+          <section className="panel settings-section">
+            <div className="settings-label">
+              <h2>Sample workspace</h2>
+              <p>
+                Synthetic sensor readings, example plans and historical runs let you explore the
+                interface.
+              </p>
+            </div>
+            <div>
+              <Button variant="outline" onClick={() => setResetDemo(true)}>
+                Reset demo session…
+              </Button>
+              <p className="small muted mt-3">
+                Restore the sample rooms and runs. Saved recipes stay in this browser.
+              </p>
+            </div>
+          </section>
+        )}
       </div>
       {controller.demo && (
         <Dialog open={resetDemo} onOpenChange={setResetDemo}>
