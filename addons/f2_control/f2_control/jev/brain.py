@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from . import council
+from . import journal as jn
 from .envelope import admit
 
 
@@ -39,6 +40,7 @@ class Brain:
         self.state: dict[tuple, JudgeState] = {}
         self.errors: dict[str, str] = {}
         self.triage = None
+        self.journal = None  # jev.journal.Journal: every decision, for the dashboard's live log
 
     @property
     def enabled(self):
@@ -80,7 +82,8 @@ class Brain:
         ans = self.asker.result(key)
         if ans is None:
             return None
-        if ans.seq != st.seen_seq:  # a new answer: decide on it once
+        new = ans.seq != st.seen_seq
+        if new:  # a new answer: decide on it once
             st.seen_seq = ans.seq
             st.verdicts = {q: council.combine(ans.answers, q) for q in judge.questions}
             st.directive = judge.decide(st.verdicts, ctx)
@@ -90,17 +93,25 @@ class Brain:
         d = st.directive
         if ctx.phase not in judge.phases:
             st.last = self._shown(st, None, "waiting for its phase")
+            if new:
+                self._note(ctx, judge, st, d, "waiting", "the zone has left the judge's phase")
             return None
         age = self.asker.clock() - ans.at
         if age > judge.max_age_min * 60.0:
             st.last = self._shown(st, None, "answer too old to act on")
+            if new:
+                self._note(ctx, judge, st, d, "waiting", "the answer came too late to act on")
             return None
         if d is None:
             st.last = self._shown(st, None, "no action")
+            if new:
+                self._note(ctx, judge, st, None, "no action", "")
             return None
         ok, why = admit(d, ctx, confirmed=st.streak, evidence_ok=judge.evidence_ok(ctx))
         st.last = self._shown(st, d, why if ok else f"refused: {why}")
         if not ok:
+            if new:
+                self._note(ctx, judge, st, d, "refused", why)
             return None
         if st.acted_seq != ans.seq:
             st.acted_seq = ans.seq
@@ -110,7 +121,17 @@ class Brain:
                                evidence={q: (v.label if v else None) for q, v in st.verdicts.items()},
                                check_at=check_at, check=self._check_basis(ctx), at=ctx.now)
             self.log(f"[jev] {ctx.room} Z{ctx.zone} {judge.name}: {d.kind} {_label(d)} ({d.why}; {why})")
+            self._note(ctx, judge, st, d, "acted", why)
         return d, why
+
+    def _note(self, ctx, judge, st, d, result, reason):
+        """One line in the journal (the dashboard's live log). Never raises into the pass."""
+        if self.journal is None:
+            return
+        try:
+            self.journal.add(jn.decision(ctx.room, ctx.zone, judge.name, ctx.now, st.verdicts, d, result, reason))
+        except Exception as e:  # noqa: BLE001 - a log line is never worth a decision
+            self.errors["journal"] = f"{type(e).__name__}: {e}"[:200]
 
     @staticmethod
     def _check_basis(ctx):
@@ -129,6 +150,9 @@ class Brain:
             result = judge.outcome(entry, ctx) if judge else ("judge no longer runs", False)
             if result is not None:
                 self.ledger.resolve(entry["id"], result[0], result[1])
+                if self.journal is not None:
+                    self.journal.add(jn.outcome(ctx.room, ctx.zone, entry["judge"], ctx.now, entry["label"],
+                                                result[0], result[1]))
 
     @staticmethod
     def _shown(st, d, why):
