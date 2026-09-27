@@ -3,6 +3,7 @@ import {
   athenaDryback,
   axisRange,
   bandStatus,
+  dayScales,
   EC_AXIS,
   hourTicks,
   overnightDryback,
@@ -10,6 +11,7 @@ import {
   placeBadges,
   placeMarkers,
   rangeText,
+  runoffBand,
   smoothPath,
   steeringOf,
   valueAtTime,
@@ -90,6 +92,39 @@ describe("the VWC axis", () => {
     expect(axis.max).toBeCloseTo(6.4);
     expect(axis.ticks).toEqual([3, 4, 5, 6]);
     expect(axis.ticks.length).toBeLessThanOrEqual(5);
+  });
+});
+
+describe("a zone's day scales", () => {
+  // The owner's zone 3 at 02:10: today between 36 and 42 %, field capacity 43, the maintenance band
+  // 38-40, the rescue floor 22; yesterday spiked to 78 % after a flush.
+  const zone3 = {
+    today: [36.4, 38, 41.8, 40.2, 36.3],
+    projection: [36.1, 35.8],
+    targets: [43, 38, 40, 22],
+    ec: [3.9, 4.1, 4],
+    ecBand: [3.5, 6] as [number, number],
+  };
+  it("fits today's readings and the zone's own targets, not yesterday's spike", () => {
+    const { vwc } = dayScales(zone3);
+    expect(vwc!.max).toBeLessThanOrEqual(46);
+    expect(vwc!.min).toBeGreaterThanOrEqual(19);
+    // Yesterday is not part of the scale at all: the same day with a 78 % yesterday draws the same.
+    expect(Math.max(...vwc!.ticks)).toBeLessThan(50);
+    expect(vwc!.ticks).toContain(40);
+  });
+  it("leaves a target far off today's readings off the scale", () => {
+    const { vwc } = dayScales({ ...zone3, targets: [43, 38, 40, 10] });
+    expect(vwc!.min).toBeGreaterThan(30);
+  });
+  it("puts pore EC on its own scale around the stage's band", () => {
+    const { ec } = dayScales(zone3);
+    expect(ec!.min).toBeLessThanOrEqual(3.5);
+    expect(ec!.max).toBeGreaterThanOrEqual(6);
+  });
+  it("draws the runoff zone as a thin band beside field capacity", () => {
+    expect(runoffBand(43, "vegetative")).toEqual([43, 46]);
+    expect(runoffBand(43, "generative")).toEqual([40, 43]);
   });
 });
 

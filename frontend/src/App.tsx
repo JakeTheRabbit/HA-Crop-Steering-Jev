@@ -42,7 +42,7 @@ import { AppHeader } from "@/components/app-header";
 import { PageTabs, pageLabel, SECTION_LABELS } from "@/components/page-tabs";
 import { WaterViewProvider } from "@/lib/water-view";
 import { WhatsNewOnUpdate } from "@/components/whats-new";
-import { Overview } from "@/pages/overview";
+import { ZonePage } from "@/pages/zone";
 import { Today } from "@/pages/today";
 import { Strategy, type Drafts } from "@/pages/strategy";
 import { ActivityPage } from "@/pages/activity";
@@ -325,7 +325,12 @@ export default function App() {
               <Today key={pageKey} controller={controller} navigate={navigate} />
             )}
             {page === "zone" && (
-              <Overview key={pageKey} controller={controller} navigate={navigate} />
+              <ZonePage
+                key={pageKey}
+                controller={controller}
+                zoneId={route.zone ?? null}
+                navigate={navigate}
+              />
             )}
             {page === "plan/targets" && (
               <Strategy

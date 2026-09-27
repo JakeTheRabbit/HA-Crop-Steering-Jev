@@ -2,23 +2,21 @@ import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 
 import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Empty, number, time as clock } from "@/components/dashboard";
-import { JevDecisions } from "@/components/jev-log";
 import { ageText, ageTone, readHeartbeat } from "@/lib/controller-health";
 import {
   athenaDryback,
-  axisRange,
   bandStatus,
-  EC_AXIS,
+  dayScales,
   hourTicks,
   overnightDryback,
   phaseColumns,
   placeBadges,
   placeMarkers,
   rangeText,
+  runoffBand,
   smoothPath,
   steeringOf,
   valueAtTime,
-  VWC_AXIS,
   type Axis,
   type Column,
   type Dryback,
@@ -58,7 +56,8 @@ import {
   type TimelineRows,
   type TypicalPoint,
 } from "@/lib/day-timeline";
-import { jevAnswer, jevResult, readJev, type JevEntry, type JevStage } from "@/lib/jev";
+import { DRYBACK_WINDOW_H, drybackTrend } from "@/lib/dryback";
+import { jevAnswer, jevResult, readJev, type JevEntry } from "@/lib/jev";
 import { descriptor, numeric } from "@/lib/model";
 import {
   buildPlanningCurve,
@@ -94,8 +93,6 @@ const NO_ESTIMATE: Partial<Record<NextShot["basis"], string>> = {
   "no-reading": "no live VWC reading",
   unknown: "not enough to go on",
 };
-/** Athena's generative runoff zone reaches this many points under field capacity. */
-const GENERATIVE_ZONE = 3;
 type Compare = "yesterday" | "typical" | "none";
 const LAYERS_KEY = "crop-steering-timeline-layers";
 /** What the chart compares today with, remembered in this browser. */
@@ -128,6 +125,8 @@ interface Lane {
   /** Today's pore EC, in ten-minute medians. */
   ec: Reading[];
   changes: Change[];
+  /** The room's own setpoint changes today, listed with the zone's events. */
+  roomChanges: Change[];
   phase: string | null;
   next: NextShot;
   /** Why this zone is not being watered at all, if it is not. */
@@ -143,7 +142,7 @@ interface Lane {
   ecBand: { band: [number, number]; source: string } | null;
   dryback: { night: "tonight" | "last night"; value: Dryback } | null;
   jev: JevEntry[];
-  /** The room publishes Jev's log: every chart keeps a lane for its decisions. */
+  /** The room publishes Jev's log: the chart keeps a lane for its decisions. */
   jevOn: boolean;
   plants: number | null;
   /** Why the rest of the zone's day is not projected, or what holds it back: for the details. */
@@ -159,7 +158,7 @@ interface Earlier {
   setup: (number | null)[];
   error: string;
 }
-/** Past grow-days do not change, so a room's week is loaded once per grow-day and kept while the
+/** Past grow-days do not change, so a zone's week is loaded once per grow-day and kept while the
  * page is open. */
 const earlierLoads = new Map<string, Promise<TimelineRows>>();
 /** Runs `tasks` two at a time; no more start once one has failed. */
@@ -180,11 +179,16 @@ async function inPairs<T>(tasks: (() => Promise<T>)[]): Promise<T[]> {
   await Promise.all([worker(), worker()]);
   return results;
 }
-/** The seven grow-days before today: one request per day, over the transport and within the room
- * that today's use, cut where each day's lights actually came on. Null while loading. */
-function useEarlierDays(controller: Controller, day: GrowDay | null, ready: boolean) {
+/** The seven grow-days before today for one zone: one request per day, over the transport and within
+ * the room that today's use, cut where each day's lights actually came on. Null while loading. */
+function useEarlierDays(
+  controller: Controller,
+  zoneId: number,
+  day: GrowDay | null,
+  ready: boolean,
+) {
   const { room, states } = controller;
-  const ids = earlierEntities(room, states);
+  const ids = earlierEntities(room, states, zoneId);
   const hours = {
     on: numeric(states[`number.crop_steering_${room.room.prefix}lights_on_hour`]),
     off: numeric(states[`number.crop_steering_${room.room.prefix}lights_off_hour`]),
@@ -211,8 +215,8 @@ function useEarlierDays(controller: Controller, day: GrowDay | null, ready: bool
       pending = inPairs(
         windows.map((window) => () => load({ ...ids, start: window.start, end: window.end })),
       ).then(joinRows);
-      // A page left open for days keeps only its latest few weeks.
-      if (earlierLoads.size >= 4) earlierLoads.delete(earlierLoads.keys().next().value!);
+      // A page left open for days keeps only its latest few.
+      if (earlierLoads.size >= 8) earlierLoads.delete(earlierLoads.keys().next().value!);
       earlierLoads.set(key, pending);
       pending.catch(() => earlierLoads.delete(key));
     }
@@ -240,18 +244,11 @@ function useEarlierDays(controller: Controller, day: GrowDay | null, ready: bool
   return earlier?.key === key ? earlier : null;
 }
 
-/** The selected room's grow-day, one chart per zone in the language of Athena's irrigation phase
- * reference chart: what each zone did today (its phases, shots and pore EC), where it is now against
+/** One zone's grow-day in the language of Athena's irrigation phase reference chart: today in
+ * numbers, then what the zone did today (its phases, shots and pore EC), where it is now against
  * today's stage, and what comes next. Today is downloaded once when the page opens and live updates
  * extend it; the earlier days (yesterday, the typical day, last night's dryback) are downloaded once. */
-export function DayTimeline({
-  controller,
-  openJevLog,
-}: {
-  controller: Controller;
-  /** Opens the full Jev log (the Activity page). */
-  openJevLog?: () => void;
-}) {
+export function ZoneDay({ controller, zone }: { controller: Controller; zone: Zone }) {
   const [, tick] = useState(0);
   useEffect(() => {
     // The clock moves between live updates, and a quiet controller sends none.
@@ -275,9 +272,11 @@ export function DayTimeline({
     numeric(states[`number.crop_steering_${prefix}lights_off_hour`]),
     now,
   );
-  const entities = timelineEntities(room, states);
+  const entities = timelineEntities(room, states, zone.id);
   const key = day
-    ? [room.room.id, day.start, ...entities.entityIds, "|", ...entities.attributeIds].join(" ")
+    ? [room.room.id, zone.id, day.start, ...entities.entityIds, "|", ...entities.attributeIds].join(
+        " ",
+      )
     : "";
   const ready = controller.connection === "live" || controller.connection === "demo";
   const demo = controller.demo;
@@ -287,7 +286,7 @@ export function DayTimeline({
   const latest = useRef({ states, entities, day });
   latest.current = { states, entities, day };
   const load = controller.timeline;
-  const earlier = useEarlierDays(controller, day, ready);
+  const earlier = useEarlierDays(controller, zone.id, day, ready);
   useEffect(() => {
     const { entities: ids, day: today } = latest.current;
     if (!key || !ready || !today || !ids.entityIds.length) return;
@@ -321,96 +320,82 @@ export function DayTimeline({
     ? Math.max(...Object.values(rows).map((list) => list.at(-1)?.time ?? -Infinity))
     : -Infinity;
   const age = Number.isFinite(newest) ? now - newest : null;
+  const lane =
+    rows && day ? buildLane(controller, zone, entities, day, rows, now, earlier, compare) : null;
+  const stage = readJev(states, prefix).room?.stage ?? null;
+  const athena = athenaDryback(stage?.name);
   return (
-    <section className="panel day-timeline" data-day-timeline aria-labelledby="day-timeline-title">
-      <div className="panel-heading">
-        <h2 id="day-timeline-title">Today’s grow day</h2>
-        {rows && (
-          <div className="timeline-heading-side">
-            <label htmlFor="day-timeline-compare" className="timeline-compare">
-              Compare with
-            </label>
-            <select
-              id="day-timeline-compare"
-              value={compare}
-              onChange={(event) => choose(event.target.value as Compare)}
-            >
-              <option value="yesterday">Yesterday</option>
-              <option value="typical">Typical (median of 7 days)</option>
-              <option value="none">None</option>
-            </select>
-            <span className="timeline-age" data-age={ageTone(age)}>
-              {controller.demo ? "Demo data · " : ""}
-              {age === null ? "Nothing recorded yet" : `Newest reading ${ageText(age)} old`}
-            </span>
+    <div className="day-timeline zone-day" data-day-timeline data-zone={zone.id}>
+      <ZoneNumbers controller={controller} zone={zone} lane={lane} day={day} athena={athena} />
+      <section className="panel zone-day-chart" aria-labelledby={`zone-day-${zone.id}`}>
+        <div className="panel-heading">
+          <h2 id={`zone-day-${zone.id}`}>Today</h2>
+          {rows && (
+            <div className="timeline-heading-side">
+              <label htmlFor="day-timeline-compare" className="timeline-compare">
+                Compare with
+              </label>
+              <select
+                id="day-timeline-compare"
+                value={compare}
+                onChange={(event) => choose(event.target.value as Compare)}
+              >
+                <option value="yesterday">Yesterday</option>
+                <option value="typical">Typical (median of 7 days)</option>
+                <option value="none">None</option>
+              </select>
+              <span className="timeline-age" data-age={ageTone(age)}>
+                {controller.demo ? "Demo data · " : ""}
+                {age === null ? "Nothing recorded yet" : `Newest reading ${ageText(age)} old`}
+              </span>
+            </div>
+          )}
+        </div>
+        {!ready && !rows ? (
+          <div className="chart-placeholder" role="status">
+            <LoaderCircle className="spin" />
+            Waiting for Home Assistant…
           </div>
+        ) : !day ? (
+          <Empty
+            title="No lights schedule"
+            detail="Set this room’s lights-on and lights-off hours to draw its grow day."
+          />
+        ) : error ? (
+          <Empty
+            title="The grow day could not load"
+            detail={error}
+            action={
+              <Button variant="outline" onClick={() => setRetry((value) => value + 1)}>
+                Retry
+              </Button>
+            }
+          />
+        ) : !lane ? (
+          <div className="chart-placeholder" role="status">
+            <LoaderCircle className="spin" />
+            Loading today’s recorded history…
+          </div>
+        ) : (
+          <DayChart lane={lane} day={day} now={now} compare={compare} />
         )}
-      </div>
-      {!ready && !rows ? (
-        <div className="chart-placeholder" role="status">
-          <LoaderCircle className="spin" />
-          Waiting for Home Assistant…
-        </div>
-      ) : !day ? (
-        <Empty
-          title="No lights schedule"
-          detail="Set this room’s lights-on and lights-off hours to draw its grow day."
-        />
-      ) : !room.zones.length ? (
-        <Empty
-          title="No zones discovered"
-          detail="The grow day appears once the room’s zones are configured."
-        />
-      ) : error ? (
-        <Empty
-          title="The grow day could not load"
-          detail={error}
-          action={
-            <Button variant="outline" onClick={() => setRetry((value) => value + 1)}>
-              Retry
-            </Button>
-          }
-        />
-      ) : !rows ? (
-        <div className="chart-placeholder" role="status">
-          <LoaderCircle className="spin" />
-          Loading today’s recorded history…
-        </div>
-      ) : (
-        <Timeline
-          controller={controller}
-          entities={entities}
-          day={day}
-          rows={rows}
-          now={now}
-          earlier={earlier}
-          compare={compare}
-          openJevLog={openJevLog}
-        />
-      )}
-    </section>
+      </section>
+    </div>
   );
 }
 
-function Timeline({
-  controller,
-  entities,
-  day,
-  rows,
-  now,
-  earlier,
-  compare,
-  openJevLog,
-}: {
-  controller: Controller;
-  entities: ReturnType<typeof timelineEntities>;
-  day: GrowDay;
-  rows: TimelineRows;
-  now: number;
-  earlier: Earlier | null;
-  compare: Compare;
-  openJevLog?: () => void;
-}) {
+/** Today's lane for one zone: its phases, shots, holds, readings and targets, what is expected for
+ * the rest of the day, and what it is compared with. */
+function buildLane(
+  controller: Controller,
+  zone: Zone,
+  entities: ReturnType<typeof timelineEntities>,
+  day: GrowDay,
+  rows: TimelineRows,
+  now: number,
+  earlier: Earlier | null,
+  compare: Compare,
+): Lane {
   const { room, states } = controller;
   const root = `crop_steering_${room.room.prefix}`;
   const jev = readJev(states, room.room.prefix);
@@ -423,270 +408,397 @@ function Timeline({
       return { ...change, label: setting.label, unit: setting.unit, zoneId: setting.zoneId };
     },
   );
-  const settingId = (zone: Zone, key: string) => {
+  const settingId = (key: string) => {
     // Like the controller: the zone's own setpoint when it has one, else the room's.
     const own = `number.${root}zone_${zone.id}_${key}`;
     return states[own] ? own : `number.${root}${key}`;
   };
-  const read = (zone: Zone, key: string) => numeric(states[settingId(zone, key)]);
+  const read = (key: string) => numeric(states[settingId(key)]);
   const hourOf = (time: number) => (time - day.start) / 3_600_000;
   const length = hourOf(day.end),
     photoperiod = hourOf(day.lightsOff);
   const beat = readHeartbeat(states[`sensor.${root}ai_heartbeat`], now);
   const revision = descriptor(states, room.room)?.attributes.setup_revision;
-  const lanes = room.zones.map((zone): Lane => {
-    const ids = entities.zones.find((item) => item.id === zone.id);
-    const shots = valveShots(ids?.valve ? rows[ids.valve] : [], decisions, zone.id, day.start, now);
-    const bands = alignBands(phaseBands(ids && rows[ids.phase], day.start, now), shots);
-    const blocks = zoneBlocks(decisions, zone.id, day.start, now);
-    const points = ids?.vwc ? readings(rows[ids.vwc], day.start, now) : [];
-    const ec = smoothRecorded(ids?.ec ? readings(rows[ids.ec], day.start, now) : []);
-    const water = waterParameters(controller, zone.id);
-    // The phase now is the band that reaches now: none while the sensor is unreadable.
-    const last = bands.at(-1);
-    const phase = last && last.end >= now ? last.phase : null;
-    const since = phase ? last!.start : null;
-    const planned = room.strategy.engaged;
-    // The zone's target (model.ts) is what the controller compares with in its phase, the plan's
-    // while one runs; a plan's timing is its own, so P0 and P1 are not estimated under one.
-    const phaseTarget = (key: string) =>
-      zone.phase === phase ? zone.target.value : read(zone, key);
-    const target = phase === "P2" ? phaseTarget("p2_vwc_threshold") : null;
-    const stopped = !room.roomActive
-      ? "the room is off"
-      : zone.stale
-        ? NOT_REPORTING
-        : room.engine.enabled === false
-          ? "watering is switched off"
-          : zone.enabled === false
-            ? "zone scheduling is paused"
-            : null;
-    const ramp = phase === "P1" ? phaseTarget("p1_target_vwc") : null;
-    const ceiling = ramp === null ? null : Math.min(ramp, read(zone, "field_capacity") ?? Infinity);
-    const held = blocks.at(-1)?.open ? blocks.at(-1)! : null;
-    const p1Shots = shots.filter(
-      (shot) => (shot.phase ?? phaseAt(bands, shot.start)) === "P1",
-    ).length;
-    const next: NextShot = stopped
-      ? { at: null, basis: "unknown" }
-      : nextShot(
+  const ids = entities.zones.find((item) => item.id === zone.id);
+  const shots = valveShots(ids?.valve ? rows[ids.valve] : [], decisions, zone.id, day.start, now);
+  const bands = alignBands(phaseBands(ids && rows[ids.phase], day.start, now), shots);
+  const blocks = zoneBlocks(decisions, zone.id, day.start, now);
+  const points = ids?.vwc ? readings(rows[ids.vwc], day.start, now) : [];
+  const ec = smoothRecorded(ids?.ec ? readings(rows[ids.ec], day.start, now) : []);
+  const water = waterParameters(controller, zone.id);
+  // The phase now is the band that reaches now: none while the sensor is unreadable.
+  const last = bands.at(-1);
+  const phase = last && last.end >= now ? last.phase : null;
+  const since = phase ? last!.start : null;
+  const planned = room.strategy.engaged;
+  // The zone's target (model.ts) is what the controller compares with in its phase, the plan's
+  // while one runs; a plan's timing is its own, so P0 and P1 are not estimated under one.
+  const phaseTarget = (key: string) => (zone.phase === phase ? zone.target.value : read(key));
+  const target = phase === "P2" ? phaseTarget("p2_vwc_threshold") : null;
+  const stopped = !room.roomActive
+    ? "the room is off"
+    : zone.stale
+      ? NOT_REPORTING
+      : room.engine.enabled === false
+        ? "watering is switched off"
+        : zone.enabled === false
+          ? "zone scheduling is paused"
+          : null;
+  const ramp = phase === "P1" ? phaseTarget("p1_target_vwc") : null;
+  const ceiling = ramp === null ? null : Math.min(ramp, read("field_capacity") ?? Infinity);
+  const held = blocks.at(-1)?.open ? blocks.at(-1)! : null;
+  const p1Shots = shots.filter(
+    (shot) => (shot.phase ?? phaseAt(bands, shot.start)) === "P1",
+  ).length;
+  const next: NextShot = stopped
+    ? { at: null, basis: "unknown" }
+    : nextShot(
+        {
+          phase,
+          since,
+          held,
+          lastShot: shots.at(-1) ?? null,
+          points,
+          vwc: zone.vwc.value,
+          threshold: target,
+          ceiling,
+          interval: planned ? null : water.p1_time_between_shots,
+          maxWait: planned ? null : read("p0_maximum_wait_time"),
+        },
+        day,
+        now,
+      );
+  // Targets resolve as the controller's do: the zone's setpoint, else the room's, else the plan's
+  // snapshot while one is armed. The dryback target is the steering mode's.
+  const preview = buildSetpointPreview(room, states, zone.id, {}).saved;
+  const parameters = preview.parameters;
+  const steps = setpointSteps(
+    rows,
+    parameters,
+    (key) =>
+      key !== "dryback_target"
+        ? settingId(key)
+        : preview.mode && settingId(`${preview.mode.toLowerCase()}_dryback_target`),
+    planned,
+  );
+  const traces = earlier?.traces.get(zone.id) ?? [];
+  const yesterday = traces[0] ?? null;
+  const past = traces.filter((trace): trace is DayTrace => trace !== null);
+  const today = smoothRecorded(points).map((point) => ({ ...point, hour: hourOf(point.time) }));
+  // The rest of the day from the latest reading, on the zone's own dry-down (today and the three
+  // grow-days before), by the rules the plan graph's projected day runs. Nothing is claimed for
+  // a zone the controller is not watering.
+  const newest = points.at(-1);
+  const p0 = bands.find((band) => band.phase === "P0");
+  const peak = p0 && points.filter((point) => point.time >= p0.start).map((point) => point.value);
+  const projected =
+    stopped || !phase || !newest || zone.vwc.value === null
+      ? null
+      : projectFrom(
+          buildPlanningCurve(parameters, 0, photoperiod),
+          parameters,
           {
-            phase,
-            since,
-            held,
-            lastShot: shots.at(-1) ?? null,
-            points,
-            vwc: zone.vwc.value,
-            threshold: target,
-            ceiling,
-            interval: planned ? null : water.p1_time_between_shots,
-            maxWait: planned ? null : read(zone, "p0_maximum_wait_time"),
+            hour: hourOf(newest.time),
+            phase: phase as PlanningPhaseId,
+            since: hourOf(since!),
+            value: newest.value,
+            p1Shots,
+            lastShot: shots.length ? hourOf(shots.at(-1)!.end) : null,
+            peak: phase === "P0" && peak?.length ? Math.max(...peak) : null,
           },
-          day,
-          now,
+          {
+            rates: dryRates([today, ...past.slice(0, 3).map((trace) => trace.points)], photoperiod),
+            retention: zone.auto?.gain ?? null,
+            end: length,
+          },
         );
-    // Targets resolve as the controller's do: the zone's setpoint, else the room's, else the plan's
-    // snapshot while one is armed. The dryback target is the steering mode's.
-    const preview = buildSetpointPreview(room, states, zone.id, {}).saved;
-    const parameters = preview.parameters;
-    const steps = setpointSteps(
-      rows,
-      parameters,
-      (key) =>
-        key !== "dryback_target"
-          ? settingId(zone, key)
-          : preview.mode && settingId(zone, `${preview.mode.toLowerCase()}_dryback_target`),
-      planned,
-    );
-    const traces = earlier?.traces.get(zone.id) ?? [];
-    const yesterday = traces[0] ?? null;
-    const past = traces.filter((trace): trace is DayTrace => trace !== null);
-    const today = smoothRecorded(points).map((point) => ({ ...point, hour: hourOf(point.time) }));
-    // The rest of the day from the latest reading, on the zone's own dry-down (today and the three
-    // grow-days before), by the rules the plan graph's projected day runs. Nothing is claimed for
-    // a zone the controller is not watering.
-    const newest = points.at(-1);
-    const p0 = bands.find((band) => band.phase === "P0");
-    const peak = p0 && points.filter((point) => point.time >= p0.start).map((point) => point.value);
-    const projected =
-      stopped || !phase || !newest || zone.vwc.value === null
-        ? null
-        : projectFrom(
-            buildPlanningCurve(parameters, 0, photoperiod),
-            parameters,
-            {
-              hour: hourOf(newest.time),
-              phase: phase as PlanningPhaseId,
-              since: hourOf(since!),
-              value: newest.value,
-              p1Shots,
-              lastShot: shots.length ? hourOf(shots.at(-1)!.end) : null,
-              peak: phase === "P0" && peak?.length ? Math.max(...peak) : null,
-            },
-            {
-              rates: dryRates(
-                [today, ...past.slice(0, 3).map((trace) => trace.points)],
-                photoperiod,
-              ),
-              retention: zone.auto?.gain ?? null,
-              end: length,
-            },
-          );
-    const time = (hour: number) => day.start + hour * 3_600_000;
-    const projection = projected && {
-      points: projected.points.map((point) => ({ ...point, time: time(point.hour) })),
-      shots: projected.shots.map((shot) => ({
-        time: time(shot.hour),
-        phase: shot.phase,
-        size: shot.size,
-        emergency: !!shot.emergency,
-      })),
-    };
-    // What is expected for the rest of the day: the projection's phases; without one, only what is
-    // certain (P2 lasts until lights-off, and lights-off moves every zone to P3).
-    const ahead: PhaseBand[] = [];
-    for (const point of projection?.points ?? []) {
-      const at = Math.max(point.time, now),
-        band = ahead.at(-1);
-      if (band?.phase === point.phase) band.end = at;
-      else {
-        if (band) band.end = at;
-        ahead.push({ phase: point.phase, start: at, end: at });
-      }
+  const time = (hour: number) => day.start + hour * 3_600_000;
+  const projection = projected && {
+    points: projected.points.map((point) => ({ ...point, time: time(point.hour) })),
+    shots: projected.shots.map((shot) => ({
+      time: time(shot.hour),
+      phase: shot.phase,
+      size: shot.size,
+      emergency: !!shot.emergency,
+    })),
+  };
+  // What is expected for the rest of the day: the projection's phases; without one, only what is
+  // certain (P2 lasts until lights-off, and lights-off moves every zone to P3).
+  const ahead: PhaseBand[] = [];
+  for (const point of projection?.points ?? []) {
+    const at = Math.max(point.time, now),
+      band = ahead.at(-1);
+    if (band?.phase === point.phase) band.end = at;
+    else {
+      if (band) band.end = at;
+      ahead.push({ phase: point.phase, start: at, end: at });
     }
-    if (!projection) {
-      if (phase === "P2" && now < day.lightsOff)
-        ahead.push({ phase: "P2", start: now, end: day.lightsOff });
-      ahead.push({ phase: "P3", start: Math.max(now, day.lightsOff), end: day.end });
-    } else if (ahead.length) ahead.at(-1)!.end = Math.max(ahead.at(-1)!.end, day.end);
-    const columns = phaseColumns(bands, ahead, now, 30 * 60_000);
-    const compared =
-      compare === "typical"
-        ? past.length >= 3
-          ? past
-          : []
-        : compare === "yesterday" && yesterday
-          ? [yesterday]
-          : [];
-    const moved = earlier?.setup.filter(
-      (value, index) =>
-        typeof revision === "number" &&
-        value !== null &&
-        value !== revision &&
-        traces[index] &&
-        compared.includes(traces[index]!),
-    ).length;
-    const choice = states[`select.${root}zone_${zone.id}_steering_mode`]?.state;
-    const steering = steeringOf(choice, stage?.steering);
-    const ecTarget = zone.ecTarget.value;
-    const plants = zonePlants(controller, zone.id);
-    // Last night's dryback runs from yesterday's evening into today; tonight's from today's.
-    const tonight = now >= day.lightsOff;
-    const night = tonight
-      ? overnightDryback(points, day.lightsOff, day.end, now)
-      : yesterday && overnightDryback(yesterday.points, yesterday.day.lightsOff, day.start, now);
-    return {
-      zone,
-      bands,
-      columns,
-      shots,
-      blocks,
-      points,
-      ec,
-      changes: changes.filter((change) => change.zoneId === zone.id),
-      phase,
-      next,
-      stopped,
-      litres: (seconds) => estimateRuntime(flowInputs(water), seconds).requested?.zoneL ?? null,
-      steps,
-      projection,
-      yesterday,
-      past,
-      typical:
-        compare === "typical" && past.length >= 3
-          ? typicalDay(past.map((trace) => trace.points))
-          : [],
-      steering,
-      ecBand: stage?.poreEc
-        ? { band: stage.poreEc, source: `the pore EC band for ${stage.name}` }
-        : ecTarget !== null && ecTarget > 0
-          ? {
-              band: [ecTarget * 0.9, ecTarget * 1.1],
-              source: `the zone’s EC target ${number(ecTarget, 2)} ±10 %`,
-            }
-          : null,
-      dryback: night ? { night: tonight ? "tonight" : "last night", value: night } : null,
-      jev: (jev.log?.entries ?? []).filter(
-        (entry) =>
-          entry.kind === "decision" &&
-          entry.zone === zone.id &&
-          entry.time !== null &&
-          entry.time >= day.start &&
-          entry.time <= Math.min(now, day.end),
-      ),
-      jevOn: !!jev.log,
-      plants,
-      status:
-        unprojected(stopped, beat.at, now) ??
-        (next.basis === "held" && held ? `${HELD[held.kind]}: ${held.text}` : null),
-      setupNote: !moved
-        ? null
-        : compare === "yesterday"
-          ? "Rooms & setup saved since yesterday: its probe may have differed"
-          : `${moved} of ${compared.length} days before the last Rooms & setup save`,
-      rescue: numeric(states[settingId(zone, "p3_emergency_vwc_threshold")]),
+  }
+  if (!projection) {
+    if (phase === "P2" && now < day.lightsOff)
+      ahead.push({ phase: "P2", start: now, end: day.lightsOff });
+    ahead.push({ phase: "P3", start: Math.max(now, day.lightsOff), end: day.end });
+  } else if (ahead.length) ahead.at(-1)!.end = Math.max(ahead.at(-1)!.end, day.end);
+  const columns = phaseColumns(bands, ahead, now, 30 * 60_000);
+  const compared =
+    compare === "typical"
+      ? past.length >= 3
+        ? past
+        : []
+      : compare === "yesterday" && yesterday
+        ? [yesterday]
+        : [];
+  const moved = earlier?.setup.filter(
+    (value, index) =>
+      typeof revision === "number" &&
+      value !== null &&
+      value !== revision &&
+      traces[index] &&
+      compared.includes(traces[index]!),
+  ).length;
+  const choice = states[`select.${root}zone_${zone.id}_steering_mode`]?.state;
+  const steering = steeringOf(choice, stage?.steering);
+  const ecTarget = zone.ecTarget.value;
+  // Last night's dryback runs from yesterday's evening into today; tonight's from today's.
+  const tonight = now >= day.lightsOff;
+  const night = tonight
+    ? overnightDryback(points, day.lightsOff, day.end, now)
+    : yesterday && overnightDryback(yesterday.points, yesterday.day.lightsOff, day.start, now);
+  return {
+    zone,
+    bands,
+    columns,
+    shots,
+    blocks,
+    points,
+    ec,
+    changes: changes.filter((change) => change.zoneId === zone.id),
+    roomChanges: changes.filter((change) => change.zoneId === undefined),
+    phase,
+    next,
+    stopped,
+    litres: (seconds) => estimateRuntime(flowInputs(water), seconds).requested?.zoneL ?? null,
+    steps,
+    projection,
+    yesterday,
+    past,
+    typical:
+      compare === "typical" && past.length >= 3
+        ? typicalDay(past.map((trace) => trace.points))
+        : [],
+    steering,
+    ecBand: stage?.poreEc
+      ? { band: stage.poreEc, source: `the pore EC band for ${stage.name}` }
+      : ecTarget !== null && ecTarget > 0
+        ? {
+            band: [ecTarget * 0.9, ecTarget * 1.1],
+            source: `the zone’s EC target ${number(ecTarget, 2)} ±10 %`,
+          }
+        : null,
+    dryback: night ? { night: tonight ? "tonight" : "last night", value: night } : null,
+    jev: (jev.log?.entries ?? []).filter(
+      (entry) =>
+        entry.kind === "decision" &&
+        entry.zone === zone.id &&
+        entry.time !== null &&
+        entry.time >= day.start &&
+        entry.time <= Math.min(now, day.end),
+    ),
+    jevOn: !!jev.log,
+    plants: zonePlants(controller, zone.id),
+    status:
+      unprojected(stopped, beat.at, now) ??
+      (next.basis === "held" && held ? `${HELD[held.kind]}: ${held.text}` : null),
+    setupNote: !moved
+      ? null
+      : compare === "yesterday"
+        ? "Rooms & setup saved since yesterday: its probe may have differed"
+        : `${moved} of ${compared.length} days before the last Rooms & setup save`,
+    rescue: read("p3_emergency_vwc_threshold"),
+  };
+}
+
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** Today in numbers: moisture, pore EC against the stage's band, water today and each plant's
+ * share, shots and the last one, the overnight dryback against Athena's target, and what comes
+ * next. Readings are live; the lane adds what only today's record knows. */
+function ZoneNumbers({
+  controller,
+  zone,
+  lane,
+  day,
+  athena,
+}: {
+  controller: Controller;
+  zone: Zone;
+  lane: Lane | null;
+  day: GrowDay | null;
+  athena: [number, number] | null;
+}) {
+  const stage = readJev(controller.states, controller.room.room.prefix).room?.stage ?? null;
+  const band = lane?.ecBand?.band ?? stage?.poreEc ?? null;
+  const ec = bandStatus(zone.ec.value, band);
+  const water = dailyWater(zone, zonePlants(controller, zone.id));
+  const each = water.mlPerPlant === null ? null : plantAmount(water.mlPerPlant);
+  const lastShot = zone.lastIrrigation.timestamp ?? null;
+  const next = lane && day ? nextWords(lane, day) : null;
+  const dryback = lane?.dryback;
+  // How fast it dries since the last shot settled, from today's readings.
+  const rate = lane
+    ? drybackTrend(
+        lane.points.map((point) => ({
+          time: new Date(point.time).toISOString(),
+          value: point.value,
+        })),
+        lastShot,
+        zone.vwc.value,
+        Date.now(),
+      ).rate
+    : null;
+  return (
+    <div className="zone-numbers-wrap">
+      <dl className="zone-numbers" aria-label={`${zone.name} today in numbers`}>
+        <div>
+          <dt>Moisture</dt>
+          <dd>
+            {number(zone.vwc.value)}
+            {zone.vwc.value !== null && <span className="unit">%</span>}
+          </dd>
+          {rate !== null && (
+            <dd
+              className="zone-sub"
+              title={`VWC points lost per hour since the last shot settled, over up to the last ${DRYBACK_WINDOW_H} hours`}
+            >
+              {Math.abs(rate) < 0.05
+                ? "steady"
+                : `${rate > 0 ? "drying" : "wetting"} ${number(Math.abs(rate), Math.abs(rate) < 1 ? 2 : 1)} pts/h`}
+            </dd>
+          )}
+        </div>
+        <div data-status={ec ?? undefined}>
+          <dt>Pore EC</dt>
+          <dd>{number(zone.ec.value, 2)}</dd>
+          {band && (
+            <dd
+              className="zone-sub"
+              title={lane?.ecBand ? `Against ${lane.ecBand.source}` : undefined}
+            >
+              {ec === "in" ? "in" : (ec ?? "band")} {rangeText(band)}
+            </dd>
+          )}
+        </div>
+        <div>
+          <dt>Water today</dt>
+          <dd>
+            {number(water.zoneL)}
+            {water.zoneL !== null && <span className="unit"> L</span>}
+          </dd>
+          {each && (
+            <dd className="zone-sub">
+              {number(each.value, each.digits)} {each.unit}/plant
+            </dd>
+          )}
+        </div>
+        <div>
+          <dt>Shots</dt>
+          <dd>{zone.shots.value === null ? "—" : number(zone.shots.value, 0)}</dd>
+          {lastShot !== null && <dd className="zone-sub">last {clock(lastShot)}</dd>}
+        </div>
+        <div
+          title={
+            dryback
+              ? `From the evening peak of ${number(dryback.value.peak)}% (the highest reading in the 2 h before lights-off) to the low of ${number(dryback.value.low)}%: ${number(dryback.value.drop)} points. Athena’s dryback targets are this share of the peak.`
+              : "Needs readings on both sides of lights-off."
+          }
+        >
+          <dt>{dryback?.night === "tonight" ? "Dryback tonight" : "Last night’s dryback"}</dt>
+          <dd>
+            {dryback ? number(dryback.value.percent) : "—"}
+            {dryback && <span className="unit">% of peak</span>}
+          </dd>
+          {athena && (
+            <dd
+              className="zone-sub"
+              title="Athena’s relative dryback target for this stage; the zone’s own P3 target is under Targets"
+            >
+              Athena {rangeText(athena, 0)}%
+            </dd>
+          )}
+        </div>
+      </dl>
+      {next && (
+        <p className="zone-next" title={next.detail} data-tone={next.tone}>
+          <strong>Next:</strong> {next.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The chart at the width it has, with its key and today's events. */
+function DayChart({
+  lane,
+  day,
+  now,
+  compare,
+}: {
+  lane: Lane;
+  day: GrowDay;
+  now: number;
+  compare: Compare;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [tip, setTip] = useState<Tip | null>(null);
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!tip?.pinned) return;
+    // A tapped detail stays until the next tap outside this chart.
+    const away = (event: globalThis.PointerEvent) => {
+      if (!box.current?.contains(event.target as Node)) setTip(null);
     };
-  });
-  const roomChanges = changes.filter((change) => change.zoneId === undefined);
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [tip?.pinned]);
   const events = [
-    ...lanes.flatMap((lane) => laneEvents(lane, day)),
-    ...roomChanges.map((change) => ({ time: change.time, text: changeText(change) })),
+    ...laneEvents(lane, day),
+    ...lane.roomChanges.map((change) => ({ time: change.time, text: changeText(change) })),
   ].sort((a, b) => a.time - b.time);
-  const steerings = [...new Set(lanes.map((lane) => lane.steering))];
-  const shared =
-    steerings.length === 1
-      ? (steerings[0] ?? steeringOf(states[`select.${root}steering_mode`]?.state, null))
-      : steerings.every(Boolean)
-        ? "mixed"
-        : null;
-  const staged = stage && steeringOf(null, stage.steering);
-  const athena = athenaDryback(stage?.name);
-  const typicalDays = Math.max(0, ...lanes.map((lane) => lane.past.length));
+  const typicalDays = lane.past.length;
   return (
     <div className="timeline-body">
-      <StageLine stage={stage} zones={shared} day={day} />
-      <div className="grow-zones">
-        {lanes.map((lane) => (
-          <ZoneDay
-            key={lane.zone.id}
-            lane={lane}
-            day={day}
-            now={now}
-            compare={compare}
-            athena={athena}
-            // A zone steered unlike today's stage says so on its card; without a stage, zones
-            // steered differently each name their own.
-            steeringTag={
-              !lane.steering
-                ? null
-                : stage && staged
-                  ? lane.steering === staged
-                    ? null
-                    : {
-                        steering: lane.steering,
-                        note: `${capital(stage.name)} calls for ${staged} steering`,
-                      }
-                  : shared === "mixed"
-                    ? { steering: lane.steering, note: null }
-                    : null
-            }
-          />
-        ))}
+      <div className="grow-chart" ref={box}>
+        {width > 0 && (
+          <Chart lane={lane} day={day} now={now} width={width} compare={compare} onTip={setTip} />
+        )}
+        <div
+          className="grow-tip"
+          role="status"
+          aria-live="polite"
+          hidden={!tip}
+          data-side={tip && tip.x > width / 2 ? "left" : "right"}
+          style={
+            tip
+              ? tip.x > width / 2
+                ? { right: Math.max(0, width - tip.x + 10), top: Math.max(0, tip.y - 8) }
+                : { left: tip.x + 10, top: Math.max(0, tip.y - 8) }
+              : undefined
+          }
+        >
+          {tip?.text}
+        </div>
       </div>
       <div className="grow-foot">
         <Legend
-          steerings={steerings.filter((item): item is Steering => item !== null)}
-          jev={!!jev.log}
+          steering={lane.steering}
+          jev={lane.jevOn}
           compare={
             compare === "yesterday"
               ? "Yesterday"
@@ -710,67 +822,20 @@ function Timeline({
           )}
         </details>
       </div>
-      {jev.log && <JevDecisions controller={controller} compact onViewAll={openJevLog} />}
-    </div>
-  );
-}
-
-const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-/** One line above the zones: today's stage with its steering and targets (the zones' own steering
- * where no stage is published), and the lights. */
-function StageLine({
-  stage,
-  zones,
-  day,
-}: {
-  stage: JevStage | null;
-  /** The zones' steering, when they share one. */
-  zones: Steering | "mixed" | null;
-  day: GrowDay;
-}) {
-  const athena = athenaDryback(stage?.name);
-  const lights = `Lights ${clock(day.start)}–${clock(day.lightsOff)}`;
-  const steering = stage ? stage.steering : zones;
-  return (
-    <div className="grow-stage-wrap">
-      <p className="grow-stage" data-grow-stage>
-        {stage && (
-          <span className="grow-stage-name">
-            <strong>{capital(stage.name)}</strong>
-            {stage.day !== null &&
-              ` · day ${stage.day}${stage.days !== null ? ` of ${stage.days}` : ""}`}
-          </span>
-        )}
-        {steering && (
-          <span
-            className="grow-steering"
-            data-steering={steering === "mixed" ? steering : steeringOf(null, steering)}
-          >
-            {steering === "mixed" ? "Mixed steering" : capital(steering)}
-          </span>
-        )}
-        {stage?.poreEc && <span>Pore EC target {rangeText(stage.poreEc)}</span>}
-        {athena && (
-          <span title="Athena’s relative dryback target for this stage: how far VWC falls overnight, as a share of the evening peak">
-            Overnight dryback {rangeText(athena, 0)}% of peak (Athena)
-          </span>
-        )}
-        <span>{lights}</span>
-      </p>
     </div>
   );
 }
 
 function Legend({
-  steerings,
+  steering,
   jev,
   compare,
 }: {
-  steerings: Steering[];
+  steering: Steering | null;
   jev: boolean;
   compare: string | null;
 }) {
-  const kinds: Steering[] = steerings.length ? steerings : ["vegetative"];
+  const kind: Steering = steering ?? "vegetative";
   return (
     <ul className="grow-legend" aria-label="Chart key">
       <li title="Solid: recorded today. Dashed: what is expected for the rest of the day, an estimate.">
@@ -778,9 +843,7 @@ function Legend({
         VWC
       </li>
       <li title="Right-hand axis, mS/cm. Green while steering vegetative, purple while generative.">
-        {kinds.map((kind) => (
-          <i key={kind} className="key-ec" data-steering={kind} aria-hidden="true" />
-        ))}
+        <i className="key-ec" data-steering={kind} aria-hidden="true" />
         Pore EC
       </li>
       <li>
@@ -789,12 +852,10 @@ function Legend({
         <i className="key-held" aria-hidden="true" />
         held
       </li>
-      <li title="Field capacity, with the runoff zone of the zone’s steering: above it for vegetative, just under it for generative.">
+      <li title="Field capacity, with a thin runoff band: just above it for vegetative steering, just under it for generative.">
         <i className="key-fc" aria-hidden="true" />
-        {kinds.map((kind) => (
-          <i key={kind} className="key-runoff" data-steering={kind} aria-hidden="true" />
-        ))}
-        FC · runoff zone
+        <i className="key-runoff" data-steering={kind} aria-hidden="true" />
+        FC · runoff
       </li>
       <li title="From the maintenance trigger (P2 re-waters under it) up to the peak target, over the ramp and maintenance hours.">
         <i className="key-band" aria-hidden="true" />
@@ -811,7 +872,7 @@ function Legend({
         </li>
       )}
       {compare && (
-        <li>
+        <li title="Drawn on today’s scale: an earlier day beyond it runs off the edge.">
           <i className="key-compare" aria-hidden="true" />
           {compare}
         </li>
@@ -834,148 +895,6 @@ interface Tip {
   x: number;
   y: number;
   pinned: boolean;
-}
-function ZoneDay({
-  lane,
-  day,
-  now,
-  compare,
-  athena,
-  steeringTag,
-}: {
-  lane: Lane;
-  day: GrowDay;
-  now: number;
-  compare: Compare;
-  athena: [number, number] | null;
-  /** The zone's own steering, shown when it is not the stage's (`note` says why it matters). */
-  steeringTag: { steering: Steering; note: string | null } | null;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  const [tip, setTip] = useState<Tip | null>(null);
-  useEffect(() => {
-    const element = box.current;
-    if (!element) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.floor(entry.contentRect.width)));
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    if (!tip?.pinned) return;
-    // A tapped detail stays until the next tap outside this chart.
-    const away = (event: globalThis.PointerEvent) => {
-      if (!box.current?.contains(event.target as Node)) setTip(null);
-    };
-    document.addEventListener("pointerdown", away);
-    return () => document.removeEventListener("pointerdown", away);
-  }, [tip?.pinned]);
-  const { zone } = lane;
-  const water = dailyWater(zone, lane.plants);
-  const each = water.mlPerPlant === null ? null : plantAmount(water.mlPerPlant);
-  const ec = bandStatus(zone.ec.value, lane.ecBand?.band ?? null);
-  const next = nextWords(lane, day);
-  const lastShot = zone.lastIrrigation.timestamp ?? lane.shots.at(-1)?.start ?? null;
-  const dryback = lane.dryback;
-  const target = athena ? ` · target ${rangeText(athena, 0)}%` : "";
-  return (
-    <article className="grow-zone" data-zone={zone.id} aria-labelledby={`grow-zone-${zone.id}`}>
-      <header className="grow-zone-head">
-        <h3 id={`grow-zone-${zone.id}`}>{zone.name}</h3>
-        <span className="grow-zone-pills">
-          {steeringTag && (
-            <span
-              className="pill"
-              data-tone={steeringTag.note ? "warn" : "neutral"}
-              data-steering-tag
-              title={steeringTag.note ?? undefined}
-            >
-              {capital(steeringTag.steering)}
-            </span>
-          )}
-          {lane.phase ? (
-            <span className="pill" data-phase={lane.phase}>
-              {lane.phase} · {PHASES[lane.phase]?.name ?? lane.phase}
-            </span>
-          ) : (
-            <span className="pill" data-tone="unknown">
-              Phase unavailable
-            </span>
-          )}
-        </span>
-      </header>
-      <dl className="grow-stats">
-        <div>
-          <dt>VWC</dt>
-          <dd>
-            {number(zone.vwc.value)}
-            {zone.vwc.value !== null && <span className="unit">%</span>}
-          </dd>
-        </div>
-        <div data-status={ec ?? undefined}>
-          <dt>Pore EC</dt>
-          <dd>{number(zone.ec.value, 2)}</dd>
-          {lane.ecBand && (
-            <dd className="grow-sub" title={`Against ${lane.ecBand.source}`}>
-              {ec === "in" ? "in" : (ec ?? "band")} {rangeText(lane.ecBand.band)}
-            </dd>
-          )}
-        </div>
-        <div>
-          <dt>Water today</dt>
-          <dd>
-            {number(water.zoneL)}
-            {water.zoneL !== null && <span className="unit"> L</span>}
-          </dd>
-          {each && (
-            <dd className="grow-sub">
-              {number(each.value, each.digits)} {each.unit}/plant
-            </dd>
-          )}
-        </div>
-        <div>
-          <dt>Shots</dt>
-          <dd>{zone.shots.value === null ? "—" : number(zone.shots.value, 0)}</dd>
-          {lastShot !== null && <dd className="grow-sub">last {clock(lastShot)}</dd>}
-        </div>
-      </dl>
-      <p className="grow-next" title={next.detail} data-tone={next.tone}>
-        <strong>Next:</strong> {next.text}
-      </p>
-      {dryback && (
-        <p
-          className="grow-dryback"
-          title={`From the evening peak of ${number(dryback.value.peak)}% (the highest reading in the 2 h before lights-off) to the low of ${number(dryback.value.low)}%: ${number(dryback.value.drop)} points. Athena’s dryback targets are this share of the peak.`}
-        >
-          {dryback.night === "tonight"
-            ? `Overnight dryback so far ${number(dryback.value.percent)}% of peak`
-            : `Last night’s dryback ${number(dryback.value.percent)}% of peak`}
-          {target}
-        </p>
-      )}
-      <div className="grow-chart" ref={box}>
-        {width > 0 && (
-          <Chart lane={lane} day={day} now={now} width={width} compare={compare} onTip={setTip} />
-        )}
-        <div
-          className="grow-tip"
-          role="status"
-          aria-live="polite"
-          hidden={!tip}
-          data-side={tip && tip.x > width / 2 ? "left" : "right"}
-          style={
-            tip
-              ? tip.x > width / 2
-                ? { right: Math.max(0, width - tip.x + 10), top: Math.max(0, tip.y - 8) }
-                : { left: tip.x + 10, top: Math.max(0, tip.y - 8) }
-              : undefined
-          }
-        >
-          {tip?.text}
-        </div>
-      </div>
-    </article>
-  );
 }
 
 /** The chart: light band, Jev's decisions, phase columns, field capacity with the runoff zone, the
@@ -1003,7 +922,7 @@ function Chart({
   const L = 38,
     R = 34,
     TOP = jevLane ? 27 : 15,
-    H = narrow ? 112 : 118;
+    H = narrow ? 170 : 250;
   const plotW = Math.max(100, width - L - R);
   const bottom = TOP + H;
   const height = bottom + 39;
@@ -1029,28 +948,19 @@ function Chart({
     .flatMap((column) =>
       steps("p3_emergency_vwc_threshold", column).map((level) => ({ ...level, column })),
     );
-  const vwcAxis = axisRange(
-    [
-      ...points.map((point) => point.value),
-      ...(projection?.points.map((point) => point.value) ?? []),
-      ...before.map((point) => point.value),
-      ...typical.flatMap((point) => [point.low, point.high]),
-    ],
-    [
-      ...fc.map((level) =>
-        lane.steering === "generative" ? level.value - GENERATIVE_ZONE : level.value,
-      ),
+  // Fitted to today and the zone's own targets: yesterday and the typical day run off the edge
+  // rather than widen the scale.
+  const { vwc: vwcAxis, ec: ecAxis } = dayScales({
+    today: points.map((point) => point.value),
+    projection: projection?.points.map((point) => point.value),
+    targets: [
       ...fc.map((level) => level.value),
       ...band.flatMap((segment) => [segment.low, segment.high]),
       ...rescue.map((level) => level.value),
     ],
-    VWC_AXIS,
-  );
-  const ecAxis = axisRange(
-    lane.ec.map((point) => point.value),
-    lane.ecBand?.band ?? [],
-    EC_AXIS,
-  );
+    ec: lane.ec.map((point) => point.value),
+    ecBand: lane.ecBand?.band ?? null,
+  });
   const scale = (axis: Axis | null) => (value: number) =>
     axis
       ? bottom -
@@ -1058,6 +968,9 @@ function Chart({
       : bottom;
   const y = scale(vwcAxis),
     yEc = scale(ecAxis);
+  // Unclamped, for what the plot's clip cuts at its edge instead of flattening along it.
+  const yOpen = (value: number) =>
+    vwcAxis ? bottom - ((value - vwcAxis.min) / (vwcAxis.max - vwcAxis.min)) * H : bottom;
   const onAxis = (value: number | null | undefined): value is number =>
     typeof value === "number" && !!vwcAxis && value >= vwcAxis.min && value <= vwcAxis.max;
   const off = x(day.lightsOff),
@@ -1266,20 +1179,19 @@ function Chart({
       <g clipPath={`url(#${id}-plot)`}>
         {onAxis(fcNow) && lane.steering && (
           <g data-layer="runoff" data-steering={lane.steering}>
-            {fc.map((level, index) => (
-              <rect
-                key={index}
-                x={x(level.start)}
-                width={x(level.end) - x(level.start)}
-                y={lane.steering === "vegetative" ? TOP : y(level.value)}
-                height={
-                  lane.steering === "vegetative"
-                    ? Math.max(0, y(level.value) - TOP)
-                    : Math.max(0, y(level.value - GENERATIVE_ZONE) - y(level.value))
-                }
-                className="runoff-zone"
-              />
-            ))}
+            {fc.map((level, index) => {
+              const [low, high] = runoffBand(level.value, lane.steering!);
+              return (
+                <rect
+                  key={index}
+                  x={x(level.start)}
+                  width={x(level.end) - x(level.start)}
+                  y={yOpen(high)}
+                  height={Math.max(0, yOpen(low) - yOpen(high))}
+                  className="runoff-zone"
+                />
+              );
+            })}
           </g>
         )}
         {band.length > 0 && (
@@ -1299,7 +1211,7 @@ function Chart({
         {typical.length > 0 && (
           <g data-layer="typical">
             <path
-              d={typicalArea(typical, (hour) => x(day.start + hour * 3_600_000), y)}
+              d={typicalArea(typical, (hour) => x(day.start + hour * 3_600_000), yOpen)}
               className="typical-band"
             />
           </g>
@@ -1319,7 +1231,7 @@ function Chart({
           <path data-layer="rescue" d={flat(rescue)} className="rescue-line" />
         )}
         {before.length > 0 && (
-          <path data-layer="yesterday" d={linePath(before, x, y)} className="yesterday-line" />
+          <path data-layer="yesterday" d={linePath(before, x, yOpen)} className="yesterday-line" />
         )}
         {lane.ec.length > 1 && ecAxis && (
           <path

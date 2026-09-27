@@ -126,11 +126,16 @@ export function createDemo(now = Date.now()): States {
       put(`${base}vwc_zone_${id}`, 54 + id * 2 + index * 3, {
         friendly_name: `${name} Zone ${id} VWC`,
         unit_of_measurement: "%",
+        ...(index ? {} : demoProbes(put, id, "vwc", 54 + id * 2)),
       });
       put(`${base}ec_zone_${id}`, demoEc(index, id).toFixed(1), {
         friendly_name: `${name} Zone ${id} EC`,
         unit_of_measurement: "mS/cm",
+        ...(index ? {} : demoProbes(put, id, "ec", demoEc(index, id))),
       });
+      // Zone 3's back EC probe stopped reporting three hours ago: its zone reads the front one.
+      if (!index && id === 3)
+        states["sensor.demo_z3_back_ec"].last_updated = new Date(now - 3 * 3_600_000).toISOString();
       put(`${base}${key}phase`, id === 1 ? "P1" : "P2");
       put(
         `${base}${key}status`,
@@ -247,6 +252,35 @@ export function createDemo(now = Date.now()): States {
     if (!index) demoJev(put, prefix, now);
   }
   return states;
+}
+/** Flower 2's probes, front and back of each zone's row, and the combined sensor's attributes as
+ * the integration's fuse_probes publishes them (calculations.py): every probe used, except zone 3's
+ * back EC probe, which stopped reporting. */
+function demoProbes(
+  put: (id: string, state: string | number, attributes?: Record<string, unknown>) => void,
+  zone: number,
+  kind: "vwc" | "ec",
+  value: number,
+) {
+  const step = kind === "vwc" ? 0.8 : 0.15;
+  const ids = ["front", "back"].map((side) => `sensor.demo_z${zone}_${side}_${kind}`);
+  const out = kind === "ec" && zone === 3 ? ids[1] : null;
+  ids.forEach((id, side) =>
+    put(
+      id,
+      (value + (side ? -step : step) + (id === out ? 0.9 : 0)).toFixed(kind === "ec" ? 2 : 1),
+      {
+        friendly_name: `Zone ${zone} ${side ? "back" : "front"} ${kind === "vwc" ? "VWC" : "EC"}`,
+        unit_of_measurement: kind === "vwc" ? "%" : "mS/cm",
+      },
+    ),
+  );
+  return {
+    probes: 2,
+    used: ids.filter((id) => id !== out),
+    excluded: out ? { [out]: "not reporting" } : {},
+    spread: out ? 0 : Math.round(step * 200) / 100,
+  };
 }
 /** A demo zone's pore EC. Flower 2 is in the bulk (3.5-6): zone 1 reads under that band, as the
  * owner's own zone 1 did, and the others sit inside it. */
@@ -534,9 +568,12 @@ function demoJev(
     streak: 1,
   });
   // What the Setpoints judge may move on each zone tonight: the grower's own value is the middle of
-  // each range. Zone 3's shot size was notched down last night (the journal's 22:48 entry); zone 2's
-  // re-water point was set by hand today, so its range follows it.
-  const notch = localStamp(days[0].start + 12.8 * 3_600_000)
+  // each range. Zone 3's shot size was notched down at its latest setpoint check (the journal's
+  // 22:48 entry, tonight's once it has run); zone 2's re-water point was set by hand today, so its
+  // range follows it.
+  const notch = localStamp(
+    [days[1], days[0]].map((item) => item.start + 12.8 * 3_600_000).find((time) => time <= now)!,
+  )
     .slice(0, 16)
     .replace("T", " ");
   const setpoints = (zone: number) => {
