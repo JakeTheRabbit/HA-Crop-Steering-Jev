@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 import auto_setpoints
+import jev_bridge
 import jev_policy
 import setpoint_supervisor
 from strategy_runtime import parse_snapshot, parameter_override, strategy_block
@@ -427,6 +428,12 @@ class Controller:
         self.blind_fallback_min = float(o.get("blind_fallback_min", 90))
         # Optional: Jev (TypeSafe, via Cloudflare AI) as a guard on auto setpoints. Unset = arithmetic only.
         self._cf = tuple((o.get(k) or "").strip() for k in ("cf_account_id", "cf_api_token", "cf_gateway_id"))
+        # The Jev edition: Jev judges the engine's decisions inside a code envelope (docs/JEV.md). None = off.
+        try:
+            self.jev = jev_bridge.build(o, self._cf, os.environ.get("F2_STATE_PATH") or "/data/state.json", log)
+        except Exception as e:  # Jev can never stop the controller starting
+            log("jev: off, it could not start:", e)
+            self.jev = None
         self.loop_seconds = float(o.get("loop_seconds", 60))
         self.flow_lps = float(
             o.get("flow_lps", 0.02)
@@ -2165,8 +2172,39 @@ class Controller:
         self._alerted[key] = datetime.now()
         self._alert_codes[key] = code
         dom, _, svc = self.notify_service.partition("/")
-        if dom and svc:
+        push = True
+        triage = getattr(getattr(self, "jev", None), "triage", None)
+        if dom and svc and triage is not None:
+            try:  # Jev's Alerts judge: whether this alert's repeats keep buzzing a phone (docs/JEV.md)
+                push, why = triage.push(key, code, title, message, datetime.now())
+                if not push:
+                    log("ALERT push held:", key, why)
+            except Exception as e:
+                push = True
+                log("jev triage error", key, e)
+        if dom and svc and push:
             ha_call(dom, svc, title=title, message=message)
+
+    def _jev_alert(self, room, zone, judge, alert):
+        """An alert one of Jev's judges raised (docs/JEV.md). Only these codes exist: a judge can never
+        raise anything the error-code list does not explain."""
+        key, code = f"jev_{judge}_{room.slug}_z{zone}", alert.get("code")
+        title, message = alert.get("title", ""), alert.get("message", "")
+        if code == "CS-701":
+            self._alert(key, "CS-701", title, message, room=room, zone=zone)
+        elif code == "CS-702":
+            self._alert(key, "CS-702", title, message, room=room, zone=zone)
+        elif code == "CS-703":
+            self._alert(key, "CS-703", title, message, room=room, zone=zone)
+        elif code == "CS-705":
+            self._alert(key, "CS-705", title, message, room=room, zone=zone)
+        else:
+            log("jev alert refused: not in the error-code list", judge, code)
+
+    @staticmethod
+    def _jev_read(entity):
+        """One entity's state for Jev's context (the room's flower start date)."""
+        return ha_get(entity)[0]
 
     def _unreadable(self, entity, lo=0.0, hi=100.0, max_age_min=20):
         """Why `_read_sensor` found no usable moisture reading at `entity`, as (code, sentence).
@@ -2269,6 +2307,11 @@ class Controller:
         st["last_shot_is_anchor"] = False  # water was delivered: this one is an irrigation
         st["daily_vol"] += delivered_l
         self._save_state()
+        if getattr(self, "jev", None) is not None:
+            try:  # the shot, for Jev's Shot and Probe judges to read its answer later
+                jev_bridge.shot_counted(room, zone, delivered_l)
+            except Exception as e:
+                log("jev shot record error", room.slug, zone, e)
 
     # ---------- hardware (sync; this process does one thing) ----------
     @staticmethod
@@ -3322,6 +3365,20 @@ class Controller:
                 st["ec_integral"], st["ec_prev_err"] = 0.0, 0.0
             snap, p = self._snapshot(room, zone, now, lights_on, lights_just_on)
             params[zone] = p
+            jev_dirs = {}
+            distrusted = room.__dict__.setdefault("_jev_distrusted", {})
+            distrusted.pop(zone, None)
+            if snap is not None and getattr(self, "jev", None) is not None:
+                try:  # Jev's judges (docs/JEV.md): whatever goes wrong here, the base engine decides
+                    jev_dirs = jev_bridge.tick(self, room, zone, snap, p, now, lights_on)
+                    if "distrust" in jev_dirs:
+                        distrusted[zone] = jev_dirs["distrust"].why  # the zone takes the dead-probe path
+                        snap = None
+                    elif "advance" in jev_dirs:
+                        snap = jev_bridge.advance(self, room, zone, snap, jev_dirs["advance"], now)
+                except Exception as e:
+                    log("jev error", room.slug, zone, e)
+                    jev_dirs = {}
             if snap is None:
                 room._blind_since.setdefault(zone, now)
                 blind.append((zone, p))
@@ -3377,7 +3434,15 @@ class Controller:
                     and st["phase"] == "P2" and p.ec_target_p2 > 0):
                 base = self._zone_num(room, zone, "p2_vwc_threshold", 45)
                 les = st.get("last_ec_steer")
-                if les is None or (now - les).total_seconds() >= 1800:
+                # Jev's Salt judge chooses how: steer (as always), hold the offset, or decay it toward 0.
+                ec_mode = getattr(jev_dirs.get("ec_mode"), "value", "steer")
+                if ec_mode != "steer" and (les is None or (now - les).total_seconds() >= 1800):
+                    if ec_mode == "decay":
+                        st["ec_offset"] = round(float(st.get("ec_offset", 0.0)) * 0.5, 2)
+                        st["ec_integral"] = float(st.get("ec_integral", 0.0)) * 0.5
+                    st["last_ec_steer"] = now
+                    self._save_state()
+                elif les is None or (now - les).total_seconds() >= 1800:
                     if self._on("input_boolean.crop_steering_ec_pid_enabled", False):
                         gains = (
                             self._num("input_number.crop_steering_ec_pid_kp", 0.4),
@@ -3460,6 +3525,21 @@ class Controller:
             # reminder so a dead probe can't sit unnoticed (the silent-freeze lesson). Why it
             # is unusable is read every tick, so a changed cause replaces the card's diagnosis.
             looking = self._fused_id(room.prefix, "vwc", zone, room.zones[zone].get("vwc"))
+            set_aside = room.__dict__.get("_jev_distrusted", {}).get(zone)
+            if set_aside:
+                self._alert(
+                    f"blind_{room.slug}_z{zone}",
+                    "CS-704",
+                    "Jev set this zone's probe aside",
+                    f"Jev judged, twice in a row and confirmed by the controller's own check, that this "
+                    f"zone's moisture probe is not tracking the substrate ({set_aside}). {plan} It counts "
+                    "again as soon as Jev judges it tracks. Check the probe's placement and wiring."
+                    f"\n\nSensor: {looking}",
+                    room=room,
+                    zone=zone,
+                )
+                room._blind_zones.add(zone)
+                continue
             code, what = self._unreadable(looking)
             self._alert(
                 f"blind_{room.slug}_z{zone}",
@@ -3495,6 +3575,8 @@ class Controller:
             # would have stopped (ZoneSnapshot.steering_held), so the hold is said here instead.
             block = (self._blocked(room, zone, reason) if fire
                      else strategy_block(getattr(room, "strategy_snapshot", None), zone))
+            if fire and not block and getattr(self, "jev", None) is not None:
+                jev_bridge.shot_started(room, zone, snaps.get(zone), getattr(reason, "kind", None))
             acted = self._act_zone(
                 room,
                 zone,
@@ -3544,6 +3626,12 @@ class Controller:
                 room=room,
                 zone=z,
             )
+        if getattr(self, "jev", None) is not None:
+            try:
+                jev_bridge.siblings(self, room, snaps, params, now)
+                jev_bridge.publish(self, room, now, ha_set)
+            except Exception as e:
+                log("jev publish error", room.slug, e)
         room._was_lights_on = lights_on
         return pub
 

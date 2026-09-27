@@ -1,0 +1,212 @@
+"""The Jev runtime: the council, the background asker, the envelope, the ledger and the brain."""
+from datetime import timedelta
+
+import jev_kit as K
+from jev import council
+from jev.brain import Brain
+from jev.client import Asker, parse
+from jev.envelope import Directive, admit
+from jev.judges.probe import ProbeJudge
+from jev.judges.ramp import RampJudge
+from jev.ledger import Ledger
+
+
+# ------------------------------------------------------------------ council
+def test_two_phrasings_that_agree_are_firm():
+    v = council.combine(K.both("q", K.choice_answer("a", {"a": 0.8, "b": 0.2})), "q")
+    assert v.label == "a" and v.agreed and v.n == 2 and v.firm(0.6)
+
+
+def test_two_phrasings_that_disagree_never_act():
+    answers = K.both("q", K.choice_answer("a", {"a": 0.9, "b": 0.1}), K.choice_answer("b", {"a": 0.3, "b": 0.7}))
+    v = council.combine(answers, "q")
+    assert v.label == "a" and not v.agreed and not v.firm(0.5)
+
+
+def test_one_phrasing_alone_is_never_firm():
+    v = council.combine({"q__v0": K.choice_answer("a", {"a": 0.95})}, "q")
+    assert v.n == 1 and not v.firm(0.5)
+
+
+def test_noul_and_score_combine():
+    v = council.combine(K.both("t", K.noul_answer(0.1), K.noul_answer(0.2)), "t")
+    assert v.label is False and v.agreed and abs(v.prob - 0.85) < 1e-9
+    s = council.combine(K.both("s", K.score_answer(2.4, {"2": 0.6, "3": 0.4}), K.score_answer(1.8, {"2": 0.7, "1": 0.3})), "s")
+    assert s.label == 2 and s.agreed and abs(s.value - 2.1) < 1e-9
+
+
+def test_a_malformed_answer_is_no_verdict():
+    assert council.combine({"q__v0": {"type": "choice", "probabilities": "junk"}}, "q") is None
+    assert council.combine({}, "q") is None
+
+
+# ------------------------------------------------------------------ asker
+def test_parse_reads_cloudflares_envelope():
+    answers, usage = parse({"result": {"result": {"answers": {"q": {}}, "usage": {"input_tokens": 5}}}})
+    assert answers == {"q": {}} and usage == {"input_tokens": 5}
+    assert parse({"result": {"answers": {}}}) == (None, None)
+
+
+def test_the_asker_is_off_without_credentials_and_never_calls():
+    t = K.FakeTransport({})
+    a = Asker("", "", transport=t, threaded=False)
+    assert not a.enabled and a.submit("k", {}, {}) is False and t.calls == []
+
+
+def test_the_asker_stores_answers_and_counts_the_budget():
+    t = K.FakeTransport({"q__v0": K.noul_answer(0.9)})
+    a = Asker("acct", "tok", transport=t, threaded=False, daily_budget=1)
+    assert a.submit("k", {"x": 1}, {"q__v0": {}}) is True
+    assert a.result("k").answers["q__v0"]["noul"] == 0.9 and a.stats["input_tokens"] == 900
+    assert a.submit("k2", {}, {}) is False  # budget spent
+
+
+def test_a_failing_jev_leaves_no_answer_and_says_why():
+    a = Asker("acct", "tok", transport=K.FakeTransport(error="HTTP 500: boom"), threaded=False)
+    assert a.submit("k", {}, {}) is True
+    assert a.result("k") is None and a.stats["errors"] == 1 and "500" in a.stats["last_error"]
+
+
+# ------------------------------------------------------------------ envelope
+def _d(kind, value, ctx):
+    return Directive("t", kind, value, "why", ctx.now + timedelta(minutes=10))
+
+
+def test_a_phase_only_goes_forward_one_step():
+    c = K.ctx("P1", s=K.snap(phase="P1", vwc=39.0, shot_count=3))
+    assert admit(_d("advance", "P2", c), c)[0]
+    assert not admit(_d("advance", "P3", c), c)[0]
+    assert not admit(_d("advance", "P0", c), c)[0]
+
+
+def test_p1_hands_over_only_near_the_ceiling_with_the_minimum_shots():
+    p = K.params(p1_target=40.0, field_capacity=42.0, p1_min_shots=2)
+    low = K.ctx("P1", s=K.snap(phase="P1", vwc=35.0, shot_count=3), p=p)
+    few = K.ctx("P1", s=K.snap(phase="P1", vwc=39.5, shot_count=1), p=p)
+    assert not admit(_d("advance", "P2", low), low)[0]
+    assert not admit(_d("advance", "P2", few), few)[0]
+
+
+def test_p3_early_only_in_the_last_three_hours_and_above_the_floor():
+    early = K.ctx("P2", s=K.snap(hours_to_lights_off=5.0, vwc=34.0))
+    close = K.ctx("P2", s=K.snap(hours_to_lights_off=2.0, vwc=27.0), p=K.params(p3_emergency_floor=25.0))
+    ok = K.ctx("P2", s=K.snap(hours_to_lights_off=2.0, vwc=34.0))
+    assert not admit(_d("advance", "P3", early), early)[0]
+    assert not admit(_d("advance", "P3", close), close)[0]
+    assert admit(_d("advance", "P3", ok), ok)[0]
+
+
+def test_p0_waits_for_half_the_dryback_or_a_quarter_of_the_wait():
+    c = K.ctx("P0", s=K.snap(phase="P0", dryback_pct=4.0, phase_minutes=10.0), p=K.params(dryback_target=20.0))
+    assert not admit(_d("advance", "P1", c), c)[0]
+    c2 = K.ctx("P0", s=K.snap(phase="P0", dryback_pct=11.0, phase_minutes=10.0))
+    assert admit(_d("advance", "P1", c2), c2)[0]
+
+
+def test_nothing_moves_at_night_or_without_a_probe_or_once_expired():
+    night = K.ctx("P2", lights_on=False, s=K.snap(hours_to_lights_off=1.0))
+    blind = K.ctx("P2", s=None, hours_to_off=1.0)
+    assert not admit(_d("advance", "P3", night), night)[0]
+    assert not admit(_d("advance", "P3", blind), blind)[0]
+    c = K.ctx("P1", s=K.snap(phase="P1", vwc=39.0, shot_count=3))
+    stale = Directive("t", "advance", "P2", "why", c.now - timedelta(minutes=1))
+    assert admit(stale, c) == (False, "expired")
+
+
+def test_a_probe_is_set_aside_only_twice_in_a_row_and_confirmed_by_code():
+    c = K.ctx()
+    d = _d("distrust", "stuck", c)
+    assert not admit(d, c, confirmed=1, evidence_ok=True)[0]
+    assert not admit(d, c, confirmed=2, evidence_ok=False)[0]
+    assert admit(d, c, confirmed=2, evidence_ok=True)[0]
+
+
+# ------------------------------------------------------------------ ledger
+def test_the_ledger_survives_a_restart_and_gives_a_track_record(tmp_path):
+    path = str(tmp_path / "ledger.jsonl")
+    led = Ledger(path)
+    i = led.record("ramp", "default", 1, "P2", "advance", check_at=K.NOW, check={"vwc": 38.0})
+    assert [e["id"] for e in led.due(K.NOW)] == [i]
+    led.resolve(i, "VWC held", True)
+    again = Ledger(path)
+    assert again.due(K.NOW) == []
+    assert again.track("ramp", "default", 1) == "your last 1 call(s) of this kind worked 1 time(s): VWC held"
+
+
+# ------------------------------------------------------------------ brain + ramp
+def _ramp_ctx():
+    h = K.history(points=[(m, 38.0 + (0.1 if m < 20 else 0), 5.4) for m in range(0, 90, 1)],
+                  shots=[(60, 120, 36.0, 5.0, "p1_ramp"), (35, 120, 37.8, 5.2, "p1_ramp")])
+    s = K.snap(phase="P1", vwc=39.2, shot_count=3, minutes_since_shot=25.0, ec=5.6, ec_settled=5.6)
+    return K.ctx("P1", s=s, h=h)
+
+
+def test_the_brain_asks_in_the_background_and_hands_over_the_ramp(tmp_path):
+    t = K.FakeTransport(K.both("ramp_state", K.choice_answer("ec_is_feed_front", {"ec_is_feed_front": 0.8, "real_salt": 0.2})))
+    asker = Asker("acct", "tok", transport=t, threaded=False, clock=lambda: K.NOW.timestamp())
+    brain = Brain(asker, Ledger(str(tmp_path / "l.jsonl")), [RampJudge()], log=lambda *a: None)
+    out = brain.tick(_ramp_ctx())
+    assert [(d.kind, d.value) for d, _ in out] == [("advance", "P2")]
+    asked = t.calls[0]
+    assert set(asked["questions"]) == {"ramp_state__v0", "ramp_state__v1"}
+    assert "ramp_ceiling" in asked["state"] and "ramp_shot_responses" in asked["state"]
+    assert len(brain.ledger.entries) == 1  # recorded once
+    brain.tick(_ramp_ctx())
+    assert len(brain.ledger.entries) == 1  # the same answer is not recorded twice
+    status = brain.zone_status("default", 1)["ramp"]
+    assert status["directive"] == "advance P2" and status["verdicts"]["ramp_state"]["agreed"] is True
+
+
+def test_with_jev_off_or_failing_the_brain_does_nothing(tmp_path):
+    for asker in (Asker("", "", threaded=False),
+                  Asker("a", "t", transport=K.FakeTransport(error="timeout"), threaded=False)):
+        brain = Brain(asker, Ledger(None), [RampJudge(), ProbeJudge()], log=lambda *a: None)
+        assert brain.tick(_ramp_ctx()) == []
+
+
+def test_a_judge_that_raises_is_skipped_not_fatal():
+    class Broken(RampJudge):
+        def evidence(self, ctx):
+            raise ValueError("bad")
+
+    asker = Asker("a", "t", transport=K.FakeTransport({}), threaded=False)
+    brain = Brain(asker, Ledger(None), [Broken()], log=lambda *a: None)
+    assert brain.tick(_ramp_ctx()) == [] and "bad" in brain.errors["ramp"]
+
+
+# ------------------------------------------------------------------ probe
+def test_code_confirms_a_dead_probe_from_its_shots_and_a_sibling():
+    h = K.history(points=[(m, 30.0, 3.0) for m in range(0, 200)],
+                  shots=[(120, 200, 30.0, 3.0, "p2_topup"), (60, 200, 30.0, 3.0, "p2_topup")])
+    c = K.ctx(h=h, siblings={2: {"rise": 1.4, "rise_words": "retained +1.4"}})
+    assert ProbeJudge().evidence_ok(c)
+    c_no_sibling = K.ctx(h=h, siblings={2: {"rise": 0.1}})
+    # still confirmed: flat for over an hour with water going in
+    assert ProbeJudge().evidence_ok(c_no_sibling)
+
+
+def test_a_moving_probe_is_not_confirmed_dead():
+    h = K.history(points=[(m, 30.0 + (2.0 if m < 110 else 0) + (2.0 if m < 50 else 0) - m * 0.01, 3.0)
+                          for m in range(0, 200)],
+                  shots=[(120, 200, 30.0, 3.0, "p2_topup"), (60, 200, 31.2, 3.0, "p2_topup")])
+    assert not ProbeJudge().evidence_ok(K.ctx(h=h, siblings={2: {"rise": 1.4}}))
+
+
+# ------------------------------------------------------------------ TypeSafe direct
+def test_typesafe_answers_are_read_from_the_top_level():
+    from jev.client import parse_typesafe
+    answers, usage = parse_typesafe({"model": "jev-1.13.0", "answers": {"q__v0": {"type": "noul", "noul": 0.7}},
+                                     "usage": {"input_tokens": 327}})
+    assert answers["q__v0"]["noul"] == 0.7 and usage["input_tokens"] == 327
+    assert parse_typesafe({"result": {"result": {"answers": {"q": {}}}}}) == (None, None)
+    assert parse_typesafe(None) == (None, None)
+
+
+def test_a_typesafe_key_is_used_before_cloudflare(monkeypatch):
+    import jev_bridge
+    from jev.client import call, call_typesafe
+    brain = jev_bridge.build({"typesafe_api_key": "apikey_x"}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert brain.asker.transport is call_typesafe and brain.asker.token == "apikey_x"
+    brain = jev_bridge.build({}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert brain.asker.transport is call
+    assert jev_bridge.build({}, ("", "", ""), "/tmp/state.json", lambda *a: None) is None

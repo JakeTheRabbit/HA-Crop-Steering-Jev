@@ -91,12 +91,11 @@ configuration:
       How often the controller looks for new rooms and for setup changes saved
       in the Crop Steering page. Default 300 (five minutes).
   cf_account_id:
-    name: Cloudflare account ID (optional, Auto Setpoints judge)
+    name: Cloudflare account ID (Jev)
     description: >-
-      Only used by Auto Setpoints. When a P1 ramp stops rising, the controller asks the
-      Jev model (typesafe/jev on Cloudflare Workers AI) whether the probe reading can be
-      trusted before it lowers a zone's targets. LEAVE BLANK to run Auto Setpoints
-      without the judge - the learner still works, it just trusts its own checks.
+      The Jev edition's judge: with this and the token below, Jev (typesafe/jev on
+      Cloudflare Workers AI) judges the engine's decisions in every phase, inside the
+      controller's safety envelope (docs/JEV.md). LEAVE BLANK to run the plain engine.
   cf_api_token:
     name: Cloudflare API token (optional)
     description: >-
@@ -108,3 +107,34 @@ configuration:
     description: >-
       Route the Jev calls through an AI Gateway (for logs and rate limits), e.g. default.
       Leave blank to call Workers AI directly.
+  typesafe_api_key:
+    name: TypeSafe API key (Jev, direct)
+    description: >-
+      A TypeSafe API key (apikey_...). When set, Jev is asked straight from TypeSafe and the
+      Cloudflare fields above are not needed. Stored as a password.
+  jev_enabled:
+    name: Jev judges decisions
+    description: >-
+      Off runs the plain engine even with Cloudflare set. On (default) lets the judges
+      below act, each only inside the controller's safety envelope.
+  jev_judges:
+    name: Jev judges that may act
+    description: >-
+      all (default), or a comma-separated list of dawn, ramp, salt, dusk, probe, shot,
+      night and zones. A judge not listed is never asked.
+  jev_daily_calls:
+    name: Jev calls a day
+    description: >-
+      The most calls Jev gets in a day across every room (default 2000). Once spent,
+      the engine decides alone until midnight.
+  jev_flower_start:
+    name: Flower start (Jev's stage arc)
+    description: >-
+      Where each room's first day of 12/12 is, so the judges know the stage: an
+      input_datetime or a date for every room, or room=value pairs, e.g.
+      default=input_datetime.f2_flip_date, f1=input_datetime.f1_flip_date. Blank: the
+      judges work without a stage.
+  jev_flower_days:
+    name: Days of flower
+    description: >-
+      The cultivar's flowering length (default 56). The finish is its last 14 days.

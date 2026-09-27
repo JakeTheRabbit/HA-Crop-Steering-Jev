@@ -30,6 +30,11 @@
       "prefix": "CS-6",
       "name": "Repairs cards",
       "detail": "Raised by the integration, under Settings → Repairs."
+    },
+    {
+      "prefix": "CS-7",
+      "name": "Jev",
+      "detail": "Jev's judgements about a zone: advice, and a probe it set aside (docs/JEV.md)."
     }
   ],
   "codes": [
@@ -624,6 +629,89 @@
       "fixes": [
         "Refill the tank, then press Refilled on Crop Steering → Stock tanks.",
         "Or set the level you read off the tank. The card clears itself once every tank is above its low mark."
+      ]
+    },
+    {
+      "code": "CS-701",
+      "title": "Water isn't reaching this zone",
+      "source": "notification",
+      "severity": "warning",
+      "meaning": "Jev's Shot judge found, for two shots in a row, no sign that the water reached this zone: moisture did not rise, while the controller counted the litres.",
+      "watering": "Carries on as normal. The litres counted may not be what arrived.",
+      "causes": [
+        "A closed hand valve, a kinked or blocked line, or blocked drippers.",
+        "A tank or dosing hold that closed the feed path during the shot.",
+        "The zone's valve does not open although it reads on."
+      ],
+      "fixes": [
+        "Check the zone's valve, line and drippers during the next shot.",
+        "Do a catch test on one dripper."
+      ]
+    },
+    {
+      "code": "CS-702",
+      "title": "This zone's water per plant is out of line with the others",
+      "source": "notification",
+      "severity": "info",
+      "meaning": "The zone's water per plant today is under 70 % or over 140 % of the room's other zones, and Jev's Zones judge names the likely reason in the message.",
+      "watering": "Carries on as normal. This is advice only.",
+      "causes": [
+        "Plants that drink less or more.",
+        "The probe sits in a wetter or drier spot than the roots.",
+        "A valve, dripper or line problem.",
+        "Shots that do not land."
+      ],
+      "fixes": [
+        "Compare the zone's settings and plants with its siblings'.",
+        "Check the probe's position, and do a catch test on this zone and a neighbour."
+      ]
+    },
+    {
+      "code": "CS-703",
+      "title": "Overnight low reading looks like a probe fault",
+      "source": "notification",
+      "severity": "warning",
+      "meaning": "The zone's moisture is falling toward the P3 emergency floor overnight, and Jev's Night judge reads it as a probe fault rather than drying.",
+      "watering": "Carries on: the P3 rescue shot still fires as normal.",
+      "causes": [
+        "A probe that stepped or stopped moving.",
+        "A probe knocked out of place."
+      ],
+      "fixes": [
+        "Check the probe in the morning, before the ramp starts."
+      ]
+    },
+    {
+      "code": "CS-704",
+      "title": "Jev set this zone's probe aside",
+      "source": "notification",
+      "severity": "warning",
+      "meaning": "Jev judged twice in a row, and the controller's own check confirmed, that the zone's moisture probe is not tracking the substrate (stuck, channeling, out of the block, on the wrong zone or drifting).",
+      "watering": "Carries on without the probe, as for a dead probe: the zone copies a healthy sibling's shots, or waters on its timer, within its daily limit. The probe counts again as soon as Jev judges it tracks.",
+      "causes": [
+        "A probe pulled part-way out of the block, or sitting in a channel.",
+        "A probe mapped to the wrong zone.",
+        "A probe that has stopped measuring but still reports."
+      ],
+      "fixes": [
+        "Check the probe's placement and wiring, and which zone it is mapped to in Rooms & setup."
+      ]
+    },
+    {
+      "code": "CS-705",
+      "title": "The zone is off the stage's arc",
+      "source": "notification",
+      "severity": "info",
+      "meaning": "Jev's daily Stage judge compared the zone with the owner's stage arc for today's day of flower (steering, dryback, pore EC) and found it off, naming what and what the doctrine says.",
+      "watering": "Carries on as normal. This is advice only: nothing is changed.",
+      "causes": [
+        "The zone's steering mode or settings are for another stage.",
+        "The overnight dryback or the pore EC has drifted outside the stage's band.",
+        "The stage's move-on signs have appeared."
+      ],
+      "fixes": [
+        "Compare the zone's settings with the stage (docs/JEV.md, the owner's stage arc), and change them if the stage has moved on.",
+        "Check jev_flower_start points at the right flip date."
       ]
     }
   ]
