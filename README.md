@@ -8,7 +8,7 @@ day's watering stops, why one zone drinks differently, and which alert is worth 
 
 Code keeps everything physical: pumps and valves, shot sizes, the daily floor and cap, every rescue. Jev decides
 inside that envelope, in the background, and when it is off, slow or wrong-footed the engine runs exactly as the
-original. Every question carries the owner's own doctrine from his GrowLabs wiki (99 rules, and the stage arc for
+original. Every question carries the owner's own doctrine from their GrowLabs wiki (99 rules, and the stage arc for
 each day of flower). **What "truly insane and amazing" means here, and how each of the ten judges works:
 [docs/JEV.md](docs/JEV.md).**
 
@@ -23,8 +23,11 @@ each day of flower). **What "truly insane and amazing" means here, and how each 
 | 2 h to lights-off, flower setting (generative) | stop now (p 0.82) | brought P3 forward |
 | The same zone in flower bulk (vegetative) | stop now | refused: a vegetative zone stops late (the owner's doctrine) |
 | A zone left on generative steering in flower bulk | last night's dryback too shallow (p 0.99) | CS-705, naming the steering mismatch too |
+| Zone 1 of 27 Sep: 235 % of the room's water, pore EC under the bulk range (28 Sep) | smaller shots tomorrow (p 0.94) | P2 shot 5 % → 4.5 %, inside its range |
+| A zone on course: water in line, EC inside the range (28 Sep) | keep (p 0.92) | nothing moved |
+| A thirsty zone: 43 % of the room's water, EC over the range (28 Sep) | bigger shots tomorrow (p 0.95) | P2 shot 5 % → 5.5 % |
 
-Fourteen of fourteen as an experienced grower would expect, at about 3,000 input tokens a question
+Seventeen of seventeen as an experienced grower would expect, at about 3,000 input tokens a question
 (Cloudflare prices Jev at $0.042 per million: cents a day for a room). Re-run it any time with
 `scripts/jev_live_smoke.py`.
 

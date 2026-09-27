@@ -44,6 +44,26 @@ def _lpp(v):
     return float(x) if isinstance(x, (int, float)) else None
 
 
+def water_vs_room(ctx):
+    """-> (this zone's litres a plant today, what it is compared with, their ratio, that in words).
+
+    The comparison is the median of every zone in the room, this one included, so one thirsty zone
+    does not make its siblings look short (27 Sep 2026, the first live day: zone 1 had 2477 mL a plant
+    and zones 2 and 3 about 1000, and zones 2 and 3 were flagged against zone 1's 2477). In a room of
+    two zones neither is the odd one out, so each is compared with the other."""
+    mine = ctx.snap.daily_vol / ctx.plants if ctx.plants and ctx.snap is not None else None
+    others = [x for x in (_lpp(v) for v in ctx.siblings.values()) if x is not None]
+    if mine is None or not others:
+        return None, None, None, None
+    if len(others) == 1:
+        typical, basis = others[0], "the other zone"
+    else:
+        typical, basis = statistics.median(others + [mine]), "the room's median zone"
+    if typical < 0.05:  # under 50 mL a plant so far: too early in the day to compare
+        return mine, typical, None, basis
+    return mine, typical, mine / typical, basis
+
+
 class ZonesJudge(Judge):
     name = "zones"
     phases = ("P1", "P2")
@@ -52,23 +72,7 @@ class ZonesJudge(Judge):
     questions = QUESTIONS
 
     def _ratio(self, ctx):
-        """-> (this zone's litres a plant, what it is compared with, their ratio, that in words).
-
-        The comparison is the median of every zone in the room, this one included, so one thirsty zone
-        does not make its siblings look short (27 Sep 2026, the first live day: zone 1 had 2477 mL a plant
-        and zones 2 and 3 about 1000, and zones 2 and 3 were flagged against zone 1's 2477). In a room of
-        two zones neither is the odd one out, so each is compared with the other."""
-        mine = ctx.snap.daily_vol / ctx.plants if ctx.plants else None
-        others = [x for x in (_lpp(v) for v in ctx.siblings.values()) if x is not None]
-        if mine is None or not others:
-            return None, None, None, None
-        if len(others) == 1:
-            typical, basis = others[0], "the other zone"
-        else:
-            typical, basis = statistics.median(others + [mine]), "the room's median zone"
-        if typical < 0.05:  # under 50 mL a plant so far: too early in the day to compare
-            return mine, typical, None, basis
-        return mine, typical, mine / typical, basis
+        return water_vs_room(ctx)
 
     def due(self, ctx, last_asked):
         if not ctx.lights_on or not super().due(ctx, last_asked):
