@@ -777,7 +777,11 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
       ] as const;
       put(`sensor.crop_steering_${prefix}zone_${zone}_phase`, [
         { state: "P3", time: request.start },
-        ...phases.map(([hour, state]) => ({ state, time: at(hour) })),
+        // Lights-on moves every zone to P0 at once; the rest follows the zone's own day.
+        ...phases.map(([hour, state]) => ({
+          state,
+          time: state === "P0" ? request.start + hour * 3_600_000 : at(hour),
+        })),
       ]);
       const hold = !prefix && zone === 2 ? [2.5, 2.7] : null;
       const disabled = prefix && zone === 3 ? 6 : Infinity;
@@ -822,15 +826,19 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
           { time: at(disabled), zone, list: "blocked", text: "P2 zone disabled" },
           { time: at(p3), zone, list: "blocked", text: null },
         );
-      // Every day on one curve that ends at the live reading, so an earlier day joins up with today.
-      const recorded = demoHistory(states, [vwc], (now - request.start) / 3_600_000, now);
-      put(
-        vwc,
-        (recorded[0]?.points ?? []).map((point) => ({
-          state: String(point.value),
-          time: Date.parse(point.time),
-        })),
-      );
+      // Every day on one curve that ends at the live reading, so an earlier day joins up with today;
+      // pore EC on the same day, concentrating as the slab dries and easing as it is watered.
+      const ec = `sensor.crop_steering_${prefix}ec_zone_${zone}`;
+      for (const probe of wanted.has(ec) ? [vwc, ec] : [vwc]) {
+        const recorded = demoHistory(states, [probe], (now - request.start) / 3_600_000, now);
+        put(
+          probe,
+          (recorded[0]?.points ?? []).map((point) => ({
+            state: String(point.value),
+            time: Date.parse(point.time),
+          })),
+        );
+      }
     }
     if (!prefix) {
       moved("number.crop_steering_zone_1_p1_target_vwc", 66, request.start + 0.4 * 3_600_000);

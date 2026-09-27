@@ -287,7 +287,7 @@ try {
   await check("overview: the grow day comes first, above the tank", async () => {
     await go("overview");
     const timeline = page.locator("[data-day-timeline]");
-    await expectVisible(timeline.locator(".timeline-zone").first());
+    await expectVisible(timeline.locator(".grow-zone").first());
     const tops = await page.evaluate(() =>
       ["[data-day-timeline]", "[data-tank-status]", ".zone-table-desktop"].map(
         (selector) => document.querySelector(selector).getBoundingClientRect().top,
@@ -367,47 +367,72 @@ try {
     );
   });
   await check(
-    "overview: the grow day tracks today against yesterday, a typical day and its targets",
+    "overview: the grow day draws each zone in Athena's chart language, against yesterday or a typical day",
     async () => {
-      await go("overview");
-      const timeline = page.locator("[data-day-timeline]");
-      const lane = timeline.locator(".timeline-zone").first();
-      const layer = (name) => lane.locator(`[data-layer="${name}"]`);
+      // 4 PM on the demo's day: ramp done, maintenance running, the night still to come.
+      const pinned = await context.newPage();
+      pinned.on("pageerror", (error) => pageErrors.push(error.message));
+      await pinned.clock.setFixedTime(new Date(2026, 8, 28, 16, 0, 0));
+      await pinned.goto(`${base}/dashboard.html?demo&room=f2#/overview`, {
+        waitUntil: "networkidle",
+      });
+      const timeline = pinned.locator("[data-day-timeline]");
+      const zone = timeline.locator(".grow-zone").first();
+      const layer = (name) => zone.locator(`[data-layer="${name}"]`);
       // The earlier days load after today's: yesterday's line is the last to arrive.
       await expectVisible(layer("yesterday"));
-      for (const name of ["targets", "projected", "expected", "yesterday-shots"])
+      for (const name of ["vwc", "ec", "fc", "runoff", "maintenance", "projected", "shots", "jev"])
         assert.equal(await layer(name).count(), 1, `the ${name} layer is drawn`);
-      const line = lane.locator(".timeline-zone-line");
+      assert.equal(await timeline.locator(".grow-zone").count(), 3, "one chart per zone");
+      // Today's stage, from the controller's Jev sensor, with Athena's dryback for it.
+      const stage = await timeline.locator("[data-grow-stage]").textContent();
+      for (const part of [
+        "Flower bulk",
+        "day 37 of 56",
+        "Vegetative",
+        "Pore EC target 3.5–6",
+        "Overnight dryback 30–40% of peak",
+      ])
+        assert.ok(stage.includes(part), `the stage line says "${part}": ${stage}`);
+      // One row of numbers per zone, not a sentence; the pore EC coloured against the stage's band.
+      const stats = await zone.locator(".grow-stats").innerText();
+      for (const part of [
+        /VWC\s+[\d.]+%/,
+        /Pore EC\s+[\d.]+\s+below 3\.5–6/,
+        /Water today\s+[\d.]+ L\s+\d+ mL\/plant/,
+        /Shots\s+\d+\s+last /,
+      ])
+        assert.match(stats, part);
+      assert.equal(await zone.locator("[data-status='below']").count(), 1);
+      assert.match(await zone.locator(".grow-next").innerText(), /^Next: \S/);
       assert.match(
-        await line.textContent(),
-        /% now · [+−±][\d.]+ pts vs yesterday at .+ · Peak target [\d.]+% /,
+        await zone.locator(".grow-dryback").innerText(),
+        /^Last night’s dryback [\d.]+% of peak · target 30–40%$/,
       );
-      assert.match(await line.textContent(), /L so far \([+−±][\d.]+ L\)/);
-      const key = timeline.getByRole("list", { name: "Timeline key" });
-      for (const [name, layers] of [
-        ["Yesterday", ["yesterday", "yesterday-shots"]],
-        ["Projected (estimate)", ["projected", "expected"]],
-        ["Target for the phase", ["targets"]],
-      ]) {
-        const toggle = key.getByRole("button", { name, exact: true });
-        assert.equal(await toggle.getAttribute("aria-pressed"), "true");
-        await toggle.click();
-        assert.equal(await toggle.getAttribute("aria-pressed"), "false");
-        for (const hidden of layers) assert.equal(await layer(hidden).count(), 0, `${name} hides`);
-      }
-      // The choices are remembered in the browser.
-      await page.reload({ waitUntil: "networkidle" });
-      await expectVisible(lane);
-      assert.equal(
-        await key
-          .getByRole("button", { name: "Target for the phase" })
-          .getAttribute("aria-pressed"),
-        "false",
-      );
-      for (const name of ["Yesterday", "Projected (estimate)", "Target for the phase"])
-        await key.getByRole("button", { name, exact: true }).click();
-      await expectVisible(layer("yesterday"));
-      assert.equal(await layer("targets").count(), 1);
+      // A sane VWC axis: tight to the day, never 14-91 %.
+      const ticks = (await zone.locator(".grow-svg .axis-label").allTextContents())
+        .filter((text) => text.endsWith("%"))
+        .map(Number.parseFloat);
+      assert.ok(ticks.length >= 3, `VWC gridlines: ${ticks}`);
+      assert.ok(Math.max(...ticks) - Math.min(...ticks) <= 30, `VWC axis ${ticks}`);
+      // Phases along the bottom as Athena's badges, every one there was today.
+      const badges = await zone.locator(".phase-badge .badge-text").allTextContents();
+      assert.deepEqual(badges, ["P0", "P1", "P2", "P3"]);
+      // One small key.
+      const key = timeline.getByRole("list", { name: "Chart key" });
+      assert.ok((await key.locator("li").count()) <= 8, "the key stays small");
+      // Pointing at a shot says what it was.
+      const svg = zone.locator(".grow-svg");
+      const box = await svg.boundingBox();
+      const dot = await svg
+        .locator(".shot-dot")
+        .nth(2)
+        .evaluate((circle) => ({ x: +circle.getAttribute("cx"), y: +circle.getAttribute("cy") }));
+      await pinned.mouse.move(box.x + dot.x, box.y + dot.y);
+      await expectVisible(zone.locator(".grow-tip"));
+      assert.match(await zone.locator(".grow-tip").innerText(), /P1 shot /);
+      await pinned.mouse.move(0, 0);
+      await zone.locator(".grow-tip").waitFor({ state: "hidden" });
       const compare = timeline.getByLabel("Compare with");
       await compare.selectOption("typical");
       await expectVisible(layer("typical"));
@@ -416,35 +441,56 @@ try {
         "the typical day is a p25-p75 band",
       );
       assert.equal(await layer("yesterday").count(), 0);
-      await expectVisible(key.getByRole("button", { name: "Typical (7 days)", exact: true }));
-      assert.match(await line.textContent(), /pts vs typical at /);
-      await axe("overview grow day, typical");
+      await expectVisible(key.getByText("Typical day (7 days)", { exact: true }));
       await compare.selectOption("none");
       assert.equal(await layer("typical").count(), 0);
-      assert.doesNotMatch(await line.textContent(), / vs (yesterday|typical)/);
+      assert.equal(await layer("yesterday").count(), 0);
+      // The choice is remembered in the browser.
+      await pinned.reload({ waitUntil: "networkidle" });
+      await expectVisible(zone);
+      assert.equal(await compare.inputValue(), "none");
       await compare.selectOption("yesterday");
       await expectVisible(layer("yesterday"));
-      // Dark: the timeline's own layers and controls, as the error codes are checked below.
-      await page.evaluate(() => document.documentElement.classList.add("dark"));
-      await page.evaluate(
-        () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
-      );
-      const dark = await new AxeBuilder({ page })
-        .include("[data-day-timeline]")
-        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-        .analyze();
-      await page.evaluate(() => document.documentElement.classList.remove("dark"));
-      assert.deepEqual(
-        dark.violations.map((v) => v.id),
-        [],
-        "The grow day must be readable on a dark theme",
-      );
+      for (const theme of ["light", "dark"]) {
+        await pinned.evaluate(
+          (dark) => document.documentElement.classList.toggle("dark", dark),
+          theme === "dark",
+        );
+        await pinned.evaluate(
+          () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+        );
+        const result = await new AxeBuilder({ page: pinned })
+          .include("[data-day-timeline]")
+          .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+          .analyze();
+        accessibility.push({
+          page: `overview grow day, ${theme}`,
+          violations: result.violations.map((v) => ({
+            id: v.id,
+            nodes: v.nodes.map((n) => n.target),
+          })),
+        });
+        assert.deepEqual(
+          result.violations.map((v) => v.id),
+          [],
+          `The grow day must be readable on a ${theme} theme`,
+        );
+      }
+      await timeline.screenshot({ path: path.join(out, "dashboard-grow-day.png") });
+      await pinned.close();
     },
   );
-  await check("jev: every decision on Activity, by zone or actions only", async () => {
-    await go("activity");
+  await check("jev: the latest decisions beside the grow day, every one on Activity", async () => {
+    await go("overview");
+    const compact = page.locator('[data-jev-log="compact"]');
+    await expectVisible(compact);
+    assert.equal(await compact.locator(".jev-row").count(), 5, "the latest five");
+    assert.equal(await compact.locator(".jev-row [data-jev-result]").count(), 5);
+    await compact.getByRole("button", { name: "View all" }).click();
+    await expectVisible(page.getByRole("heading", { name: "Activity", exact: true }));
     const panel = page.locator("#jev-decisions");
     await expectVisible(panel);
+    await page.waitForFunction(() => document.activeElement?.id === "jev-decisions");
     const rows = panel.locator(".jev-row");
     const all = await rows.count();
     assert.ok(all > 5, `every decision on Activity, ${all}`);
@@ -474,8 +520,11 @@ try {
       await expectVisible(page.locator("#jev-decisions .jev-row").first());
     });
     // A room without Jev shows no trace of it.
+    await go("overview", "f1");
+    await expectVisible(page.locator("[data-day-timeline] .grow-zone").first());
+    assert.equal(await page.locator("[data-jev-log]").count(), 0);
+    assert.equal(await page.locator("[data-day-timeline] [data-layer='jev']").count(), 0);
     await go("activity", "f1");
-    await expectVisible(page.getByRole("heading", { name: "Activity", exact: true }));
     assert.equal(await page.locator("[data-jev-log]").count(), 0);
   });
   await check("zones: the full table and the cards carry the Overview's mini visuals", async () => {
@@ -615,14 +664,12 @@ try {
     await pinned.goto(`${base}/dashboard.html?demo&room=f2#/overview`, {
       waitUntil: "networkidle",
     });
-    const lanes = pinned.locator(".timeline-zone-line");
+    const lanes = pinned.locator(".grow-next");
     await lanes.first().waitFor();
     const [zone1, zone2] = await lanes.allInnerTexts();
-    assert.match(
-      zone2,
-      / · next: shot when VWC < [\d.]+% \(now [\d.]+%[^)]*\) · dilution if pwEC > /,
-    );
-    assert.doesNotMatch(zone1, /next:/, "no P1 conditions beside a P2 lane");
+    assert.match(zone2, /^Next: shot when VWC < [\d.]+% \(now [\d.]+%[^)]*\)/);
+    assert.match(await lanes.nth(1).getAttribute("title"), / · dilution if pwEC > /);
+    assert.doesNotMatch(zone1, /when VWC/, "no P1 conditions beside a P2 lane");
     await pinned.close();
   });
   await check("water today: per plant is the room's choice, made in Settings", async () => {

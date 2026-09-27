@@ -539,7 +539,7 @@ describe("live updates extend a loaded day", () => {
 });
 
 describe("what a room's timeline reads", () => {
-  it("each zone's phase, valve and probe, the setpoints, and the decision with attributes", () => {
+  it("each zone's phase, valve and probes, the setpoints, and the decision with attributes", () => {
     const states = createDemo(Date.UTC(2026, 8, 23, 3));
     const room = buildRoom(
       states,
@@ -551,10 +551,12 @@ describe("what a room's timeline reads", () => {
       phase: "sensor.crop_steering_zone_1_phase",
       valve: "switch.demo_valve_1",
       vwc: "sensor.crop_steering_vwc_zone_1",
+      ec: "sensor.crop_steering_ec_zone_1",
     });
     for (const id of [
       "sensor.crop_steering_zone_3_phase",
       "switch.demo_valve_2",
+      "sensor.crop_steering_ec_zone_2",
       "number.crop_steering_zone_1_p2_vwc_threshold",
       "number.crop_steering_lights_on_hour",
     ])
@@ -599,6 +601,12 @@ describe("the demo's day", () => {
       expect(shots.some((shot) => shot.phase === "P2")).toBe(true);
       // The probe's history ends at its live reading.
       expect(rows[zone.vwc!].at(-1)!.state).toBe(states[zone.vwc!].state);
+      // Pore EC too, moving through the day as the slab dries and is watered.
+      expect(Number(rows[zone.ec!].at(-1)!.state)).toBe(Number(states[zone.ec!].state));
+      expect(new Set(rows[zone.ec!].map((row) => row.state)).size).toBeGreaterThan(10);
+      // Lights-on moves every zone to P0 at once.
+      const p0 = rows[zone.phase].find((row) => row.state === "P0")!;
+      expect(p0.time - day.start).toBeLessThan(2 * 60_000);
     }
   });
   it("shows a hold, the change that ended it, and a supervisor's setpoint move", () => {
