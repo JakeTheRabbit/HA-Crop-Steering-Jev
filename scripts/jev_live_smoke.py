@@ -1,5 +1,6 @@
 """Ask the real Jev every judge's questions on realistic zone situations, and check its answers.
 
+    JEV_TYPESAFE_KEY=<apikey_...> python scripts/jev_live_smoke.py          (TypeSafe direct)
     JEV_CF_ACCOUNT=<account id> JEV_CF_TOKEN=<Workers AI token> python scripts/jev_live_smoke.py
 
 Each scenario builds a zone context the way the controller does, runs the judge's own evidence and
@@ -18,7 +19,7 @@ sys.path[:0] = [str(ROOT / "addons/f2_control/f2_control"), str(ROOT / "addons/f
 
 import jev_kit as K  # noqa: E402
 from jev import council  # noqa: E402
-from jev.client import Asker  # noqa: E402
+from jev.client import Asker, call_typesafe  # noqa: E402
 from jev.doctrine import stage_intent  # noqa: E402
 from jev.envelope import admit  # noqa: E402
 from jev.judges.dawn import DawnJudge  # noqa: E402
@@ -164,10 +165,14 @@ SCENARIOS = [
 
 
 def main():
+    key = os.environ.get("JEV_TYPESAFE_KEY")
     account, token = os.environ.get("JEV_CF_ACCOUNT"), os.environ.get("JEV_CF_TOKEN")
-    if not (account and token):
-        sys.exit("set JEV_CF_ACCOUNT and JEV_CF_TOKEN")
-    asker = Asker(account, token, os.environ.get("JEV_CF_GATEWAY") or None, threaded=False, timeout=60)
+    if key:
+        asker = Asker("typesafe", key, None, threaded=False, timeout=60, transport=call_typesafe)
+    elif account and token:
+        asker = Asker(account, token, os.environ.get("JEV_CF_GATEWAY") or None, threaded=False, timeout=60)
+    else:
+        sys.exit("set JEV_TYPESAFE_KEY, or JEV_CF_ACCOUNT and JEV_CF_TOKEN")
     good = 0
     for title, judge, build, question, expect in SCENARIOS:
         ctx = build()

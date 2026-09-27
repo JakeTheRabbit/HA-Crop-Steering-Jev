@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 
 from jev.brain import Brain
-from jev.client import Asker
+from jev.client import Asker, call_typesafe
 from jev.context import Shot, ZoneContext, ZoneHistory, response, words_response
 from jev.doctrine import stage_intent
 from jev.judges.dawn import DawnJudge
@@ -34,15 +34,23 @@ def judges():
 
 
 def build(options, cf, state_path, log):
-    """The brain, or None when Jev is off (no Cloudflare credentials, or `jev_enabled` false)."""
+    """The brain, or None when Jev is off (no TypeSafe key and no Cloudflare credentials, or
+    `jev_enabled` false). A TypeSafe API key is used when set; otherwise Cloudflare's Workers AI."""
     account, token, gateway = cf
-    if not (account and token) or options.get("jev_enabled", True) is False:
+    typesafe = str(options.get("typesafe_api_key") or "").strip()
+    if options.get("jev_enabled", True) is False or not (typesafe or (account and token)):
         return None
     wanted = str(options.get("jev_judges") or "all").replace(" ", "")
     allowed = set(ALL) if wanted in ("", "all") else set(wanted.split(",")) & set(ALL)
-    asker = Asker(account, token, gateway or None, daily_budget=int(options.get("jev_daily_calls", 2000)))
+    budget = int(options.get("jev_daily_calls", 2000))
+    if typesafe:
+        asker = Asker("typesafe", typesafe, None, daily_budget=budget, transport=call_typesafe)
+        via = "TypeSafe"
+    else:
+        asker = Asker(account, token, gateway or None, daily_budget=budget)
+        via = "Cloudflare Workers AI"
     ledger = Ledger(os.path.join(os.path.dirname(state_path) or ".", "jev_ledger.jsonl"))
-    log(f"jev: on, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
+    log(f"jev: on via {via}, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
     brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
     brain.triage = Triage(asker) if "alerts" in allowed else None
     brain.flower_start = flower_option(options.get("jev_flower_start"))

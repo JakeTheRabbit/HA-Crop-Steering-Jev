@@ -40,6 +40,7 @@ options:
   cf_account_id: ""
   cf_api_token: ""
   cf_gateway_id: ""
+  typesafe_api_key: ""
   jev_enabled: true
   jev_judges: all
   jev_daily_calls: 2000
@@ -64,6 +65,7 @@ schema:
   cf_account_id: str?
   cf_api_token: password?
   cf_gateway_id: str?
+  typesafe_api_key: password?
   jev_enabled: bool?
   jev_judges: str?
   jev_daily_calls: int?

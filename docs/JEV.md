@@ -68,7 +68,8 @@ Add-on options (the controller app):
 
 | Option | Default | What it does |
 |---|---|---|
-| `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Cloudflare account, a token with Workers AI access, and the AI Gateway (optional). Without the first two, Jev is off. |
+| `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Used when set. |
+| `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Or Jev through Cloudflare Workers AI: the account, a token with Workers AI access, and the AI Gateway (optional). With neither a TypeSafe key nor these, Jev is off. |
 | `jev_enabled` | on | Off runs the plain engine even with Cloudflare set. |
 | `jev_judges` | all | The judges that may act, e.g. `dawn,ramp,salt,dusk,probe,shot,night,zones,alerts`. |
 | `jev_daily_calls` | 2000 | The day's call budget across rooms. |

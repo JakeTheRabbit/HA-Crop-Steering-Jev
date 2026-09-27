@@ -190,3 +190,23 @@ def test_a_moving_probe_is_not_confirmed_dead():
                           for m in range(0, 200)],
                   shots=[(120, 200, 30.0, 3.0, "p2_topup"), (60, 200, 31.2, 3.0, "p2_topup")])
     assert not ProbeJudge().evidence_ok(K.ctx(h=h, siblings={2: {"rise": 1.4}}))
+
+
+# ------------------------------------------------------------------ TypeSafe direct
+def test_typesafe_answers_are_read_from_the_top_level():
+    from jev.client import parse_typesafe
+    answers, usage = parse_typesafe({"model": "jev-1.13.0", "answers": {"q__v0": {"type": "noul", "noul": 0.7}},
+                                     "usage": {"input_tokens": 327}})
+    assert answers["q__v0"]["noul"] == 0.7 and usage["input_tokens"] == 327
+    assert parse_typesafe({"result": {"result": {"answers": {"q": {}}}}}) == (None, None)
+    assert parse_typesafe(None) == (None, None)
+
+
+def test_a_typesafe_key_is_used_before_cloudflare(monkeypatch):
+    import jev_bridge
+    from jev.client import call, call_typesafe
+    brain = jev_bridge.build({"typesafe_api_key": "apikey_x"}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert brain.asker.transport is call_typesafe and brain.asker.token == "apikey_x"
+    brain = jev_bridge.build({}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert brain.asker.transport is call
+    assert jev_bridge.build({}, ("", "", ""), "/tmp/state.json", lambda *a: None) is None

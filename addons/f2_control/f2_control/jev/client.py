@@ -58,6 +58,45 @@ def call(account, token, state, questions, gateway=None, timeout=20.0):
     return answers, usage, None
 
 
+TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
+TYPESAFE_MODEL = "jev-latest"
+
+
+def parse_typesafe(payload):
+    """TypeSafe's own API answers at the top level: (answers, usage). Anything else: (None, None)."""
+    answers = payload.get("answers") if isinstance(payload, dict) else None
+    if not isinstance(answers, dict) or not answers:
+        return None, None
+    return answers, payload.get("usage") or {}
+
+
+def call_typesafe(account, token, state, questions, gateway=None, timeout=20.0):
+    """One Jev evaluation straight from TypeSafe with a TypeSafe API key (`token`; `account` and
+    `gateway` are unused) -> (answers, usage, error). Never raises. A 429 or 529 is retried once."""
+    if requests is None:
+        return None, None, "requests not installed"
+    headers = {"Authorization": f"Bearer {token}"}
+    body = {"model": TYPESAFE_MODEL, "state": state, "questions": questions}
+    resp = None
+    for attempt in range(2):
+        try:
+            resp = requests.post(TYPESAFE_URL, json=body, headers=headers, timeout=timeout)
+        except Exception as e:  # noqa: BLE001 - a network fault of any kind is a missing answer
+            return None, None, f"{type(e).__name__}: {e}"[:200]
+        if resp.status_code not in (429, 529) or attempt:
+            break
+        time.sleep(3.0)  # the background worker's own time: the control loop never waits
+    if resp.status_code != 200:
+        return None, None, f"HTTP {resp.status_code}: {resp.text[:160]}"
+    try:
+        answers, usage = parse_typesafe(resp.json())
+    except ValueError:
+        return None, None, "response is not JSON"
+    if answers is None:
+        return None, None, "no answers in the response"
+    return answers, usage, None
+
+
 @dataclass
 class Answer:
     answers: dict

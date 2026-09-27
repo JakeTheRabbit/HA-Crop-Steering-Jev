@@ -107,6 +107,11 @@ configuration:
     description: >-
       Route the Jev calls through an AI Gateway (for logs and rate limits), e.g. default.
       Leave blank to call Workers AI directly.
+  typesafe_api_key:
+    name: TypeSafe API key (Jev, direct)
+    description: >-
+      A TypeSafe API key (apikey_...). When set, Jev is asked straight from TypeSafe and the
+      Cloudflare fields above are not needed. Stored as a password.
   jev_enabled:
     name: Jev judges decisions
     description: >-
