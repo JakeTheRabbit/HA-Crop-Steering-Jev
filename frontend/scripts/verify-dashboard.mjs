@@ -441,6 +441,43 @@ try {
       );
     },
   );
+  await check("jev: every decision on Activity, by zone or actions only", async () => {
+    await go("activity");
+    const panel = page.locator("#jev-decisions");
+    await expectVisible(panel);
+    const rows = panel.locator(".jev-row");
+    const all = await rows.count();
+    assert.ok(all > 5, `every decision on Activity, ${all}`);
+    for (const text of ["calls today", "input tokens", "watching"])
+      assert.ok((await panel.innerText()).includes(text), `the log says ${text}`);
+    // One zone's decisions, then only what did something or tried to.
+    const zone = panel.getByLabel("Show Jev decisions for");
+    await zone.selectOption("2");
+    const zones = await rows.locator(".jev-zone").allInnerTexts();
+    assert.ok(zones.length > 0 && zones.every((name) => name === "Zone 2"), zones.join());
+    await zone.selectOption("room");
+    assert.deepEqual([...new Set(await rows.locator(".jev-zone").allInnerTexts())], ["Room"]);
+    await zone.selectOption("all");
+    await panel.getByLabel("Actions only").check();
+    const results = await rows
+      .locator("[data-jev-result]")
+      .evaluateAll((pills) => pills.map((pill) => pill.dataset.jevResult));
+    assert.ok(results.length > 0 && results.length < all);
+    assert.ok(
+      results.every((result) => !["no action", "waiting"].includes(result)),
+      results,
+    );
+    await panel.getByLabel("Actions only").uncheck();
+    assert.equal(await rows.count(), all);
+    await inBothThemes("jev decisions", async () => {
+      await go("activity");
+      await expectVisible(page.locator("#jev-decisions .jev-row").first());
+    });
+    // A room without Jev shows no trace of it.
+    await go("activity", "f1");
+    await expectVisible(page.getByRole("heading", { name: "Activity", exact: true }));
+    assert.equal(await page.locator("[data-jev-log]").count(), 0);
+  });
   await check("zones: the full table and the cards carry the Overview's mini visuals", async () => {
     const rows = ".zone-table-desktop tbody tr";
     await inBothThemes("zones table", async () => {

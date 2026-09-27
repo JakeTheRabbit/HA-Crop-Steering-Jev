@@ -12,6 +12,7 @@ import {
 import { historySpan, mergeSeries } from "./sensor-context";
 import { ControllerStore } from "./use-controller";
 import { createDemo } from "./demo";
+import { readJev } from "./jev";
 import type { EntityState, States } from "./types";
 
 afterEach(() => {
@@ -147,9 +148,16 @@ describe("watched entities", () => {
       "sensor.crop_steering_zone_2_status",
       "sensor.crop_steering_f1_ai_heartbeat",
       "sensor.crop_steering_f1_zone_1_last_irrigation_app",
+      // Jev's sensors: a log first posted after the page opened still updates live.
+      "sensor.crop_steering_jev",
+      "sensor.crop_steering_jev_log",
+      "sensor.crop_steering_zone_2_jev",
+      "sensor.crop_steering_f1_jev_log",
+      "sensor.crop_steering_f1_zone_1_jev",
     ])
       expect(ids).toContain(id);
     expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_phase");
+    expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_jev");
   });
   it("is empty without crop-steering entities, so nothing subscribes to all of Home Assistant", () => {
     expect(watchedEntities(states(entity("light.kitchen", "on")))).toEqual([]);
@@ -307,6 +315,41 @@ describe("inside Home Assistant", () => {
     home.push({ c: { [VWC]: { "+": { s: "10" } } } });
     await vi.advanceTimersByTimeAsync(250);
     expect(store.getSnapshot().states[VWC].state).toBe("61.5");
+  });
+  it("shows a Jev log first posted after the page opened, and each decision after it", async () => {
+    // Flower 1's controller has not posted its log yet (an older controller, or Jev just switched on).
+    const LOG = "sensor.crop_steering_f1_jev_log";
+    const { home, store } = await started();
+    const [, message] = home.connection.subscribeMessage.mock.calls[0] as unknown as [
+      unknown,
+      { entity_ids: string[] },
+    ];
+    expect(message.entity_ids).toContain(LOG);
+    expect(readJev(store.getSnapshot().states, "f1_").log).toBeNull();
+    const entry = (t: string, verdict: string) => ({
+      t,
+      zone: 1,
+      judge: "dawn",
+      title: "Morning start",
+      kind: "decision",
+      verdict,
+      p: 0.8,
+      agreed: true,
+      action: "",
+      result: "no action",
+      reason: "",
+    });
+    const first = entry("2026-09-28T08:05:00", "keep drying");
+    home.push({ a: { [LOG]: { s: "08:05 Z1 Morning start", a: { entries: [first] }, lc: 1 } } });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(readJev(store.getSnapshot().states, "f1_").log!.entries).toHaveLength(1);
+    const second = entry("2026-09-28T08:35:00", "start ramp now");
+    home.push({ c: { [LOG]: { "+": { s: "08:35 Z1", a: { entries: [second, first] }, lu: 2 } } } });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(
+      readJev(store.getSnapshot().states, "f1_").log!.entries.map((item) => item.verdict),
+    ).toEqual(["start ramp now", "keep drying"]);
+    store.stop();
   });
   it("writes by reading back only the written entity", async () => {
     const { home, store } = await started();

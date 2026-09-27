@@ -1,0 +1,230 @@
+/* Jev's decisions: one row each, newest first. A row reads left to right as a sentence: when, where,
+   which judge, what Jev answered (how sure, both phrasings), what it asked for, what code did. */
+.jev-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.jev-row {
+  display: grid;
+  grid-template-columns: 72px 62px 118px minmax(0, 1.25fr) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "time zone judge answer action result"
+    "time . . reason reason reason";
+  align-items: baseline;
+  gap: 2px 12px;
+  padding: 9px 20px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.jev-time {
+  grid-area: time;
+  align-self: start;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.jev-date {
+  display: block;
+  font-size: 12px;
+}
+.jev-zone {
+  grid-area: zone;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.jev-judge {
+  grid-area: judge;
+  font-weight: 600;
+}
+.jev-answer {
+  grid-area: answer;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.jev-p {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.jev-agreed {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  vertical-align: -2px;
+  color: var(--success);
+}
+.jev-agreed[data-agreed="false"] {
+  color: var(--warning);
+}
+.jev-action {
+  grid-area: action;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.jev-quiet {
+  color: var(--muted-foreground);
+}
+.jev-result {
+  grid-area: result;
+  justify-self: end;
+}
+.jev-reason {
+  grid-area: reason;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.jev-row[data-result="refused"] .jev-reason {
+  color: color-mix(in srgb, var(--warning) 70%, var(--foreground));
+}
+
+/* Beside the grow day: the latest five, one line each. */
+.jev-compact {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.jev-compact-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-bottom: 2px;
+}
+.jev-compact-head h3 {
+  font-size: 14px;
+  font-weight: 650;
+}
+.jev-compact-head .jev-usage {
+  flex: 1;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.jev-compact-head button {
+  font-size: 12px;
+}
+.jev-list[data-compact] .jev-row {
+  padding: 3px 0;
+  line-height: 1.35;
+  grid-template-areas: "time zone judge answer action result";
+}
+.jev-list[data-compact] .jev-row:first-child {
+  border-top: 0;
+}
+.jev-none,
+.jev-empty p {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.jev-none {
+  padding: 6px 0 2px;
+}
+
+/* The full log on the Activity page. */
+.jev-log {
+  scroll-margin-top: 80px;
+}
+.jev-log .panel-heading {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.jev-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.jev-filters select {
+  height: 32px;
+  font-size: 13px;
+}
+.jev-actions-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.jev-actions-only input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary-strong);
+}
+.jev-trouble {
+  margin: 0 20px 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--warning-bg);
+  color: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.jev-compact .jev-trouble {
+  margin: 6px 0;
+}
+.jev-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin: 0 20px 10px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.jev-now-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.jev-now-zone strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.jev-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.jev-foot {
+  padding: 10px 20px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 900px) {
+  .jev-row,
+  .jev-list[data-compact] .jev-row {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "time zone judge result"
+      "answer answer answer answer"
+      "action action action action"
+      "reason reason reason reason";
+    gap: 2px 10px;
+  }
+  .jev-row {
+    padding: 10px 16px;
+  }
+  .jev-list[data-compact] .jev-row {
+    padding: 8px 0;
+  }
+  .jev-trouble,
+  .jev-now {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .jev-foot {
+    padding: 10px 16px 14px;
+  }
+}
