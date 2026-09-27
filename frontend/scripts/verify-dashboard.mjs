@@ -546,7 +546,7 @@ try {
     await expectVisible(jev);
     assert.match(
       await jev.locator(".zone-jev-setpoints").innerText(),
-      /^Jev may move the P2 shot size 3\.5–5\.5% \(yours 4\.5%, now 4%\) and re-water point 59\.5–62\.5% \(yours 61%\)\. Last change /,
+      /^Jev may move the P2 shot size 3\.5–5\.5% \(yours 4\.5%, now 4%\) and re-water point 59–62% \(yours 61%\)\. Last change /,
     );
     const decisions = jev.getByRole("list", { name: "Jev's latest decisions on this zone" });
     assert.ok((await decisions.locator("li").count()) > 0);
@@ -560,7 +560,7 @@ try {
     // Targets, read only, with Jev's ranges where it manages them.
     const targets = page.locator(".zone-targets");
     assert.deepEqual(await targets.locator(".jev-chip").allInnerTexts(), [
-      "Jev · 59.5–62.5 %",
+      "Jev · 59–62 %",
       "Jev · 3.5–5.5 %",
     ]);
     // Pause scheduling, through its review.
@@ -674,7 +674,7 @@ try {
         ["P0 Morning dryback", "P1 Ramp-up", "P2 Maintenance", "P3 Overnight dryback"],
       );
       const chips = await table.locator(".jev-chip").allInnerTexts();
-      assert.deepEqual(chips, ["Jev · 59.5–62.5 %", "Jev · 3–5 %"]);
+      assert.deepEqual(chips, ["Jev · 59–62 %", "Jev · 3–5 %"]);
       // With Jev's Setpoints judge on the room, the Auto switch says what it lets Jev do.
       await expectVisible(page.getByText("Jev manages the P2 shot size and re-water point"));
       // The other steering mode's own targets are one tap down; the hardware is in Setup.
