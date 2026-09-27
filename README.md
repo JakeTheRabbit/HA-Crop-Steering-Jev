@@ -1,3 +1,35 @@
+# Crop Steering, Jev edition
+
+**This is the Jev edition of [Crop Steering for Home Assistant](https://github.com/JakeTheRabbit/HA-Irrigation-Strategy).**
+The same engine, with [TypeSafe Jev](https://developers.cloudflare.com/ai/models/typesafe/jev/), a typed-decision
+model served by Cloudflare, judging every decision the engine used to make with a fixed rule: when the morning ramp
+starts and when it is done, whether a probe is telling the truth, whether a shot landed, why pore EC moved, when the
+day's watering stops, why one zone drinks differently, and which alert is worth waking someone for.
+
+Code keeps everything physical: pumps and valves, shot sizes, the daily floor and cap, every rescue. Jev decides
+inside that envelope, in the background, and when it is off, slow or wrong-footed the engine runs exactly as the
+original. **What "truly insane and amazing" means here, and how each of the nine judges works: [docs/JEV.md](docs/JEV.md).**
+
+| Checked against the real Jev (27 Sep 2026) | Jev's answer | What code did |
+|---|---|---|
+| Ramp at its ceiling, EC up only from the feed passing | the EC is just the feed (both phrasings agreed) | brought P2 forward |
+| Probe flat for 4 h through three shots while its siblings rose | not tracking: stuck (p 0.92) | set the probe aside |
+| EC climbing after dilute shots, feed lower | salt front still passing (p 0.93) | kept steering wetter |
+| Two shots, no rise, a sibling rose | water not reaching the zone (p 0.96) | the CS-701 alert, on the second |
+| A 3.4-point step at 2 AM near the rescue floor | probe fault (p 0.97) | the CS-703 alert; the rescue still fires |
+| Zone on half its siblings' water, probe reading high | the two phrasings disagreed | nothing: the council needs both |
+
+Eleven of eleven as an experienced grower would expect, at about 1,300 input tokens a question
+(Cloudflare prices Jev at $0.042 per million: cents a day for a room). Re-run it any time with
+`scripts/jev_live_smoke.py`.
+
+**Install:** this edition replaces the original, it does not run beside it (same integration, same entity ids).
+Remove the original's HACS repository and controller app first, add this repository in both places, then give
+the controller app its Cloudflare account ID and a Workers AI token (Settings → Apps → Crop Steering Controller
+(Jev) → Configuration). Without them it is the original engine.
+
+---
+
 # Crop Steering for Home Assistant
 
 Crop Steering waters the plants in a grow room automatically. It measures how wet each group of plants is, decides when they need water and how much, and switches your pump and valves to deliver it in small, measured shots. It follows the daily routine that professional growers call **crop steering**: let the roots dry a little each morning, bring them back up, hold them steady through the day, and let them dry again overnight. You choose how hard to push the plants, from lush vegetative growth to heavy flowering, and it does the watering.

@@ -25,6 +25,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | CS-4xx | **Settings**: A setting is missing, out of range, or read from somewhere new. |
 | CS-5xx | **Checks across zones**: Advice from comparing a room's zones. |
 | CS-6xx | **Repairs cards**: Raised by the integration, under Settings → Repairs. |
+| CS-7xx | **Jev**: Jev's judgements about a zone: advice, and a probe it set aside (docs/JEV.md). |
 
 ## All codes
 
@@ -65,6 +66,10 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-606](#cs-606) | Grow strategy plan is holding irrigation | Critical | Repairs card |
 | [CS-607](#cs-607) | Grow strategy plan has not moved on to today | Warning | Repairs card |
 | [CS-608](#cs-608) | Stock tanks running low | Warning | Repairs card |
+| [CS-701](#cs-701) | Water isn't reaching this zone | Warning | Notification |
+| [CS-702](#cs-702) | This zone's water per plant is out of line with the others | Information | Notification |
+| [CS-703](#cs-703) | Overnight low reading looks like a probe fault | Warning | Notification |
+| [CS-704](#cs-704) | Jev set this zone's probe aside | Warning | Notification |
 
 ## Sensors (CS-1xx)
 
@@ -810,3 +815,87 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 
 - Refill the tank, then press Refilled on Crop Steering → Stock tanks.
 - Or set the level you read off the tank. The card clears itself once every tank is above its low mark.
+
+## Jev (CS-7xx)
+
+<a id="cs-701"></a>
+
+### CS-701: Water isn't reaching this zone
+
+*Warning · Notification*
+
+**What it means.** Jev's Shot judge found, for two shots in a row, no sign that the water reached this zone: moisture did not rise, while the controller counted the litres.
+
+**Watering meanwhile.** Carries on as normal. The litres counted may not be what arrived.
+
+**Likely causes**
+
+- A closed hand valve, a kinked or blocked line, or blocked drippers.
+- A tank or dosing hold that closed the feed path during the shot.
+- The zone's valve does not open although it reads on.
+
+**Suggested fixes**
+
+- Check the zone's valve, line and drippers during the next shot.
+- Do a catch test on one dripper.
+
+<a id="cs-702"></a>
+
+### CS-702: This zone's water per plant is out of line with the others
+
+*Information · Notification*
+
+**What it means.** The zone's water per plant today is under 70 % or over 140 % of the room's other zones, and Jev's Zones judge names the likely reason in the message.
+
+**Watering meanwhile.** Carries on as normal. This is advice only.
+
+**Likely causes**
+
+- Plants that drink less or more.
+- The probe sits in a wetter or drier spot than the roots.
+- A valve, dripper or line problem.
+- Shots that do not land.
+
+**Suggested fixes**
+
+- Compare the zone's settings and plants with its siblings'.
+- Check the probe's position, and do a catch test on this zone and a neighbour.
+
+<a id="cs-703"></a>
+
+### CS-703: Overnight low reading looks like a probe fault
+
+*Warning · Notification*
+
+**What it means.** The zone's moisture is falling toward the P3 emergency floor overnight, and Jev's Night judge reads it as a probe fault rather than drying.
+
+**Watering meanwhile.** Carries on: the P3 rescue shot still fires as normal.
+
+**Likely causes**
+
+- A probe that stepped or stopped moving.
+- A probe knocked out of place.
+
+**Suggested fixes**
+
+- Check the probe in the morning, before the ramp starts.
+
+<a id="cs-704"></a>
+
+### CS-704: Jev set this zone's probe aside
+
+*Warning · Notification*
+
+**What it means.** Jev judged twice in a row, and the controller's own check confirmed, that the zone's moisture probe is not tracking the substrate (stuck, channeling, out of the block, on the wrong zone or drifting).
+
+**Watering meanwhile.** Carries on without the probe, as for a dead probe: the zone copies a healthy sibling's shots, or waters on its timer, within its daily limit. The probe counts again as soon as Jev judges it tracks.
+
+**Likely causes**
+
+- A probe pulled part-way out of the block, or sitting in a channel.
+- A probe mapped to the wrong zone.
+- A probe that has stopped measuring but still reports.
+
+**Suggested fixes**
+
+- Check the probe's placement and wiring, and which zone it is mapped to in Rooms & setup.

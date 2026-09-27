@@ -1,9 +1,10 @@
 """Runs the judges for every zone on every pass, without waiting for any of them.
 
 On each pass `tick()` asks the judges that are due (in the background), reads the answers that have
-arrived, turns them into directives, puts each through the envelope, records what acted in the ledger,
-and returns the admitted directives for the controller to apply. Nothing here raises into the caller:
-a broken judge is skipped and logged in `errors`.
+arrived, turns each NEW answer into a directive exactly once, puts the standing directive through the
+envelope (the zone changes between passes, so admission is checked every pass), records what acted in
+the ledger, and returns the admitted directives for the controller to apply. Nothing here raises into the
+caller: a broken judge is skipped and logged in `errors`.
 """
 from __future__ import annotations
 
@@ -17,12 +18,18 @@ from .envelope import admit
 @dataclass
 class JudgeState:
     last_asked: datetime | None = None
-    seen_at: float | None = None
+    seen_seq: int | None = None  # the answer already read
     verdicts: dict = field(default_factory=dict)
+    directive: object = None  # what that answer asks for (decided once, when it arrived)
     streak: int = 0
     streak_key: object = None
-    acted_at: float | None = None  # the answer the ledger last recorded an action for
-    last: dict = field(default_factory=dict)  # what was shown on the zone's sensor
+    acted_seq: int | None = None  # the answer the ledger last recorded an action for
+    last: dict = field(default_factory=dict)  # what the zone's sensor shows
+
+
+def _label(d):
+    """What a directive is filed under in the ledger: its phase or mode, or an alert's code."""
+    return d.value.get("code") if isinstance(d.value, dict) else d.value
 
 
 class Brain:
@@ -31,6 +38,7 @@ class Brain:
         self.judges = [j for j in judges if allowed is None or j.name in allowed]
         self.state: dict[tuple, JudgeState] = {}
         self.errors: dict[str, str] = {}
+        self.triage = None
 
     @property
     def enabled(self):
@@ -72,33 +80,36 @@ class Brain:
         ans = self.asker.result(key)
         if ans is None:
             return None
-        if ans.at != st.seen_at:  # a new answer: read it once
-            st.seen_at = ans.at
+        if ans.seq != st.seen_seq:  # a new answer: decide on it once
+            st.seen_seq = ans.seq
             st.verdicts = {q: council.combine(ans.answers, q) for q in judge.questions}
-            d = judge.decide(st.verdicts, ctx)
-            k = None if d is None else (d.kind, str(d.value))
+            st.directive = judge.decide(st.verdicts, ctx)
+            k = None if st.directive is None else (st.directive.kind, str(_label(st.directive)))
             st.streak = st.streak + 1 if (k is not None and k == st.streak_key) else (1 if k else 0)
             st.streak_key = k
-        age = (datetime.fromtimestamp(self.asker.clock()) - datetime.fromtimestamp(ans.at))
-        if age > timedelta(minutes=judge.max_age_min):
-            st.last = self._shown(judge, st, None, "answer too old to act on")
+        d = st.directive
+        if ctx.phase not in judge.phases:
+            st.last = self._shown(st, None, "waiting for its phase")
             return None
-        d = judge.decide(st.verdicts, ctx)
+        age = self.asker.clock() - ans.at
+        if age > judge.max_age_min * 60.0:
+            st.last = self._shown(st, None, "answer too old to act on")
+            return None
         if d is None:
-            st.last = self._shown(judge, st, None, "no action")
+            st.last = self._shown(st, None, "no action")
             return None
         ok, why = admit(d, ctx, confirmed=st.streak, evidence_ok=judge.evidence_ok(ctx))
-        st.last = self._shown(judge, st, d, why if ok else f"refused: {why}")
+        st.last = self._shown(st, d, why if ok else f"refused: {why}")
         if not ok:
             return None
-        if st.acted_at != ans.at:
-            st.acted_at = ans.at
+        if st.acted_seq != ans.seq:
+            st.acted_seq = ans.seq
             check_at = (ctx.now + timedelta(minutes=judge.outcome_after_min)
                         if judge.outcome_after_min else None)
-            self.ledger.record(judge.name, ctx.room, ctx.zone, d.value, d.kind,
+            self.ledger.record(judge.name, ctx.room, ctx.zone, _label(d), d.kind,
                                evidence={q: (v.label if v else None) for q, v in st.verdicts.items()},
-                               check_at=check_at, check=self._check_basis(ctx))
-            self.log(f"[jev] {ctx.room} Z{ctx.zone} {judge.name}: {d.kind} {d.value} ({d.why}; {why})")
+                               check_at=check_at, check=self._check_basis(ctx), at=ctx.now)
+            self.log(f"[jev] {ctx.room} Z{ctx.zone} {judge.name}: {d.kind} {_label(d)} ({d.why}; {why})")
         return d, why
 
     @staticmethod
@@ -120,12 +131,12 @@ class Brain:
                 self.ledger.resolve(entry["id"], result[0], result[1])
 
     @staticmethod
-    def _shown(judge, st, d, why):
+    def _shown(st, d, why):
         verdicts = {}
         for q, v in st.verdicts.items():
             if v is not None:
                 verdicts[q] = {"answer": v.label, "p": v.prob, "agreed": v.agreed}
-        return {"verdicts": verdicts, "directive": None if d is None else f"{d.kind} {d.value}",
+        return {"verdicts": verdicts, "directive": None if d is None else f"{d.kind} {_label(d)}",
                 "why": why, "streak": st.streak}
 
     def zone_status(self, room, zone):

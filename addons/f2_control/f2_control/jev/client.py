@@ -63,6 +63,7 @@ class Answer:
     answers: dict
     at: float  # epoch seconds the answer arrived
     usage: dict = field(default_factory=dict)
+    seq: int = 0  # unique per answer: two answers arriving in the same second are still two
 
 
 class Asker:
@@ -75,6 +76,7 @@ class Asker:
         self.daily_budget, self.transport, self.clock, self.timeout = daily_budget, transport, clock, timeout
         self._results: dict[str, Answer] = {}
         self._pending: set[str] = set()
+        self._seq = 0
         self._lock = threading.Lock()
         self.stats = {"day": None, "calls": 0, "errors": 0, "input_tokens": 0, "last_error": None,
                       "last_call": None}
@@ -126,7 +128,8 @@ class Asker:
             return
         with self._lock:
             self._pending.discard(key)
-            self._results[key] = Answer(answers, self.clock(), usage or {})
+            self._seq += 1
+            self._results[key] = Answer(answers, self.clock(), usage or {}, self._seq)
             self.stats["input_tokens"] += int((usage or {}).get("input_tokens") or 0)
             self.stats["last_call"] = self.clock()
 

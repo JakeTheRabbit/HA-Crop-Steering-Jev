@@ -33,13 +33,13 @@ class Ledger:
             self.entries = self.entries[-MAX_ENTRIES:]
             self._seq = max((e.get("id", 0) for e in self.entries), default=0)
 
-    def record(self, judge, room, zone, label, action, evidence=None, check_at=None, check=None):
+    def record(self, judge, room, zone, label, action, evidence=None, check_at=None, check=None, at=None):
         """Add one entry; returns its id. `check_at` (datetime) and `check` (a dict the judge understands)
-        schedule an outcome check."""
+        schedule an outcome check; `at` is the pass's time (the wall clock when not given)."""
         with self._lock:
             self._seq += 1
             entry = {
-                "id": self._seq, "at": datetime.now().isoformat(timespec="seconds"), "judge": judge,
+                "id": self._seq, "at": (at or datetime.now()).isoformat(timespec="seconds"), "judge": judge,
                 "room": room, "zone": zone, "label": str(label), "action": action,
                 "evidence": evidence or {}, "check_at": check_at.isoformat() if check_at else None,
                 "check": check, "outcome": None,
