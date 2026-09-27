@@ -9,6 +9,34 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-09-28
+
+Pair: **controller 3.4.0**. Class **C3**. Two pull requests: #12 (C3), Jev's data for the simplified dashboard and no
+Pore EC question while EC stacking is off; #13 (C1), the dashboard rebuilt around what each page is for, from 11
+pages to 5. Not run on hardware; checked by the lean, controller, dashboard and browser suites.
+
+### 🌱 In plain English
+
+- **A dashboard built around what you want to know.** The menu is now Today, Plan, History, Equipment and Settings &
+  help, plus a page per zone. Today fits one screen: the room in one line, then a card per zone that is flagged
+  only when it needs you, with the reason, and what Jev changed. Each zone has its own page with the day chart,
+  its probes, its targets and what Jev thinks of it. Plan is a compact targets table (about a third of its old
+  length) with the flower laid out by stage; History is one timeline of shots, phases, setting changes, alerts and
+  Jev's decisions; Equipment holds the probes, stock tanks, tank and pump, and setup. Every feature is still there.
+- **Less noise from Jev.** It no longer asks about pore EC while the room's EC stacking is off, where its answers
+  changed nothing; each check on an earlier decision shows as a ✓ or ✗ on that decision; and the day's call count
+  no longer resets when the controller restarts.
+
+### 🔧 Technical notes
+
+- Controller (#12): the salt judge needs `stacking_on`; journal outcome entries carry `of` (the decision's time) and
+  the action in words; `/data/jev_usage.json` keeps the day's calls, tokens and errors; each zone's Jev sensor
+  publishes `setpoints` (the operator's values, Jev's range, current values, last move, pause, managed).
+- Dashboard (#13): five-entry menu with legacy redirects, room status and safety switches in the header, `today`
+  and `zone` pages, History (timeline merging the activity log and Jev's journal), Plan (targets table with Jev's
+  ranges, schedule by stage), Equipment (probe health, stock headline, tank and pump, setup), Settings & help;
+  attention rules, timeline merge, redirects and chart scaling tested; bundles rebuilt.
+
 ## [3.3.0] - 2026-09-28
 
 Pair: **controller 3.3.0**. Class **C3**. Two pull requests: #7 (C3), Athena's Grow Guide Handbook as a second cited

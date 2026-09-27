@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.4.0 - 2026-09-28
+
+- The dashboard is simpler: Today, Plan, History and Equipment, plus a page for each zone.
+- Today fits one screen and flags a zone only when it needs you, with the reason.
+- Every decision Jev makes now sits in one timeline, with a tick or cross when its result is known.
+- Bug fixes and improvements.
+
 ## 3.3.0 - 2026-09-28
 
 - Today's grow day is redrawn in the style of Athena's charts: one clear chart per zone, its numbers above it, the stage's targets on top.
