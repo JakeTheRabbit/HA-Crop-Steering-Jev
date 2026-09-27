@@ -29,7 +29,7 @@ Eight properties. Each one is concrete and checked by a test or a published numb
 |---|---|---|---|---|---|
 | **Dawn** | P0 | every 10 min in P0 | start the ramp now / keep drying / the probe isn't moving | brings P1 forward | only after half the dryback target or a quarter of the max wait; never later than the base engine |
 | **Ramp** | P1 | every 15 min once a ramp shot is 10 min old | keep ramping / slab is full / the EC left is the feed passing / real salt (all three: hand over; the ramp only refills, salt leaves in maintenance runoff) / the probe is lagging, wait | brings P2 forward | minimum ramp shots in; VWC within 3 points of the ceiling; never past `p1_maximum_shots` (the base engine still ends it there) |
-| **Salt** | P2 | every 30 min when EC is settled | salts accumulating / salt front still passing / the feed changed / the probe is suspect / the target can't be reached / in band | chooses the EC steer: steer, hold, or decay the offset | only changes the P2 offset the base engine already steers, inside its clamp |
+| **Salt** | P2 | every 30 min when EC is settled, only while the room's EC stacking is on (its only action is the EC steer's mode) | salts accumulating / salt front still passing / the feed changed / the probe is suspect / the target can't be reached / in band | chooses the EC steer: steer, hold, or decay the offset | only changes the P2 offset the base engine already steers, inside its clamp |
 | **Dusk** | P2 | every 15 min in the last 3 h before lights-off, never for a zone steered vegetative | go to P3 now / one more top-up then P3 / carry on | brings P3 forward | only in the last 3 hours; never for a vegetative zone (the owner's doctrine: it stops late); VWC at least 3 points above the P3 emergency floor; the P3 rescue still fires |
 | **Probe** | all | every 30 min once the zone has had two shots | is this probe tracking the substrate; if not, how (stuck, channeling, out of the block, wrong zone, drifting) | sets the zone's probe aside: the zone runs on the existing dead-probe path (copies a healthy sibling, or its timer) | two agreeing verdicts in a row, **and** code-confirmed evidence (two shots with no rise while a sibling rose, or a flat line for an hour with water going in); lasts only while Jev's latest answer (90 min) still says so |
 | **Shot** | all | once per shot, 20 min after it ends | landed / landed slowly / reached the probe but moisture didn't rise / didn't reach the zone | tags the shot, feeds the probe judge, raises CS-701 on two misses in a row | never adds water |
@@ -96,7 +96,9 @@ The dashboard reads these live. The Overview's grow day marks each decision abov
 the charts; **Activity → Jev decisions** lists all of them, by zone or actions only, with today's calls,
 tokens and cost. A room without Jev shows none of it.
 
-- `sensor.crop_steering_<prefix>zone_N_jev`: the judges acting on the zone (or `watching`), and per judge its
+- `sensor.crop_steering_<prefix>zone_N_jev`: the judges acting on the zone (or `watching`); `setpoints` (the
+  operator's values, Jev's range around them, the current values, the last move and any pause, and whether the
+  room's Auto setpoints switch hands them to Jev); and per judge its
   latest verdicts (answer, probability, whether both phrasings agreed), the directive, and why code admitted or
   refused it.
 - `sensor.crop_steering_<prefix>jev`: calls and input tokens today, errors and the last error, the judges on, and
@@ -105,9 +107,11 @@ tokens and cost. A room without Jev shows none of it.
 - `sensor.crop_steering_<prefix>jev_log`: the dashboard's live log. Its state is the newest decision in one line;
   `entries` holds the room's last 30, newest first: time, zone, judge, Jev's answer with its probability and
   whether both phrasings agreed, what it asked for, and what code did (`acted`, `refused` with why, `no action`,
-  `waiting`), plus each outcome (`worked` or `did not work`) and each alert-triage call (push or card only).
+  `waiting`), plus each outcome (`worked` or `did not work`, with `of` = the time of the decision it checks and
+  the action in words) and each alert-triage call (push or card only).
 - `/data/jev_ledger.jsonl`: every directive that acted, what Jev saw, and later how it turned out.
 - `/data/jev_journal.jsonl`: every decision behind the live log (the last 400), kept across restarts.
+- `/data/jev_usage.json`: today's calls, input tokens and errors, so the count survives a restart.
 
 ## Checked against the real Jev
 

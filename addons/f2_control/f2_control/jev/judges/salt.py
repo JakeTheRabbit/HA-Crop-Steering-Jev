@@ -82,7 +82,10 @@ class SaltJudge(Judge):
 
     def due(self, ctx, last_asked):
         self._note_feed(ctx)
-        return super().due(ctx, last_asked) and ctx.snap.ec_settled is not None
+        # Its only action is the EC steer's mode, and the steer runs only while the room's EC stacking is on:
+        # asked with stacking off it chose holds that changed nothing and filled the log with their outcomes.
+        return (super().due(ctx, last_asked) and ctx.snap.ec_settled is not None
+                and getattr(ctx.params, "stacking_on", True))
 
     def _note_feed(self, ctx):
         if ctx.feed_ec is None:
