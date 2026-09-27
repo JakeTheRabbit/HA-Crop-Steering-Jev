@@ -20,7 +20,7 @@ Eight properties. Each one is concrete and checked by a test or a published numb
 | 4 | **A council, not a coin toss** | Jev's confidence moves with how a question is worded. So every judge asks each question in two independent phrasings in the same call and acts only when both land on answers that lead to the same action, and the calibrated probabilities of those answers add up ("the slab is full" and "the EC left is the feed passing" both mean hand the ramp over). | Council tests: disagreement means no action. |
 | 5 | **It remembers and checks itself** | Every verdict and what code did with it goes into a ledger. When the outcome can be measured (EC after a flush call, the ramp after a hand-over, water after a probe was set aside), code measures it and shows Jev its own track record next time. A move that did not work is not repeated blindly. | Ledger tests; the track record in the evidence. |
 | 6 | **Code does the maths, Jev does the judging** | Jev cannot do arithmetic and knows no crop-steering doctrine. Code turns the raw series into plain facts ("rose 3.1 points after the 10:40 shot and held", "EC rising 0.4 an hour since the last flush"), and every question carries the owner's own doctrine from his GrowLabs wiki (below). What is certain goes in code; what is judgement goes to Jev. | Evidence tests: no raw series ever reaches Jev; every question carries its doctrine. |
-| 7 | **Explains everything** | Every verdict is published in Home Assistant with its answer, its confidence, whether the council agreed, what code did and why. `sensor.crop_steering_<prefix>zone_N_jev` per zone and `sensor.crop_steering_<prefix>jev` per room. | Publish tests. |
+| 7 | **Explains everything** | Every verdict is published in Home Assistant with its answer, its confidence, whether the council agreed, what code did and why. `sensor.crop_steering_<prefix>zone_N_jev` per zone, `sensor.crop_steering_<prefix>jev` per room, and every decision in the dashboard's live log (`sensor.crop_steering_<prefix>jev_log`). | Publish and journal tests. |
 | 8 | **Cheap and bounded** | Each judge has a cadence and a trigger, so Jev is asked when there is something to decide. A room of three zones costs cents a day (input $0.042 per million tokens, output free). A daily call budget caps it. | The room sensor shows calls and tokens today. |
 
 ## The judges (coverage map)
@@ -88,8 +88,15 @@ out, so a judge can never raise anything the list does not explain.
 - `sensor.crop_steering_<prefix>zone_N_jev`: the judges acting on the zone (or `watching`), and per judge its
   latest verdicts (answer, probability, whether both phrasings agreed), the directive, and why code admitted or
   refused it.
-- `sensor.crop_steering_<prefix>jev`: calls and input tokens today, errors and the last error, the judges on.
+- `sensor.crop_steering_<prefix>jev`: calls and input tokens today, errors and the last error, the judges on, and
+  `stage`: today's row of the owner's stage arc as numbers (day of flower, stage, steering, pore EC range, dryback
+  points, runoff %), which the dashboard draws on its day chart.
+- `sensor.crop_steering_<prefix>jev_log`: the dashboard's live log. Its state is the newest decision in one line;
+  `entries` holds the room's last 30, newest first: time, zone, judge, Jev's answer with its probability and
+  whether both phrasings agreed, what it asked for, and what code did (`acted`, `refused` with why, `no action`,
+  `waiting`), plus each outcome (`worked` or `did not work`) and each alert-triage call (push or card only).
 - `/data/jev_ledger.jsonl`: every directive that acted, what Jev saw, and later how it turned out.
+- `/data/jev_journal.jsonl`: every decision behind the live log (the last 400), kept across restarts.
 
 ## Checked against the real Jev
 

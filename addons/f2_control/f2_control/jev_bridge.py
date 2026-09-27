@@ -22,6 +22,7 @@ from jev.judges.salt import SaltJudge
 from jev.judges.shot import ShotJudge
 from jev.judges.stage import StageJudge
 from jev.judges.zones import ZonesJudge
+from jev.journal import Journal
 from jev.ledger import Ledger
 from jev.triage import Triage
 
@@ -49,9 +50,11 @@ def build(options, cf, state_path, log):
     else:
         asker = Asker(account, token, gateway or None, daily_budget=budget)
         via = "Cloudflare Workers AI"
-    ledger = Ledger(os.path.join(os.path.dirname(state_path) or ".", "jev_ledger.jsonl"))
+    data = os.path.dirname(state_path) or "."
+    ledger = Ledger(os.path.join(data, "jev_ledger.jsonl"))
     log(f"jev: on via {via}, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
     brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
+    brain.journal = Journal(os.path.join(data, "jev_journal.jsonl"))
     brain.triage = Triage(asker) if "alerts" in allowed else None
     brain.flower_start = flower_option(options.get("jev_flower_start"))
     brain.flower_days = int(options.get("jev_flower_days") or 56)
@@ -174,6 +177,45 @@ def siblings(c, room, snaps, params, now):
     room._jev_sib = out
 
 
+def stage_info(c, room, now):
+    """Today's row of the owner's stage arc for the room, as numbers the dashboard can draw, or None."""
+    brain = c.jev
+    days = getattr(brain, "flower_days", 56)
+    day = flower_day(c, room, now)
+    st = stage_intent(day, days)
+    if not st:
+        return None
+    return {"day": day, "days": days, "name": st["stage"], "steering": st["steering"],
+            "stage_days": list(st.get("days") or []), "peak": st.get("peak"),
+            "pore_ec": list(st.get("pore_ec_range") or []), "dryback_points": list(st.get("dryback_points") or []),
+            "runoff_pct": list(st.get("runoff_pct") or [])}
+
+
+def headline(entry):
+    """The log sensor's state: its newest entry in one line."""
+    if not entry:
+        return "no decisions yet"
+    what = entry.get("action") or entry.get("result") or ""
+    zone = f"Z{entry['zone']} " if entry.get("zone") is not None else ""
+    return f"{entry['t'][11:16]} {zone}{entry['title']}: {entry['verdict']} -> {what}"[:255]
+
+
+def triaged(c, room, zone, key, code, title, push, why):
+    """The Alerts judge's push-or-card call, in the journal whenever it changes for an alert."""
+    brain = getattr(c, "jev", None)
+    journal = getattr(brain, "journal", None)
+    if journal is None or room is None:
+        return
+    seen = brain.__dict__.setdefault("_triaged", {})
+    if seen.get(key) == (push, why):
+        return
+    seen[key] = (push, why)
+    journal.add({"t": datetime.now().isoformat(timespec="seconds"), "room": room.slug, "zone": zone,
+                 "judge": "alerts", "title": "Alert triage", "kind": "decision", "verdict": why, "p": None,
+                 "agreed": None, "action": f"{code}: {'push to the phone' if push else 'card only'}",
+                 "result": "acted", "reason": str(title)[:120]})
+
+
 def publish(c, room, now, ha_set):
     brain = c.jev
     s = brain.asker.stats
@@ -186,4 +228,9 @@ def publish(c, room, now, ha_set):
            {"calls_today": s.get("calls"), "input_tokens_today": s.get("input_tokens"),
             "errors_today": s.get("errors"), "last_error": s.get("last_error"),
             "judges": sorted(j.name for j in brain.judges), "judge_errors": dict(brain.errors),
-            "friendly_name": "Jev", "engine": "f2-control"})
+            "stage": stage_info(c, room, now), "friendly_name": "Jev", "engine": "f2-control"})
+    journal = getattr(brain, "journal", None)
+    if journal is not None:
+        entries = journal.recent(room.slug)
+        ha_set(f"sensor.crop_steering_{room.prefix}jev_log", headline(entries[0] if entries else None),
+               {"entries": entries, "friendly_name": "Jev decisions", "engine": "f2-control"})

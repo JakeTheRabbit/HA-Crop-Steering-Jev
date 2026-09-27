@@ -2177,6 +2177,7 @@ class Controller:
         if dom and svc and triage is not None:
             try:  # Jev's Alerts judge: whether this alert's repeats keep buzzing a phone (docs/JEV.md)
                 push, why = triage.push(key, code, title, message, datetime.now())
+                jev_bridge.triaged(self, room, zone, key, code, title, push, why)
                 if not push:
                     log("ALERT push held:", key, why)
             except Exception as e:
