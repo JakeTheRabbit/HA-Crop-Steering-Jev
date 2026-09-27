@@ -1,9 +1,10 @@
-"""Crop-steering doctrine for Jev: the owner's GrowLabs wiki, restated as rules a judge can quote.
+"""Crop-steering doctrine for Jev: the owner's GrowLabs wiki and Athena's handbook, restated as rules a judge can quote.
 
 Jev answers typed questions about the facts it is given, but it knows no crop-steering doctrine and does no
 arithmetic, so every judge writes the doctrine into its question. This module keeps that doctrine in one
-place: Ben Isdale's GrowLabs wiki pages (SOURCES), each point restated as one plain sentence tagged with the
-page it comes from. A judge appends doctrine("ramp", "probe") to a question's instructions.
+place: Ben Isdale's GrowLabs wiki pages, then Athena's Grow Guide Handbook (SOURCES), each point restated as one
+plain sentence tagged with where it comes from. A judge appends doctrine("ramp", "probe") to a question's
+instructions.
 
 True water content vs probe readings: the wiki's moisture numbers (a ~92 % full mark, a 55-92 % working band,
 a 25-30 % recovery floor, drybacks of 5-30 points) are TRUE water content. A probe can read far from that: the
@@ -279,6 +280,83 @@ RULES = {
              "confirmed against this room's own records.", SLAB),
     ],
 }
+
+
+# Athena's Grow Guide Handbook (metric), Precision Irrigation Strategy, pages 33-41: sent by the owner on 28 Sep
+# 2026 as more doctrine for Jev. Its rules follow the owner's in each topic (the owner's pages lead, so
+# doctrine(..., limit=n) keeps them first), and where they differ the owner's stage arc wins (the last dryback rule).
+ATHENA = "Athena Grow Guide Handbook (metric), Precision Irrigation Strategy, pp. 33-41"
+SOURCES.append(ATHENA)
+
+_ATHENA_RULES = {
+    "ramp": [
+        Rule("The day's first shot waits until the plants have been transpiring for about one to two hours after "
+             "lights-on, so water goes into a slab that is already drinking.", ATHENA),
+        Rule("P1 builds the slab back up with several small shots of about 2-6 % of the substrate spaced 15-30 "
+             "minutes apart, because one large shot channels straight through instead of wetting it.", ATHENA),
+        Rule("Early in a crop the ramp alone can carry the day until the daily dryback passes about a quarter of "
+             "the peak (relative), and only then are maintenance shots added.", ATHENA),
+    ],
+    "dryback": [
+        Rule("Athena states every dryback as a relative change, a share of the peak water content, because points "
+             "mean different things in substrates with different field capacities.", ATHENA),
+        Rule("Athena's overnight dryback targets are 30-40 % of the peak (relative) for vegetative steering and "
+             "40-50 % for generative, the larger one meaning more stress and more compact growth.", ATHENA),
+        Rule("After lights-on the slab keeps drying another 1-5 % of the peak (relative) until the first shot, and "
+             "that additional dryback is part of the plan, not a missed shot.", ATHENA),
+        Rule("Where Athena's relative drybacks and the owner's drybacks in points of true water content differ, "
+             "the owner's stage arc leads.", ATHENA),
+    ],
+    "maintenance": [
+        Rule("Maintenance shots hold the peak target through the light period and are the main lever on both the "
+             "dryback and the root-zone EC.", ATHENA),
+        Rule("As plants grow and dry the slab faster, maintenance shots have to be added to keep the dryback in "
+             "its range.", ATHENA),
+        Rule("The overnight dryback is sized by the day's last maintenance shots: adding late shots makes it "
+             "smaller (vegetative) and removing them makes it larger (generative).", ATHENA),
+    ],
+    "ec": [
+        Rule("Bigger maintenance shots push more runoff and pull root-zone EC down, while smaller shots cut runoff "
+             "and let it build, which is EC stacking.", ATHENA),
+        Rule("To force runoff the peak target sits between field capacity and full saturation, to restrict it the "
+             "peak sits at or below field capacity, and a target above full saturation can never be reached and "
+             "only drains.", ATHENA),
+        Rule("Athena's runoff targets are 8-16 % of the water fed for vegetative steering and 1-7 % of the water "
+             "fed for generative.", ATHENA),
+        Rule("During the ramp, pore EC falls when the feed is weaker than the water already in the slab and keeps "
+             "falling until runoff starts.", ATHENA),
+    ],
+    "stage": [
+        Rule("Athena's stage table runs veg at EC 3-5 vegetative, flower stretch (weeks 1-4) at EC 4-10 generative "
+             "with a 40-50 % relative dryback, flower bulk (weeks 5-7) at EC 3.5-6 vegetative with 30-40 %, and the "
+             "finish (weeks 8-9) at EC 3-4 with a generative 40-50 %.", ATHENA),
+        Rule("Stretch steers generatively for flower sites and short internodes, bulk steers vegetatively for bud "
+             "size, and the finish lowers built-up EC to encourage ripening.", ATHENA),
+        Rule("Athena's day climate runs from veg at 22-28 C, 58-75 % RH, VPD 0.8-1.0 kPa and PPFD 300-600 to the "
+             "finish at 18-22 C, 50-60 % RH, VPD 1.2-1.4 kPa and PPFD 600-900, and a high root-zone EC burns "
+             "plants when the climate is off.", ATHENA),
+    ],
+    "probe": [
+        Rule("The zone's probe goes in a plant that stands for the zone's average moisture, away from fans, walls "
+             "and aisles, which dry faster, and a big zone may need several probes read together.", ATHENA),
+        Rule("In rockwool the probe sits about 2.5 cm above the bottom of the block.", ATHENA),
+        Rule("A probe is checked against caught runoff, whose EC normally reads a little under the root-zone EC "
+             "the probe shows.", ATHENA),
+    ],
+    "closed_loop": [
+        Rule("Runoff is caught from two or three average plants per zone on trays, right after the maintenance "
+             "shots end, and its volume, EC and pH steer the next day's shots.", ATHENA),
+        Rule("Runoff pH a little above the feed's is a healthy sign, and a lower runoff pH points to roots sitting "
+             "too wet.", ATHENA),
+        Rule("Each cultivar gets its own irrigation zone where possible, because drybacks differ between "
+             "cultivars.", ATHENA),
+    ],
+    "slab": [
+        Rule("A smaller substrate dries back faster, which makes the root-zone EC easier to steer.", ATHENA),
+    ],
+}
+for _topic, _rules in _ATHENA_RULES.items():
+    RULES[_topic].extend(_rules)
 
 
 def doctrine(*topics, limit=None):
