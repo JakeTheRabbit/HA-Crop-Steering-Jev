@@ -2,7 +2,7 @@
 import re
 
 import pytest
-from jev.doctrine import ALT_STAGE_ARC, RULES, SLAB, SOURCES, STAGE_ARC, Rule, doctrine, stage_intent
+from jev.doctrine import ALT_STAGE_ARC, ATHENA, RULES, SLAB, SOURCES, STAGE_ARC, Rule, doctrine, stage_intent
 
 TOPICS = ("ramp", "dryback", "maintenance", "ec", "probe", "stage", "ripening", "closed_loop", "slab")
 ALL = [(t, i, r) for t, rules in RULES.items() for i, r in enumerate(rules)]
@@ -18,13 +18,21 @@ CAVEATS = ("true water content", "relative", "own ", "of the substrate", "peak",
 def test_every_topic_has_rules():
     assert set(TOPICS) <= set(RULES)
     for t in TOPICS:
-        assert 5 <= len(RULES[t]) <= 12, t
+        assert 5 <= len(RULES[t]) <= 16, t
 
 
-def test_sources_are_the_seven_wiki_pages_and_each_is_used():
-    assert len(SOURCES) == len(set(SOURCES)) == 7
-    assert all(s.startswith("https://www.growlabs.nz/wiki/") and s.endswith(".html") for s in SOURCES)
+def test_sources_are_the_seven_wiki_pages_then_athena_and_each_is_used():
+    assert len(SOURCES) == len(set(SOURCES)) == 8 and SOURCES[-1] == ATHENA
+    assert all(s.startswith("https://www.growlabs.nz/wiki/") and s.endswith(".html") for s in SOURCES[:-1])
     assert {r.source for _, _, r in ALL} == set(SOURCES)
+
+
+def test_the_owners_rules_lead_every_topic_and_athena_follows():
+    for t, rules in RULES.items():
+        sources = [r.source for r in rules]
+        first_athena = sources.index(ATHENA) if ATHENA in sources else len(sources)
+        assert ATHENA not in sources[:first_athena] and all(s == ATHENA for s in sources[first_athena:]), t
+    assert "owner's stage arc leads" in RULES["dryback"][-1].text
 
 
 @pytest.mark.parametrize("topic,i,rule", ALL, ids=[f"{t}-{i}" for t, i, _ in ALL])

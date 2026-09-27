@@ -8,7 +8,7 @@ day's watering stops, why one zone drinks differently, and which alert is worth 
 
 Code keeps everything physical: pumps and valves, shot sizes, the daily floor and cap, every rescue. Jev decides
 inside that envelope, in the background, and when it is off, slow or wrong-footed the engine runs exactly as the
-original. Every question carries the owner's own doctrine from their GrowLabs wiki (99 rules, and the stage arc for
+original. Every question carries the owner's own doctrine from their GrowLabs wiki and Athena's Grow Guide Handbook (123 rules, and the stage arc for
 each day of flower). **What "truly insane and amazing" means here, and how each of the ten judges works:
 [docs/JEV.md](docs/JEV.md).**
 
