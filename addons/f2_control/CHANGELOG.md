@@ -1,3 +1,7 @@
+# 3.4.0
+
+Pair with integration 3.4.0. **C3.** Jev's Pore EC judge is asked only while EC stacking is on; journal outcomes name their decision (`of`) in words; the day's Jev usage survives restarts (`/data/jev_usage.json`); each zone's Jev sensor publishes its `setpoints` range (#12). The dashboard is rebuilt to five pages (#13). No change to add-on options or the state file. Not run on hardware.
+
 # 3.3.0
 
 Pair with integration 3.3.0. **C3.** Jev's doctrine gains Athena's Grow Guide Handbook as a second cited source (24 rules after the owner's, 123 in all; #7). The dashboard's grow day and live Jev log (#10) ship with the integration and this app's page. No change to add-on options or the state file. Not run on hardware.
