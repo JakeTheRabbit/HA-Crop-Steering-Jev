@@ -197,6 +197,7 @@ Crop Steering comes in two parts, and automatic watering needs both. They carry 
 | **HACS** | 1.6.0 or newer for the guided download, or copy `custom_components/crop_steering` into Home Assistant by hand. |
 | **Hardware** | A switch Home Assistant can control for each zone's valve (and your pump and main line, if you have them), and a moisture probe per zone. EC probes and tank sensors are optional but recommended. |
 | **A Jev key** (optional) | A TypeSafe API key, or a Cloudflare account with Workers AI. Without one, this is the original engine. |
+| **AI assistant connector** (optional) | Node.js 22 or newer, on the computer that runs your AI assistant. |
 | **Account** | A Home Assistant administrator, to set up rooms and change plans. |
 
 ### Steps
