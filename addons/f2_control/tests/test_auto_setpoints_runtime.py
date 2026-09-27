@@ -147,7 +147,9 @@ def test_learned_state_is_saved_with_the_zone_and_restored():
 
 
 # ------------------------------------------------------------------ Jev as a guard on the learning
-JEV = {"cf_account_id": "acc", "cf_api_token": "tok"}
+# The base engine's own per-hour judge: it runs only while the Jev edition's brain is off, because with the
+# brain on the Setpoints judge owns the zone's setpoints (test_jev_setpoints.py).
+JEV = {"cf_account_id": "acc", "cf_api_token": "tok", "jev_enabled": False}
 
 
 def _answers(fail=0.04, trust=0.92):

@@ -17,8 +17,8 @@ NEXT = {"P0": "P1", "P1": "P2", "P2": "P3"}
 @dataclass(frozen=True)
 class Directive:
     judge: str
-    kind: str  # "advance" | "distrust" | "ec_mode" | "alert" | "push"
-    value: object  # the phase to go to, an EC mode, an alert dict, True/False for a push
+    kind: str  # "advance" | "distrust" | "ec_mode" | "setpoint" | "alert" | "push"
+    value: object  # the phase to go to, an EC mode, a setpoint move dict, an alert dict, True/False for a push
     why: str
     expires: datetime
 
@@ -78,6 +78,34 @@ def admit(d: Directive, ctx, confirmed=0, evidence_ok=False):
         if ctx.phase != "P2":
             return False, "the EC steer runs in P2"
         return True, "the EC steer stays inside its own clamp"
+    if d.kind == "setpoint":
+        return _admit_setpoint(d, ctx)
     if d.kind in ("alert", "push"):
         return True, "alerts never move water"
     return False, "unknown directive"
+
+
+def _admit_setpoint(d, ctx):
+    """One notch on one of the zone's own numbers, inside the band around the operator's value, at most once a
+    grow-day, only with the room's Auto setpoints switch on, and never while the zone is paused after a revert."""
+    sp = getattr(ctx, "setpoints", None) or {}
+    v = d.value if isinstance(d.value, dict) else {}
+    suffix, frm, to = v.get("suffix"), v.get("from"), v.get("to")
+    if not sp.get("enabled"):
+        return False, "Auto setpoints is off for this room (or a grow plan owns it)"
+    if sp.get("frozen"):
+        return False, f"paused after a safety revert until {sp['frozen'][:16].replace('T', ' ')}"
+    if sp.get("changed_today"):
+        return False, "one change per zone per grow-day"
+    band = (sp.get("bands") or {}).get(suffix)
+    cur = (sp.get("current") or {}).get(suffix)
+    if band is None or cur is None or frm is None or to is None:
+        return False, "not a setting Jev may move on this zone"
+    if abs(float(frm) - float(cur)) > 1e-6:
+        return False, f"the setting changed since Jev was asked ({frm:g} -> {cur:g})"
+    if abs(float(to) - float(frm)) > 0.5 + 1e-9 or to == frm:
+        return False, "one notch at a time"
+    lo, hi = band
+    if not lo - 1e-9 <= float(to) <= hi + 1e-9:
+        return False, f"{to:g} is outside its range {lo:g}-{hi:g} around your value"
+    return True, "one notch inside its range around your value"

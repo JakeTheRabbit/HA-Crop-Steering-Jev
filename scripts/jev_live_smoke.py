@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +20,7 @@ sys.path[:0] = [str(ROOT / "addons/f2_control/f2_control"), str(ROOT / "addons/f
 import jev_kit as K  # noqa: E402
 from jev import council  # noqa: E402
 from jev.client import Asker, call_typesafe  # noqa: E402
+from jev.context import Shot, ZoneHistory  # noqa: E402
 from jev.doctrine import stage_intent  # noqa: E402
 from jev.envelope import admit  # noqa: E402
 from jev.judges.dawn import DawnJudge  # noqa: E402
@@ -28,6 +29,7 @@ from jev.judges.night import NightJudge  # noqa: E402
 from jev.judges.probe import ProbeJudge  # noqa: E402
 from jev.judges.ramp import RampJudge  # noqa: E402
 from jev.judges.salt import SaltJudge  # noqa: E402
+from jev.judges.setpoints import SHOT, THRESHOLD, SetpointsJudge, band  # noqa: E402
 from jev.judges.shot import ShotJudge  # noqa: E402
 from jev.judges.stage import StageJudge  # noqa: E402
 from jev.judges.zones import ZonesJudge  # noqa: E402
@@ -141,6 +143,58 @@ def night_step():
                  p=K.params(p3_emergency_floor=25.0))
 
 
+NIGHT = datetime(2026, 9, 27, 23, 0)  # an hour after lights-off (lights 10:00-22:00), when Setpoints is asked
+
+
+def _setpoint_day(ec_start, ec_now, shots, litres, rise):
+    """Readings from lights-on (10:00) to NIGHT and the day's maintenance shots, each retaining `rise` points."""
+    h = ZoneHistory()
+    for m in range(780, 0, -5):
+        h.add_reading(NIGHT - timedelta(minutes=m), 31.0, round(ec_start + (ec_now - ec_start) * (780 - m) / 780, 2))
+    for m in shots:
+        h.add_shot(Shot(NIGHT - timedelta(minutes=m), 260, litres, "p2_topup", round(31.0 - rise, 2), ec_start))
+    return h
+
+
+def _setpoint_ctx(p, h, daily, ec, siblings, vwc=31.2):
+    sp = {"enabled": True, "current": {SHOT: p.p2_shot_size, THRESHOLD: p.p2_threshold},
+          "home": {SHOT: p.p2_shot_size, THRESHOLD: p.p2_threshold},
+          "bands": {SHOT: band(SHOT, p.p2_shot_size, p), THRESHOLD: band(THRESHOLD, p.p2_threshold, p)},
+          "changed_today": False, "frozen": None, "day": "2026-09-27", "last_words": None}
+    s = K.snap(phase="P3", vwc=vwc, ec=ec, ec_settled=ec, daily_vol=daily, lights_on=False)
+    return K.ctx("P3", s=s, p=p, h=h, now=NIGHT, lights_on=False, hours_to_on=11.0, hours_to_off=23.0,
+                 setpoints=sp, stage=stage_intent(37), flower_day=37, steering="vegetative", plants=42,
+                 siblings=siblings)
+
+
+def setpoints_zone1_heavy():
+    """Zone 1 on 27 Sep 2026: 116 L (235 % of the room), pore EC 3.05 under the bulk band, weak retention."""
+    p = K.params(p2_shot_size=5.0, p2_threshold=30.5, p3_emergency_floor=20.7, p1_target=36.5, field_capacity=40.0)
+    shots = (700, 640, 580, 520, 460, 400, 340, 280, 220, 160, 90)
+    h = _setpoint_day(2.8, 3.05, shots, 116.2 / len(shots), rise=0.6)
+    return _setpoint_ctx(p, h, 116.2, 3.05, {2: {"litres_per_plant": 1.052, "rise_words": "retained +1.4 points (normal)"},
+                                             3: {"litres_per_plant": 1.388, "rise_words": "retained +1.6 points (normal)"}})
+
+
+def setpoints_on_course():
+    """In line with the room, EC 4.8 inside 3.5-6, shots retaining normally."""
+    p = K.params(p2_shot_size=5.0, p2_threshold=30.5, p3_emergency_floor=20.7, p1_target=36.5, field_capacity=40.0)
+    shots = (620, 480, 330, 180, 70)
+    h = _setpoint_day(4.6, 4.8, shots, 50.0 / len(shots), rise=1.5)
+    return _setpoint_ctx(p, h, 50.0, 4.8, {2: {"litres_per_plant": 1.10, "rise_words": "retained +1.5 points (normal)"},
+                                           3: {"litres_per_plant": 1.25, "rise_words": "retained +1.4 points (normal)"}})
+
+
+def setpoints_thirsty():
+    """43 % of the room's water, EC 6.8 over the bulk band and climbing, moisture ending low."""
+    p = K.params(p2_shot_size=5.0, p2_threshold=27.0, p3_emergency_floor=20.0, p1_target=33.0, field_capacity=40.0)
+    shots = (560, 300, 120)
+    h = _setpoint_day(6.2, 6.8, shots, 19.0 / len(shots), rise=1.5)
+    return _setpoint_ctx(p, h, 19.0, 6.8, {2: {"litres_per_plant": 1.05, "rise_words": "retained +1.4 points (normal)"},
+                                           3: {"litres_per_plant": 1.10, "rise_words": "retained +1.5 points (normal)"}},
+                         vwc=26.2)
+
+
 SCENARIOS = [
     ("ramp: at the ceiling, EC up only from the feed", RampJudge(), ramp_feed_front, "ramp_state",
      {"ec_is_feed_front", "slab_full"}),
@@ -161,6 +215,12 @@ SCENARIOS = [
     ("zones: half the siblings' water, probe reads high", ZonesJudge(), zone_wet_spot, "why_different",
      {"probe_wet_spot", "plants_drinking_less"}),
     ("night: a 3.4-point step at 2 AM", NightJudge(), night_step, "night_drop", {"probe_fault"}),
+    ("setpoints: zone 1 of 27 Sep, 235% of the room's water, EC under the bulk band", SetpointsJudge(),
+     setpoints_zone1_heavy, "tomorrow", {"smaller_shots", "later_rewater"}),
+    ("setpoints: on course, water in line, EC inside the band", SetpointsJudge(), setpoints_on_course, "tomorrow",
+     {"keep"}),
+    ("setpoints: 43% of the room's water, EC over the band, ending dry", SetpointsJudge(), setpoints_thirsty,
+     "tomorrow", {"bigger_shots", "sooner_rewater"}),
 ]
 
 

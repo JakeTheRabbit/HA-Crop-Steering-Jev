@@ -1,3 +1,11 @@
+# 3.2.0
+
+Pair with integration 3.2.0. **C3.** The Setpoints judge: one notch a night on a zone's own P2 shot size or re-water threshold, inside a range around the operator's value, while the room's Auto setpoints switch is on; a rescue shot after a change puts it back and pauses the zone 48 h; the base Auto Setpoints learner never writes while it runs (#6). New file `/data/jev_setpoints.json`; no change to add-on options or the state file. Not run on hardware.
+
+# 3.1.0
+
+Pair with integration 3.1.0. **C3.** Jev's decisions are journalled (`/data/jev_journal.jsonl`) and published as `sensor.crop_steering_<prefix>jev_log` for the dashboard's live log; the room's Jev sensor gains `stage` (#5). No change to add-on options or the state file. Not run on hardware.
+
 # 3.0.1
 
 Pair with integration 3.0.1. **C3.** Jev's zones judge compares each zone's water per plant with the room's median zone, itself included, instead of its thirstiest sibling, so only the odd zone out gets the CS-702 alert (#3). Advice only: no water decision changes. No change to add-on options or the state file. Not run on hardware.

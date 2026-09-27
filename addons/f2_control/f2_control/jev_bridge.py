@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from jev.brain import Brain
 from jev.client import Asker, call_typesafe
@@ -19,19 +19,25 @@ from jev.judges.night import NightJudge
 from jev.judges.probe import ProbeJudge
 from jev.judges.ramp import RampJudge
 from jev.judges.salt import SaltJudge
+from jev.judges.setpoints import SHOT, THRESHOLD, SetpointsJudge
+from jev.judges.setpoints import band as setpoint_band
 from jev.judges.shot import ShotJudge
 from jev.judges.stage import StageJudge
 from jev.judges.zones import ZonesJudge
 from jev.journal import Journal
 from jev.ledger import Ledger
+from jev.setpoint_memory import SetpointMemory
 from jev.triage import Triage
 
-ALL = ("dawn", "ramp", "salt", "dusk", "probe", "shot", "night", "zones", "stage", "alerts")
+ALL = ("dawn", "ramp", "salt", "dusk", "probe", "shot", "night", "zones", "stage", "setpoints", "alerts")
+PENDING_S = 300  # a write Home Assistant has not reflected yet is not an operator's edit for this long
+REVERT_WINDOW_H = 30  # a rescue shot this soon after a setpoint change puts the old value back
+PAUSE_H = 48  # and the zone's setpoints are left alone this long
 
 
 def judges():
     return [DawnJudge(), RampJudge(), SaltJudge(), DuskJudge(), ProbeJudge(), ShotJudge(), NightJudge(),
-            ZonesJudge(), StageJudge()]
+            ZonesJudge(), StageJudge(), SetpointsJudge()]
 
 
 def build(options, cf, state_path, log):
@@ -55,6 +61,7 @@ def build(options, cf, state_path, log):
     log(f"jev: on via {via}, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
     brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
     brain.journal = Journal(os.path.join(data, "jev_journal.jsonl"))
+    brain.setpoints = SetpointMemory(os.path.join(data, "jev_setpoints.json"))
     brain.triage = Triage(asker) if "alerts" in allowed else None
     brain.flower_start = flower_option(options.get("jev_flower_start"))
     brain.flower_days = int(options.get("jev_flower_days") or 56)
@@ -109,20 +116,145 @@ def zone_context(c, room, zone, snap, p, now, lights_on):
         plants=int(plants) if plants and float(plants).is_integer() else None,
         feed_ec=getattr(snap, "feed_ec", None) if snap is not None else None,
         probe_entity=c._fused_id(room.prefix, "vwc", zone, room.zones[zone].get("vwc")),
+        # read only in the night, where the Setpoints judge runs: an edit by hand is caught before it is asked
+        setpoints=setpoint_view(c, room, zone, p, now) if st["phase"] == "P3" else None,
     )
 
 
 def tick(c, room, zone, snap, p, now, lights_on):
-    """Record this pass's reading, run the judges, raise their alerts. -> {kind: Directive}."""
+    """Record this pass's reading, run the judges, raise their alerts, apply a setpoint move.
+    -> {kind: Directive} for the controller's pass (advance, distrust, ec_mode)."""
     _hist(room, zone).add_reading(now, snap.vwc, snap.ec)
+    guard_setpoints(c, room, zone, now)
     ctx = zone_context(c, room, zone, snap, p, now, lights_on)
     out = {}
     for d, _why in c.jev.tick(ctx):
         if d.kind == "alert":
             c._jev_alert(room, zone, d.judge, d.value)
+        elif d.kind == "setpoint":
+            apply_setpoint(c, room, zone, d, ctx, now)
         else:
             out[d.kind] = d
     return out
+
+
+# ---------- the Setpoints judge's side (docs/JEV.md) ----------
+def owns_setpoints(c):
+    """True when Jev's Setpoints judge runs, so the base engine's own Auto Setpoints learner must not write."""
+    brain = getattr(c, "jev", None)
+    return brain is not None and any(j.name == "setpoints" for j in getattr(brain, "judges", ()))
+
+
+def _zone_number(c, room, zone, suffix):
+    """The zone's OWN number for `suffix`, or None: Jev never moves a room-level value."""
+    raw = c._jev_read(f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}")
+    try:
+        return round(float(raw), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _note(c, room, zone, verdict, action, result, reason):
+    journal = getattr(c.jev, "journal", None)
+    if journal is not None:
+        journal.add({"t": datetime.now().isoformat(timespec="seconds"), "room": room.slug, "zone": zone,
+                     "judge": "setpoints", "title": "Setpoints", "kind": "decision", "verdict": verdict,
+                     "p": None, "agreed": None, "action": action, "result": result, "reason": reason[:120]})
+
+
+def setpoint_view(c, room, zone, p, now):
+    """What the Setpoints judge may move on this zone tonight (ZoneContext.setpoints), or None.
+
+    The operator's own value ("home") is the centre of each band. A value Jev did not write is the operator's:
+    it becomes the new home, so an edit by hand always wins and the band follows it."""
+    mem = getattr(getattr(c, "jev", None), "setpoints", None)
+    if mem is None or not owns_setpoints(c):
+        return None
+    rec = mem.zone(room.slug, zone)
+    current, changed = {}, False
+    pending = rec.get("pending") or {}
+    fresh = pending and (now - datetime.fromisoformat(pending["at"])).total_seconds() < PENDING_S
+    for suffix in (SHOT, THRESHOLD):
+        v = _zone_number(c, room, zone, suffix)
+        if v is None:
+            continue
+        current[suffix] = v
+        if fresh and pending.get("suffix") == suffix and abs(v - pending["from"]) < 1e-6:
+            continue  # Jev's write has not reached Home Assistant yet
+        expected = rec["written"].get(suffix, rec["home"].get(suffix))
+        if expected is None or abs(v - float(expected)) > 1e-6:
+            if expected is not None:
+                _note(c, room, zone, "set by hand", f"{suffix.replace('_', ' ')} {expected:g} -> {v:g}",
+                      "acted", "your value is the new centre of Jev's range")
+            rec["home"][suffix] = v
+            rec["written"].pop(suffix, None)
+            changed = True
+    if pending and not fresh:
+        rec["pending"], changed = None, True
+    if changed:
+        mem.save()
+    last = rec.get("last") or {}
+    day = c._grow_day_start(room, now).isoformat()
+    frozen = rec.get("frozen_until")
+    frozen = frozen if frozen and datetime.fromisoformat(frozen) > now else None
+    enabled = (c._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
+               and not getattr(room, "strategy_required", False))
+    return {
+        "enabled": bool(enabled), "current": current, "home": dict(rec["home"]),
+        "bands": {s: setpoint_band(s, rec["home"][s], p) for s in current},
+        "changed_today": last.get("day") == day, "frozen": frozen, "day": day,
+        "last_words": None if not last else f"{last.get('at', '')[:16].replace('T', ' ')}: {last.get('words')}"
+                                            + (" (put back after a rescue shot)" if last.get("reverted") else ""),
+    }
+
+
+def apply_setpoint(c, room, zone, d, ctx, now):
+    """Write one admitted notch to the zone's own number and remember it."""
+    v = d.value
+    mem = c.jev.setpoints
+    rec = mem.zone(room.slug, zone)
+    learn = room.state[zone].get("learn") if isinstance(room.state[zone].get("learn"), dict) else {}
+    c._auto_write(room, zone, v["suffix"], float(v["from"]), float(v["to"]), learn, now, by="Jev")
+    rec["written"][v["suffix"]] = float(v["to"])
+    rec["pending"] = {"suffix": v["suffix"], "from": float(v["from"]), "at": now.isoformat(timespec="seconds")}
+    rec["last"] = {"suffix": v["suffix"], "from": float(v["from"]), "to": float(v["to"]),
+                   "at": now.isoformat(timespec="seconds"), "day": (ctx.setpoints or {}).get("day"),
+                   "words": v["words"], "choice": v["choice"], "reverted": False}
+    mem.save()
+
+
+def guard_setpoints(c, room, zone, now):
+    """A rescue shot soon after a setpoint change puts the old value back and pauses the zone (CS-404)."""
+    mem = getattr(getattr(c, "jev", None), "setpoints", None)
+    if mem is None:
+        return
+    rec = mem.zone(room.slug, zone)
+    last = rec.get("last")
+    if not last or last.get("reverted"):
+        return
+    at = datetime.fromisoformat(last["at"])
+    if now - at > timedelta(hours=REVERT_WINDOW_H):
+        return
+    rescue = next((s for s in _hist(room, zone).shots if s.start >= at and s.kind == "p3_emergency"), None)
+    if rescue is None:
+        return
+    cur = _zone_number(c, room, zone, last["suffix"])
+    if cur is not None and abs(cur - float(last["to"])) < 1e-6:  # still Jev's value: put the operator's back
+        learn = room.state[zone].get("learn") if isinstance(room.state[zone].get("learn"), dict) else {}
+        c._auto_write(room, zone, last["suffix"], float(last["to"]), float(last["from"]), learn, now,
+                      by="Jev (put back)")
+        rec["written"][last["suffix"]] = float(last["from"])
+        rec["pending"] = {"suffix": last["suffix"], "from": float(last["to"]), "at": now.isoformat(timespec="seconds")}
+    last["reverted"] = True
+    rec["frozen_until"] = (now + timedelta(hours=PAUSE_H)).isoformat(timespec="seconds")
+    mem.save()
+    why = f"a rescue shot at {rescue.start:%H:%M} after '{last['words']}'"
+    _note(c, room, zone, "safety revert", f"put back: {last['suffix'].replace('_', ' ')} {last['to']:g} -> "
+          f"{last['from']:g}", "acted", f"{why}; paused {PAUSE_H} h")
+    c._alert(f"auto_{room.slug}_z{zone}", "CS-404", "automatic targets paused",
+             f"Jev's change to this zone's watering ({last['words']}) was put back, because {why}. Jev leaves "
+             f"this zone's setpoints alone for {PAUSE_H} hours; watering carries on with your own values.",
+             room=room, zone=zone)
 
 
 def advance(c, room, zone, snap, d, now):

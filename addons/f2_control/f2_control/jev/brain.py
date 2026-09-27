@@ -29,8 +29,11 @@ class JudgeState:
 
 
 def _label(d):
-    """What a directive is filed under in the ledger: its phase or mode, or an alert's code."""
-    return d.value.get("code") if isinstance(d.value, dict) else d.value
+    """What a directive is filed under in the ledger: its phase or mode, an alert's code, or a setpoint move's
+    choice (e.g. "smaller_shots")."""
+    if isinstance(d.value, dict):
+        return d.value.get("code") or d.value.get("choice")
+    return d.value
 
 
 class Brain:
