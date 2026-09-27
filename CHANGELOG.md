@@ -9,6 +9,39 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-09-28
+
+Pair: **controller 3.2.0**. Class **C3**. One pull request (#6): the Setpoints judge. Once a night Jev may move one
+of a zone's own maintenance settings one notch, inside a range around the operator's value, while the room's Auto
+setpoints switch is on. The integration's code is unchanged; its version moves with the pair. Not run on hardware;
+checked by the lean and controller suites and against the real Jev (17 of 17).
+
+### 🌱 In plain English
+
+- **Jev adjusts tomorrow's maintenance watering.** Once a night, after lights-off, it looks at how much each zone
+  drank against the rest of the room, how its shots held, and where its root-zone EC sits against today's stage,
+  and picks one small step (slightly smaller or bigger shots, or re-watering slightly later or sooner) or leaves it
+  alone. Only while the room's Auto setpoints switch is on.
+- **Your values stay in charge.** It only moves the zone's own P2 shot size and re-water threshold, 0.5 at a time,
+  never more than a small range from what you set (and never a shot under 3 %). Change a value yourself and yours
+  becomes the new centre. If a zone needs a rescue shot after a change, the change is undone and Jev leaves that
+  zone alone for two days.
+- **The old Auto Setpoints learner stands aside** while Jev runs, so a zone never has two hands on its settings.
+
+### 🔧 Technical notes
+
+- `jev/judges/setpoints.py` (P3, the first 3 h after lights-off, once a grow-day): smaller_shots / bigger_shots /
+  later_rewater / sooner_rewater / keep. Evidence includes water per plant against the room's median zone and pore
+  EC against the stage's range, with code stating which way each calls for (Athena: EC rises with smaller shots);
+  it acts when both phrasings pick the same lever and that lever, or its direction, holds 60 %.
+- Envelope `setpoint`: the room switch on and no grow plan, not paused, one change a grow-day, one 0.5 notch,
+  inside `band()` (shot ±1 % of the operator's value, never under 3 %; threshold 2 under to 1 over, at least 4 above
+  the rescue floor and 2 under the ramp ceiling), and the value unchanged since Jev was asked.
+- `jev/setpoint_memory.py` (`/data/jev_setpoints.json`): the operator's values, Jev's writes, a pending write,
+  the last move, a pause. `jev_bridge.py`: `setpoint_view` (read only in P3), `apply_setpoint`, `guard_setpoints`
+  (a P3 rescue shot within 30 h: put back, pause 48 h, CS-404). `controller._auto_tick`: the base learner never
+  writes nor asks its old per-hour judge while the judge runs.
+
 ## [3.1.0] - 2026-09-28
 
 Pair: **controller 3.1.0**. Class **C3**. One pull request (#5): every decision Jev makes is journalled with what the
