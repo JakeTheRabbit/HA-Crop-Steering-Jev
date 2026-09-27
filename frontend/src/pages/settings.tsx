@@ -25,6 +25,7 @@ import { Pill, type PillTone } from "@/components/mini-visuals";
 import type { Controller } from "@/lib/types";
 import { errorText } from "@/lib/utils";
 import { RoomPower } from "@/components/room-controls";
+import { RunRecords } from "@/components/run-records";
 import type { ThemePreference, ThemeSource } from "@/lib/ha-theme";
 import { useWaterView, type WaterView } from "@/lib/water-view";
 
@@ -52,11 +53,14 @@ export function Settings({
   theme,
   setTheme,
   themeSource,
+  onDirtyChange,
 }: {
   controller: Controller;
   theme: ThemePreference;
   setTheme: (value: ThemePreference) => void;
   themeSource: ThemeSource;
+  /** A run record's form is open: leaving the page would lose it. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const water = useWaterView();
   const [waterBusy, setWaterBusy] = useState(false);
@@ -254,6 +258,16 @@ export function Settings({
               This is not an emergency stop.
             </p>
           </div>
+        </section>
+        <section className="panel settings-section">
+          <div className="settings-label">
+            <h2>Run records</h2>
+            <p>
+              Each crop in {controller.room.room.name}, from its start date: what History › Compare
+              runs lines up by grow week.
+            </p>
+          </div>
+          <RunRecords controller={controller} onDirtyChange={onDirtyChange} />
         </section>
         <section className="panel settings-section">
           <div className="settings-label">

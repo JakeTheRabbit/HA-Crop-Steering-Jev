@@ -24,6 +24,7 @@ import {
 import { numeric, readable, roomStatus } from "@/lib/model";
 import { buildSetpointPreview } from "@/lib/setpoint-preview";
 import { tankTelemetry } from "@/lib/tank-telemetry";
+import { eventTimes } from "@/lib/timeline";
 import type { Controller, EntityState, LogEvent, Metric, Notice, States, Zone } from "@/lib/types";
 import { useRecentHistory } from "@/lib/use-recent-moisture";
 import { waitingText } from "@/lib/waiting-for";
@@ -62,19 +63,6 @@ function excludedProbes(entity: EntityState | undefined, kind: "vwc" | "ec") {
         kind,
       }))
     : [];
-}
-/** An activity record's time: an ISO stamp, or the controller's feed "HH:MM" (today, or yesterday
- * when that is still to come). */
-export function eventTime(stamp: string, now: number): number | null {
-  const clockOnly = stamp.match(/^(\d{1,2}):(\d{2})$/);
-  if (!clockOnly) {
-    const time = Date.parse(stamp);
-    return Number.isFinite(time) ? time : null;
-  }
-  const date = new Date(now);
-  date.setHours(Number(clockOnly[1]), Number(clockOnly[2]), 0, 0);
-  const time = date.getTime();
-  return time > now + 5 * 60_000 ? time - 24 * H : time;
 }
 /** A shot in P3 is a rescue: the controller waters overnight only below the rescue floor. */
 const isRescue = (event: LogEvent) =>
@@ -212,8 +200,9 @@ export function Today({
       },
     };
   });
-  const rescues = room.events.flatMap((event) => {
-    const time = isRescue(event) ? eventTime(event.timestamp, now) : null;
+  const times = eventTimes(room.events, now);
+  const rescues = room.events.flatMap((event, index) => {
+    const time = isRescue(event) ? times[index] : null;
     return time === null ? [] : [{ zoneId: event.zoneId!, time }];
   });
   const attention = zoneAttention({

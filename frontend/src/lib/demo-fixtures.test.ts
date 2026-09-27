@@ -157,6 +157,26 @@ describe("the demo keeps the clock", () => {
       "Z1 P1 ramp shot 3/6 (demo)",
     ]);
   });
+  it("ends the night's activity records with the day's watering, and each zone's move to P3", () => {
+    type Event = { timestamp: string; message: string; type: string };
+    const log = (states: ReturnType<typeof createDemo>) =>
+      states["sensor.crop_steering_activity_log"].attributes.events as Event[];
+    const night = log(demoClock(createDemo(at(2)), at(2)));
+    const lightsOff = new Date(2026, 8, 27, 22, 0).getTime();
+    expect(night.every((event) => Date.parse(event.timestamp) < lightsOff)).toBe(true);
+    expect(night.slice(0, 3).map((event) => event.message)).toEqual(
+      Array(3).fill("P2 → P3: the day's watering is done (demo)."),
+    );
+    // No shot after the move to P3.
+    const p3 = Math.min(...night.slice(0, 3).map((event) => Date.parse(event.timestamp)));
+    expect(
+      night.filter((event) => event.type === "water" && Date.parse(event.timestamp) > p3),
+    ).toEqual([]);
+    // By day, the demo's own records again.
+    expect(log(demoClock(demoClock(createDemo(at(2)), at(2)), at(16)))).toEqual(
+      log(createDemo(at(16))),
+    );
+  });
   it("leaves a change made in the demo alone until the lights next change", () => {
     const day = demoClock(createDemo(at(16)), at(16));
     const picked = {
@@ -184,7 +204,7 @@ describe("synthetic current and previous run examples", () => {
     for (const document of documents) {
       expect(document.runs).toHaveLength(3);
       const [current, previous, archived] = document.runs;
-      expect(daysBetween(current.start_date, dateInZone(now, timeZone))).toBe(35);
+      expect(daysBetween(current.start_date, dateInZone(now, timeZone))).toBe(14);
       expect(daysBetween(previous.start_date, previous.end_date!)).toBe(55);
       expect(archived.archived).toBe(true);
       expect(

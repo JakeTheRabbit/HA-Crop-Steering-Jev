@@ -1,11 +1,6 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { JevDecisions } from "@/components/jev-log";
-import { createDemo } from "./demo";
 import {
   attachOutcomes,
-  filterJev,
   jevAnswer,
   jevChange,
   jevChanges,
@@ -21,8 +16,7 @@ import {
   parseJevZone,
   type JevEntry,
 } from "./jev";
-import { buildRoom, discoverRooms } from "./model";
-import type { Controller, EntityState, States } from "./types";
+import type { EntityState } from "./types";
 
 const entity = (
   entity_id: string,
@@ -164,32 +158,6 @@ describe("the Jev log sensor", () => {
   it("says Jev's answer with how sure it was", () => {
     expect(jevAnswer(parseJevEntry(decision)!)).toBe("below band vegetative, 72%");
     expect(jevAnswer({ verdict: "", p: null })).toBe("no answer");
-  });
-});
-
-describe("filtering the log", () => {
-  const entries = [
-    { ...decision, zone: 1, result: "acted" },
-    { ...decision, zone: 2, result: "no action", action: "" },
-    { ...decision, zone: null, judge: "alerts", result: "acted" },
-    { ...decision, zone: 2, result: "refused" },
-    { ...decision, zone: 1, kind: "outcome", result: "worked" },
-    { ...decision, zone: 3, result: "waiting" },
-  ].map((raw, index) => parseJevEntry(raw, index)!);
-  const zones = (list: JevEntry[]) => list.map((entry) => entry.zone);
-  it("by zone, or the room only", () => {
-    expect(zones(filterJev(entries, "all", false))).toEqual([1, 2, null, 2, 1, 3]);
-    expect(zones(filterJev(entries, 2, false))).toEqual([2, 2]);
-    expect(zones(filterJev(entries, "room", false))).toEqual([null]);
-  });
-  it("actions only: what did something or tried to, and how it turned out", () => {
-    expect(filterJev(entries, "all", true).map((entry) => entry.result)).toEqual([
-      "acted",
-      "acted",
-      "refused",
-      "worked",
-    ]);
-    expect(filterJev(entries, 3, true)).toEqual([]);
   });
 });
 
@@ -472,48 +440,5 @@ describe("the setpoints Jev manages on a zone", () => {
     expect(zone(undefined)).toBeNull();
     expect(zone("managed")).toBeNull();
     expect(parseJevSetpoints(undefined)).toBeNull();
-  });
-});
-
-describe("the Jev decisions panel", () => {
-  const controller = (states: States, prefix: string) =>
-    ({
-      states,
-      room: buildRoom(
-        states,
-        discoverRooms(states).find((room) => room.prefix === prefix)!,
-      ),
-    }) as Controller;
-  const now = new Date(2026, 8, 28, 16, 0).getTime();
-  it("draws nothing for a room without the log", () => {
-    const states = createDemo(now);
-    const f1 = controller(states, "f1_");
-    expect(renderToStaticMarkup(createElement(JevDecisions, { controller: f1 }))).toBe("");
-    expect(
-      renderToStaticMarkup(createElement(JevDecisions, { controller: f1, compact: true })),
-    ).toBe("");
-  });
-  it("lists the demo room's decisions: the latest five beside the grow day, all of them on Activity", () => {
-    const states = createDemo(now);
-    const f2 = controller(states, "");
-    const compact = renderToStaticMarkup(
-      createElement(JevDecisions, { controller: f2, compact: true, onViewAll: () => {} }),
-    );
-    expect(compact.match(/class="jev-row"/g)).toHaveLength(5);
-    expect(compact).toContain("View all");
-    const full = renderToStaticMarkup(createElement(JevDecisions, { controller: f2 }));
-    expect(full.match(/class="jev-row"/g)).toHaveLength(
-      (states["sensor.crop_steering_jev_log"].attributes.entries as unknown[]).length,
-    );
-    for (const text of [
-      "Actions only",
-      "Refused",
-      "Advice",
-      "Didn’t work",
-      "Worked",
-      "input tokens",
-    ])
-      expect(full).toContain(text);
-    expect(full).toContain("both phrasings agreed");
   });
 });

@@ -309,21 +309,6 @@ export function jevCost(tokens: number | null): string | null {
   return usd < 0.01 ? "under $0.01" : `≈ $${usd < 1 ? usd.toFixed(2) : usd.toFixed(1)}`;
 }
 
-export type JevZoneFilter = "all" | "room" | number;
-/** The entries a filter keeps. "Actions only" keeps what did something or tried to: acted, advice,
- * refused, and how an action turned out. */
-export function filterJev(
-  entries: readonly JevEntry[],
-  zone: JevZoneFilter,
-  actionsOnly: boolean,
-): JevEntry[] {
-  return entries.filter(
-    (entry) =>
-      (zone === "all" || (zone === "room" ? entry.zone === null : entry.zone === zone)) &&
-      (!actionsOnly || !["no action", "waiting", "unknown"].includes(entry.result)),
-  );
-}
-
 export type JevTone = "on" | "off" | "warn" | "water" | "neutral";
 /** The result pill's words and colour. Filled on the day chart only when code acted. */
 export function jevResult(entry: JevEntry): { label: string; tone: JevTone; acted: boolean } {

@@ -37,7 +37,7 @@ const LOOKBACK_DAYS = 120;
 
 /** A zone's water-today counters: the one the dashboard shows first, then the controller's sensor
  * and the integration's mirror of it, which can hold grow-days the first one lacks. */
-function counterIds(controller: Controller, zone: Zone): string[] {
+export function counterIds(controller: Controller, zone: Zone): string[] {
   const root = `sensor.crop_steering_${controller.room.room.prefix}zone_${zone.id}_daily_water_`;
   return [...new Set([zone.water.entityId, root + "app", root + "usage"])].filter(
     (id): id is string => !!id && !!controller.states[id],

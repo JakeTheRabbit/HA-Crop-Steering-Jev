@@ -1,4 +1,4 @@
-import type { HistoryRequest, HistoryWindow, RunsDocument } from "./comparison-types";
+import type { DailyRanges, HistoryRequest, HistoryWindow, RunsDocument } from "./comparison-types";
 import { demoHistoryWindow } from "./comparison-demo";
 import type { TimelineRequest } from "./day-timeline";
 import type { OperatorAction } from "./operator-types";
@@ -27,6 +27,7 @@ import {
 import {
   applyEntityUpdate,
   liveConnection,
+  liveDailyStatistics,
   liveHistory,
   liveStatistics,
   watchedEntities,
@@ -123,6 +124,7 @@ export class ControllerStore {
       write: this.write,
       history: this.history,
       historyWindow: this.historyWindow,
+      dailyRanges: this.dailyRanges,
       timeline: this.timeline,
       waterRecord: this.waterRecord,
       operator: this.operator,
@@ -481,22 +483,34 @@ export class ControllerStore {
       if (mutation) this.writing = false;
     }
   };
-  historyWindow = async (request: HistoryRequest): Promise<HistoryWindow> => {
+  /** Throws unless every id is a sensor of the selected room or one of its registered runs. A
+   * promise only when it has to read the room's run records first. */
+  private checkRunSensors(entityIds: string[]): Promise<void> | void {
     const generation = this.generation,
       roomId = this.roomId;
     if (!roomId) throw new Error("Select an available room.");
     const allowed = new Set(this.snapshot.room.entities.map((entity) => entity.entity_id));
-    let registered = this.runDocuments.get(roomId);
-    if (request.entityIds.some((id) => !allowed.has(id)) && registered?.generation !== generation) {
-      await this.operator<RunsDocument>("runs_get");
-      registered = this.runDocuments.get(roomId);
-    }
-    if (registered?.generation === generation)
-      for (const run of registered.document.runs)
-        for (const zone of run.zones)
-          for (const id of [zone.vwc_sensor, zone.ec_sensor]) if (id) allowed.add(id);
-    if (request.entityIds.some((id) => !allowed.has(id)))
-      throw new Error("History is limited to this room's current or registered run sensors.");
+    const check = () => {
+      const registered = this.runDocuments.get(roomId);
+      if (registered?.generation === generation)
+        for (const run of registered.document.runs)
+          for (const zone of run.zones)
+            for (const id of [zone.vwc_sensor, zone.ec_sensor]) if (id) allowed.add(id);
+      if (entityIds.some((id) => !allowed.has(id)))
+        throw new Error("History is limited to this room's current or registered run sensors.");
+    };
+    if (
+      entityIds.some((id) => !allowed.has(id)) &&
+      this.runDocuments.get(roomId)?.generation !== generation
+    )
+      return this.operator<RunsDocument>("runs_get").then(check);
+    check();
+  }
+  historyWindow = async (request: HistoryRequest): Promise<HistoryWindow> => {
+    const generation = this.generation,
+      roomId = this.roomId;
+    const reading = this.checkRunSensors(request.entityIds);
+    if (reading) await reading;
     const abort = new AbortController();
     const cancel = () => abort.abort();
     request.signal?.addEventListener("abort", cancel, { once: true });
@@ -516,6 +530,48 @@ export class ControllerStore {
       this.historyAborters.delete(abort);
       request.signal?.removeEventListener("abort", cancel);
     }
+  };
+  /** Each sensor's low and high per local date over a run (Compare runs, by grow week): Home
+   * Assistant's daily long-term statistics over its websocket inside Home Assistant, kept
+   * indefinitely; standalone, and for a sensor without statistics, its recorded history. */
+  dailyRanges = async (request: HistoryRequest): Promise<DailyRanges> => {
+    const generation = this.generation,
+      roomId = this.roomId;
+    await this.checkRunSensors(request.entityIds);
+    if (this.demo) {
+      const window = await demoHistoryWindow(request);
+      return {
+        source: "demo",
+        series: window.series.map(({ entityId, daily }) => ({ entityId, daily })),
+        warnings: window.warnings,
+      };
+    }
+    if (!this.client || this.connection !== "live")
+      throw new Error("Connect to Home Assistant to load recorded history.");
+    const series: DailyRanges["series"] = [];
+    const warnings: string[] = [];
+    if (this.live?.sendMessagePromise) {
+      const statistics = await liveDailyStatistics(this.live, request);
+      for (const entityId of request.entityIds)
+        if (statistics[entityId]?.length) series.push({ entityId, daily: statistics[entityId] });
+    }
+    const missing = request.entityIds.filter((id) => !series.some((item) => item.entityId === id));
+    if (missing.length) {
+      const window = await this.historyWindow({ ...request, entityIds: missing });
+      series.push(...window.series.map(({ entityId, daily }) => ({ entityId, daily })));
+      warnings.push(...window.warnings);
+      if (this.live?.sendMessagePromise)
+        warnings.push(
+          `No long-term statistics for ${missing.join(", ")}: its days come from recorded history, which reaches back only as far as the recorder keeps it.`,
+        );
+    }
+    if (generation !== this.generation || roomId !== this.roomId)
+      throw new Error("Room or range changed; history request cancelled.");
+    return {
+      source: missing.length === request.entityIds.length ? "history" : "statistics",
+      series,
+      warnings,
+    };
   };
   history = async (entityIds: string[], hours: number, signal?: AbortSignal) => {
     if (!Number.isFinite(hours) || hours <= 0 || hours > 720)

@@ -45,7 +45,7 @@ import { WhatsNewOnUpdate } from "@/components/whats-new";
 import { ZonePage } from "@/pages/zone";
 import { Today } from "@/pages/today";
 import { Strategy, type Drafts } from "@/pages/strategy";
-import { ActivityPage } from "@/pages/activity";
+import { Timeline } from "@/pages/timeline";
 import { Sensors } from "@/pages/sensors";
 import { Settings } from "@/pages/settings";
 import { Help } from "@/pages/help";
@@ -77,7 +77,8 @@ export default function App() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [mobile, setMobile] = useState(false);
   const [drafts, setDrafts] = useState<Drafts>({});
-  const [planZone, setPlanZone] = useState<number | undefined>();
+  /** The zone Plan › Targets starts on, or the one History › Timeline shows. */
+  const [focusZone, setFocusZone] = useState<number | undefined>();
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -93,16 +94,18 @@ export default function App() {
     if (dirtyRef.current) setPending(() => action);
     else action();
   }
-  /** Opens a page. `zone` opens that zone's page, or picks the zone Plan › Targets starts on. */
+  /** Opens a page. `zone` opens that zone's page, picks the zone Plan › Targets starts on, or the
+   * zone History › Timeline shows. */
   function navigate(next: Page, zone?: number) {
     const target: Route = next === "zone" ? { page: "zone", zone: zone ?? null } : { page: next };
-    if (sameRoute(target, route) && (next !== "plan/targets" || zone === undefined)) {
+    const focused = next === "plan/targets" || next === "history/timeline";
+    if (sameRoute(target, route) && (!focused || zone === undefined)) {
       setMobile(false);
       return;
     }
     confirmNavigation(() => {
       setRoute(target);
-      setPlanZone(next === "plan/targets" ? zone : undefined);
+      setFocusZone(focused ? zone : undefined);
       window.history.pushState(null, "", routeHash(target));
       setMobile(false);
       window.scrollTo({ top: 0 });
@@ -120,7 +123,7 @@ export default function App() {
         });
       } else {
         setRoute(next);
-        setPlanZone(undefined);
+        setFocusZone(undefined);
       }
     };
     window.addEventListener("hashchange", hashChange);
@@ -160,7 +163,7 @@ export default function App() {
   function selectRoom(id: string) {
     confirmNavigation(() => {
       setDrafts({});
-      setPlanZone(undefined);
+      setFocusZone(undefined);
       controller.changeRoom(id);
       setMobile(false);
     });
@@ -338,7 +341,7 @@ export default function App() {
                 controller={controller}
                 drafts={drafts}
                 setDrafts={setDrafts}
-                selectedZone={planZone}
+                selectedZone={focusZone}
               />
             )}
             {page === "plan/schedule" && (
@@ -348,10 +351,12 @@ export default function App() {
                 onDirtyChange={setWorkspaceDirty}
               />
             )}
-            {page === "history/timeline" && <ActivityPage key={pageKey} controller={controller} />}
+            {page === "history/timeline" && (
+              <Timeline key={`${pageKey}:${focusZone}`} controller={controller} zone={focusZone} />
+            )}
             {page === "history/water" && <WaterUsePage key={pageKey} controller={controller} />}
             {page === "history/compare" && (
-              <Comparison key={pageKey} controller={controller} onDirtyChange={setWorkspaceDirty} />
+              <Comparison key={pageKey} controller={controller} navigate={navigate} />
             )}
             {page === "equipment/probes" && <Sensors key={pageKey} controller={controller} />}
             {page === "equipment/stock" && (
@@ -373,6 +378,7 @@ export default function App() {
                 theme={theme.preference}
                 setTheme={theme.setPreference}
                 themeSource={theme.source}
+                onDirtyChange={setWorkspaceDirty}
               />
             )}
             {page === "help" && <Help controller={controller} />}

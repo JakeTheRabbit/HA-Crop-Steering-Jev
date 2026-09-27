@@ -165,7 +165,7 @@ function JevOnZone({
 }: {
   controller: Controller;
   zone: Zone;
-  navigate: (page: Page) => void;
+  navigate: (page: Page, zone?: number) => void;
 }) {
   const { states, room } = controller;
   const ids = jevIds(room.room.prefix);
@@ -187,7 +187,7 @@ function JevOnZone({
               : "Watching: no judge acting on this zone now"}
           </p>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => navigate("history/timeline")}>
+        <Button variant="ghost" size="sm" onClick={() => navigate("history/timeline", zone.id)}>
           History <ArrowRight size={15} aria-hidden="true" />
         </Button>
       </div>

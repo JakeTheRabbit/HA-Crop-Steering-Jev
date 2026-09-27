@@ -692,6 +692,36 @@ export function demoClock(states: States, now = Date.now()): States {
         ],
       });
     }
+    // Its records end with the day's last shots and each zone's move to P3 two hours before
+    // lights-off (demoDay's day); by day they are the demo's own.
+    const log = `${root}activity_log`;
+    const events = (base[log]?.attributes.events ?? []) as LogEvent[];
+    if (!night && base[log]) set(log, base[log].state, base[log].attributes);
+    if (night && events.length) {
+      const shift =
+        Math.max(...events.map((event) => Date.parse(event.timestamp))) -
+        (day.lightsOff - 2.25 * 3_600_000);
+      const p3: LogEvent[] = Array.from(
+        { length: Number(config.attributes.num_zones) },
+        (_, i) => ({
+          id: `${prefix}${i + 1}-p3`,
+          timestamp: new Date(day.lightsOff - 2 * 3_600_000 + (i + 1) * 180_000).toISOString(),
+          message: "P2 → P3: the day's watering is done (demo).",
+          type: "phase",
+          zoneId: i + 1,
+        }),
+      );
+      set(log, base[log].state, {
+        ...base[log].attributes,
+        events: [
+          ...p3.reverse(),
+          ...events.map((event) => ({
+            ...event,
+            timestamp: new Date(Date.parse(event.timestamp) - shift).toISOString(),
+          })),
+        ],
+      });
+    }
     const pump = typeof config.attributes.pump === "string" ? config.attributes.pump : "";
     if (night) {
       set(pump, "off");
@@ -1073,13 +1103,24 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
 }
 /** Recorded water for the Water use panel, as the hourly statistics of each zone's water-today
  * counter: a grow that began on the demo grow plan's start date after eight dry grow-days, drinking
- * a little more each day. Complete grow-days only; the live counter supplies today. */
+ * a little more each day. Complete grow-days only; the live counter supplies today. Before it, the
+ * demo's previous run (112 to 57 days ago, comparison-demo) drank a fifth less by grow day. */
 export function demoWaterRecord(
   states: States,
   request: WaterRecordRequest,
   now = Date.now(),
 ): Record<string, CounterSample[]> {
-  const growStart = dateForDay(localDate(new Date(now)), -13); // as the demo plan (operator-demo)
+  const today = localDate(new Date(now));
+  const growStart = dateForDay(today, -13); // as the demo plan (operator-demo)
+  const grows = [
+    {
+      start: addDays(today, -112),
+      first: addDays(today, -112),
+      last: addDays(today, -57),
+      scale: 0.8,
+    },
+    { start: growStart, first: addDays(growStart, -8), last: today, scale: 1 },
+  ];
   const samples: Record<string, CounterSample[]> = {};
   for (const entityId of request.entityIds) {
     const match = entityId.match(
@@ -1096,34 +1137,36 @@ export function demoWaterRecord(
       return new Date(year, month - 1, date, 0, Math.round(on * 60)).getTime();
     };
     const list: CounterSample[] = [];
-    for (
-      let day = addDays(growStart, -8);
-      lightsOn(addDays(day, 1)) <= now;
-      day = addDays(day, 1)
-    ) {
-      const age = daysBetween(growStart, day) + 1;
-      const total =
-        age < 1
-          ? 0
-          : Math.min(
-              38,
-              16 +
-                0.9 * age +
-                1.6 * Number(zone) +
-                (prefix ? 2 : 0) +
-                2.5 * Math.sin(1.7 * age + Number(zone)),
-            );
-      // One reading at the end of each hour; a daylight-saving grow-day has 23 or 25 of them.
-      const from = lightsOn(day);
-      for (let time = from + 3_600_000 - 1; time < lightsOn(addDays(day, 1)); time += 3_600_000) {
-        const share = Math.min(
-          1,
-          Math.max(0, ((time + 1 - from) / 3_600_000 - 1) / (photoperiod - 3)),
-        );
-        if (time >= request.start && time <= request.end)
-          list.push({ time, value: Math.round(total * share * 100) / 100 });
+    for (const grow of grows)
+      for (
+        let day = grow.first;
+        day <= grow.last && lightsOn(addDays(day, 1)) <= now;
+        day = addDays(day, 1)
+      ) {
+        const age = daysBetween(grow.start, day) + 1;
+        const total =
+          age < 1
+            ? 0
+            : grow.scale *
+              Math.min(
+                38,
+                16 +
+                  0.9 * age +
+                  1.6 * Number(zone) +
+                  (prefix ? 2 : 0) +
+                  2.5 * Math.sin(1.7 * age + Number(zone)),
+              );
+        // One reading at the end of each hour; a daylight-saving grow-day has 23 or 25 of them.
+        const from = lightsOn(day);
+        for (let time = from + 3_600_000 - 1; time < lightsOn(addDays(day, 1)); time += 3_600_000) {
+          const share = Math.min(
+            1,
+            Math.max(0, ((time + 1 - from) / 3_600_000 - 1) / (photoperiod - 3)),
+          );
+          if (time >= request.start && time <= request.end)
+            list.push({ time, value: Math.round(total * share * 100) / 100 });
+        }
       }
-    }
     samples[entityId] = list;
   }
   return samples;
