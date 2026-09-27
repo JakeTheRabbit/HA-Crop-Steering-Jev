@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ReviewDialog, number, type ReviewItem } from "@/components/dashboard";
+import { useSensorContext } from "@/components/sensor-context";
 import { SettingRow } from "@/components/setting-row";
 import { WaterDelivery } from "@/components/water-delivery";
 import { calibrateDripper } from "@/lib/catch-test";
@@ -47,6 +48,8 @@ export function ControllerSettings({
     zone ? zone.fields : room.settings.filter((field) => field.zoneId === undefined)
   ).filter((field) => ["Substrate", "Hardware sizing", "Safety"].includes(field.group));
   const connected = ["live", "demo"].includes(controller.connection);
+  // What the zone's probe recorded: full saturation's suggestion (a learned or typical peak).
+  const sensor = useSensorContext(controller, zone, connected);
   const preview = zone ? buildSetpointPreview(room, states, zone.id, drafts) : null;
   const configuredFlow = zone ? waterParameters(controller, zone.id).dripper_flow_rate : null;
   const catchFlow =
@@ -106,6 +109,8 @@ export function ControllerSettings({
         unit={setting.unit}
         draft={drafts[setting.entityId]}
         prefix={room.room.prefix}
+        sensor={zone ? sensor : null}
+        learnedPeak={zone?.auto?.learnedPeak}
         disabled={!connected}
         onEdit={edit}
       />
@@ -125,13 +130,26 @@ export function ControllerSettings({
             reviewed before it is written.
           </p>
         </div>
-        <Button
-          disabled={!items.length || errors.length > 0 || !connected}
-          onClick={() => setReview(true)}
-        >
-          Review {Object.keys(drafts).length || ""}{" "}
-          {Object.keys(drafts).length === 1 ? "change" : "changes"} <ArrowRight size={16} />
-        </Button>
+        <div className="workspace-actions">
+          {dirty && (
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setDrafts({});
+                setSaved(false);
+              }}
+            >
+              Discard draft
+            </Button>
+          )}
+          <Button
+            disabled={!items.length || errors.length > 0 || !connected}
+            onClick={() => setReview(true)}
+          >
+            Review {Object.keys(drafts).length || ""}{" "}
+            {Object.keys(drafts).length === 1 ? "change" : "changes"} <ArrowRight size={16} />
+          </Button>
+        </div>
       </div>
       <nav className="zone-switcher controller-settings-zones" aria-label="Settings for">
         {room.zones.map((item) => (
@@ -185,7 +203,8 @@ export function ControllerSettings({
         </>
       )}
       {zone && preview && (
-        <div className="setpoint-water" aria-label="Water and calibration">
+        <details className="setpoint-water controller-settings-water">
+          <summary>Water & calibration: what a shot delivers, and a catch test</summary>
           <WaterDelivery
             controller={controller}
             zoneId={zone.id}
@@ -199,13 +218,13 @@ export function ControllerSettings({
           {useCatchFlow && (
             <p className="notice-inline">Using your catch-test flow in this calculation only.</p>
           )}
-          <div className="catch-test">
+          <div className="calibration">
             <h3>Catch-test calibration</h3>
             <p className="small muted">
               Collect water from a representative dripper for a measured time, and enter what one
               dripper gave.
             </p>
-            <div className="catch-test-fields">
+            <div className="calibration-fields">
               <div>
                 <Label htmlFor="catch-volume">Collected water per dripper · mL</Label>
                 <Input
@@ -236,7 +255,7 @@ export function ControllerSettings({
                   }}
                 />
               </div>
-              <div className="catch-test-result">
+              <div className="calibration-result">
                 <span>Estimated flow per dripper</span>
                 <strong>
                   {catchFlow === null ? "—" : number(catchFlow, 2)}{" "}
@@ -251,7 +270,7 @@ export function ControllerSettings({
                 )}
               </div>
             </div>
-            <div className="catch-test-actions">
+            <div className="calibration-actions">
               <Button
                 variant="outline"
                 disabled={catchFlow === null}
@@ -272,7 +291,7 @@ export function ControllerSettings({
               controller adjustment and is not a calibration.
             </p>
           </div>
-        </div>
+        </details>
       )}
       <ReviewDialog
         open={review}

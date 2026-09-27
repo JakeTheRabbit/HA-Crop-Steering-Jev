@@ -285,32 +285,33 @@ export function Strategy({
               {zone?.auto && <AutoZoneChip status={zone.auto} />}
             </div>
           </div>
-          {choices.map((choice) => (
-            <div className="targets-choice" key={choice.entityId}>
-              <label htmlFor={`choice-${choice.entityId}`}>
-                {choice.label}
-                {drafts[choice.entityId] && <span className="draft-dot" />}
-              </label>
-              <select
-                id={`choice-${choice.entityId}`}
-                value={drafts[choice.entityId]?.value ?? choice.value ?? ""}
-                disabled={!canEdit}
-                onChange={(event) => choose(choice, event.target.value)}
-              >
-                <option value="" disabled>
-                  Select a mode
-                </option>
-                {choice.options.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
+          {!planEngaged &&
+            choices.map((choice) => (
+              <div className="targets-choice" key={choice.entityId}>
+                <label htmlFor={`choice-${choice.entityId}`}>
+                  {choice.label}
+                  {drafts[choice.entityId] && <span className="draft-dot" />}
+                </label>
+                <select
+                  id={`choice-${choice.entityId}`}
+                  value={drafts[choice.entityId]?.value ?? choice.value ?? ""}
+                  disabled={!canEdit}
+                  onChange={(event) => choose(choice, event.target.value)}
+                >
+                  <option value="" disabled>
+                    Select a mode
                   </option>
-                ))}
-              </select>
-              {drafts[choice.entityId] && (
-                <span className="small muted">Currently {choice.value || "unavailable"}</span>
-              )}
-            </div>
-          ))}
+                  {choice.options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                {drafts[choice.entityId] && (
+                  <span className="small muted">Currently {choice.value || "unavailable"}</span>
+                )}
+              </div>
+            ))}
           {zone && !planEngaged && (
             <table className="targets-table">
               {TARGET_GROUPS.map((group) => (

@@ -773,7 +773,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 
 **Suggested fixes**
 
-- Open Irrigation plan → Schedule in the Crop Steering sidebar and read the reason.
+- Open Plan › Schedule in the Crop Steering sidebar and read the reason.
 - If it stays in error, fix the cause, then disarm the plan and arm it again.
 
 <a id="cs-607"></a>

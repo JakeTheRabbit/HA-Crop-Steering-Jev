@@ -66,7 +66,12 @@ export function GrowByStage({ controller }: { controller: Controller }) {
                 <tr key={item.name} data-current={current || undefined}>
                   <th scope="row">
                     {capital(item.name)}
-                    {current && <Pill tone="water">Now · week {today!.week}</Pill>}
+                    {current && (
+                      <>
+                        {" "}
+                        <Pill tone="water">Now · week {today!.week}</Pill>
+                      </>
+                    )}
                     <small>Moves on when {item.moveOn}</small>
                   </th>
                   <td>

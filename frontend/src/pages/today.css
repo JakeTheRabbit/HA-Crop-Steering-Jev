@@ -105,6 +105,10 @@
 .today-alerts[data-severity="critical"] {
   color: var(--destructive);
 }
+.today-alerts[data-severity="info"] {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
 .today-alerts[aria-expanded="true"] .today-alerts-chevron {
   transform: rotate(180deg);
 }
@@ -266,7 +270,6 @@
 }
 .today-flag-more {
   font-weight: 500;
-  opacity: 0.85;
 }
 .today-moisture {
   display: flex;

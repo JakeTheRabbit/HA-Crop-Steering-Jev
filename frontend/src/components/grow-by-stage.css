@@ -74,6 +74,9 @@
   color: color-mix(in srgb, #7c4dbc 75%, var(--foreground));
   font-weight: 600;
 }
+.dark .grow-stage-table td[data-steering="generative"] {
+  color: color-mix(in srgb, #7c4dbc 55%, var(--foreground));
+}
 .grow-stage-table td[data-steering="ripening"] {
   color: color-mix(in srgb, var(--warning) 75%, var(--foreground));
   font-weight: 600;

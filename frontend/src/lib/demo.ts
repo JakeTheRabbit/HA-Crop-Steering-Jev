@@ -231,6 +231,7 @@ export function createDemo(now = Date.now()): States {
             0.1,
             "mS/cm",
           );
+      // Newest first: two maintenance shots, the hand-over to P2, and the ramp's last shot.
       for (let event = 0; event < 4; event++)
         events.push({
           id: `${prefix}${id}-${event}`,
@@ -238,10 +239,12 @@ export function createDemo(now = Date.now()): States {
           message:
             event === 0 && index && id === 3
               ? "Zone paused for routine probe inspection (demo)."
-              : event % 2 === 0
+              : event < 2
                 ? `Scheduled P2 maintenance shot: ${(0.8 + id * 0.1).toFixed(1)} L (demo).`
-                : "P1 → P2: target VWC reached (demo).",
-          type: event === 0 && index && id === 3 ? "warning" : event % 2 === 0 ? "water" : "phase",
+                : event === 2
+                  ? "P1 → P2: target VWC reached (demo)."
+                  : `P1 ramp shot 6/6: ${(0.5 + id * 0.1).toFixed(1)} L (demo).`,
+          type: event === 0 && index && id === 3 ? "warning" : event === 2 ? "phase" : "water",
           zoneId: id,
         });
     }
@@ -265,15 +268,15 @@ function demoProbes(
   const step = kind === "vwc" ? 0.8 : 0.15;
   const ids = ["front", "back"].map((side) => `sensor.demo_z${zone}_${side}_${kind}`);
   const out = kind === "ec" && zone === 3 ? ids[1] : null;
+  // The zone reads the mean of the probes it uses: with one left out, the other one's reading; the
+  // silent one kept its last, drifted reading.
+  const reading = (id: string, side: number) =>
+    id === out ? value + 0.75 : out ? value : value + (side ? -step : step);
   ids.forEach((id, side) =>
-    put(
-      id,
-      (value + (side ? -step : step) + (id === out ? 0.9 : 0)).toFixed(kind === "ec" ? 2 : 1),
-      {
-        friendly_name: `Zone ${zone} ${side ? "back" : "front"} ${kind === "vwc" ? "VWC" : "EC"}`,
-        unit_of_measurement: kind === "vwc" ? "%" : "mS/cm",
-      },
-    ),
+    put(id, reading(id, side).toFixed(kind === "ec" ? 2 : 1), {
+      friendly_name: `Zone ${zone} ${side ? "back" : "front"} ${kind === "vwc" ? "VWC" : "EC"}`,
+      unit_of_measurement: kind === "vwc" ? "%" : "mS/cm",
+    }),
   );
   return {
     probes: 2,

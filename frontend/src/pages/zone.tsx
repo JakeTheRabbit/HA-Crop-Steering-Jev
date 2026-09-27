@@ -31,6 +31,7 @@ import { jevChip, TARGET_GROUPS } from "@/lib/targets";
 import { PROBE_TONE, zoneProbes } from "@/lib/probes";
 import type { Controller, Zone } from "@/lib/types";
 import { dayWord } from "@/lib/utils";
+import { waitingText } from "@/lib/waiting-for";
 import "./zone.css";
 
 const PHASE_NAMES: Record<string, string> = {
@@ -73,6 +74,10 @@ export function ZonePage({
     states[`select.crop_steering_${room.room.prefix}zone_${zone.id}_steering_mode`]?.state,
     readJev(states, room.room.prefix).room?.stage?.steering,
   );
+  // Jev on this zone shows while the room runs Jev (its journal, or its word on this zone).
+  const jev =
+    !!readJev(states, room.room.prefix).log ||
+    !!parseJevZone(states[jevIds(room.room.prefix).zone(zone.id)]);
   return (
     <div className="zone-page" data-zone-page={zone.id}>
       <div className="zone-page-bar">
@@ -132,14 +137,18 @@ export function ZonePage({
         )}
       </div>
       <ZoneDay key={zone.id} controller={controller} zone={zone} />
+      {/* Why it did what it did beside what happens next: Jev's decisions and the probes on the
+          left, the controller's next step, the controls and the targets on the right. Without Jev
+          the controls join the probes, so the columns stay about even. */}
       <div className="zone-page-grid">
         <div className="zone-page-column">
-          <JevOnZone controller={controller} zone={zone} navigate={navigate} />
-          <ZoneTargets controller={controller} zone={zone} navigate={navigate} />
+          {jev && <JevOnZone controller={controller} zone={zone} navigate={navigate} />}
+          <ZoneProbes controller={controller} zone={zone} navigate={navigate} />
+          {!jev && <ZoneControls key={zone.id} controller={controller} zone={zone} />}
         </div>
         <div className="zone-page-column">
-          <ZoneProbes controller={controller} zone={zone} navigate={navigate} />
-          <ZoneControls key={zone.id} controller={controller} zone={zone} />
+          {jev && <ZoneControls key={zone.id} controller={controller} zone={zone} />}
+          <ZoneTargets controller={controller} zone={zone} navigate={navigate} />
         </div>
       </div>
       <HistoryChart
@@ -435,12 +444,21 @@ function ZoneControls({ controller, zone }: { controller: Controller; zone: Zone
   const connected = ["live", "demo"].includes(controller.connection);
   const pauseWords =
     "Paused, the zone gets no water at all, not even a rescue shot, and a shot already running in it stops within a few seconds. It is not an emergency stop: use the installation's physical shut-off for that.";
+  // The controller's own thresholds against the readings now: what moving a phase by hand skips.
+  const waiting = zone.waiting
+    ? waitingText(zone.waiting, { number: (value) => number(value), clock })
+    : "";
   return (
     <section className="panel zone-controls" aria-labelledby="zone-controls-title">
       <div className="panel-heading">
         <h2 id="zone-controls-title">Controls</h2>
       </div>
       <div className="zone-panel-body">
+        {waiting && (
+          <p className="zone-waiting">
+            <span>The controller waits for</span> {waiting}
+          </p>
+        )}
         <div className="zone-control-row">
           <span>
             Scheduling{" "}

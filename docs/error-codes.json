@@ -594,7 +594,7 @@
         "A zone the plan runs is not scheduled today."
       ],
       "fixes": [
-        "Open Irrigation plan → Schedule in the Crop Steering sidebar and read the reason.",
+        "Open Plan › Schedule in the Crop Steering sidebar and read the reason.",
         "If it stays in error, fix the cause, then disarm the plan and arm it again."
       ]
     },

@@ -310,11 +310,11 @@ export function Settings({
               )}
               <p className="small muted mt-3">
                 {water.available
-                  ? `For ${controller.room.room.name}: everyone who opens it sees water today this way, and the controller’s vitals notification follows it. `
+                  ? `For ${controller.room.room.name}: everyone who opens a zone’s page sees water today this way, and the controller’s vitals notification follows it. `
                   : "This needs the updated Crop Steering integration. "}
-                Per plant is each zone’s water today, and its daily limit, divided by its plant
-                count from Equipment › Setup, as if every plant got the same. Water use over the
-                grow stays in litres per zone.
+                Per plant is each zone’s water today divided by its plant count from Equipment ›
+                Setup, as if every plant got the same. Today compares the zones per plant either
+                way; water use over the grow stays in litres per zone.
               </p>
             </div>
           </div>

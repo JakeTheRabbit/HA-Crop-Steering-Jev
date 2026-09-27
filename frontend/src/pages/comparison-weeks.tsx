@@ -258,7 +258,12 @@ export function RunWeeks({
                     <tr key={index} data-current={mine?.current || undefined}>
                       <th scope="row">
                         Week {index + 1}
-                        {mine?.current && <Pill tone="water">This week</Pill>}
+                        {mine?.current && (
+                          <>
+                            {" "}
+                            <Pill tone="water">This week</Pill>
+                          </>
+                        )}
                         <small>
                           {mine
                             ? `${span(mine.first, mine.last)}${mine.recorded < mine.days ? ` · ${mine.recorded} of ${mine.days} days recorded` : ""}`

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Empty, number, time as clock } from "@/components/dashboard";
+import { dailyLimit, Empty, number, time as clock } from "@/components/dashboard";
 import { ageText, ageTone, readHeartbeat } from "@/lib/controller-health";
 import {
   athenaDryback,
@@ -56,7 +56,7 @@ import {
   type TimelineRows,
   type TypicalPoint,
 } from "@/lib/day-timeline";
-import { DRYBACK_WINDOW_H, drybackTrend } from "@/lib/dryback";
+import { budgetShare, DRYBACK_WINDOW_H, drybackTrend } from "@/lib/dryback";
 import { jevAnswer, jevResult, readJev, type JevEntry } from "@/lib/jev";
 import { descriptor, numeric } from "@/lib/model";
 import {
@@ -71,7 +71,7 @@ import { waitingText } from "@/lib/waiting-for";
 import type { Controller, Setting, Zone } from "@/lib/types";
 import { errorText } from "@/lib/utils";
 import { dailyWater, estimateRuntime, flowInputs, waterParameters } from "@/lib/water-delivery";
-import { plantAmount, zonePlants } from "@/lib/water-view";
+import { plantAmount, useWaterView, zonePlants } from "@/lib/water-view";
 import "./day-timeline.css";
 
 /** Each phase as the zone views name it, and as its chart column says it where there is room. */
@@ -641,6 +641,10 @@ function ZoneNumbers({
   const ec = bandStatus(zone.ec.value, band);
   const water = dailyWater(zone, zonePlants(controller, zone.id));
   const each = water.mlPerPlant === null ? null : plantAmount(water.mlPerPlant);
+  const { view } = useWaterView();
+  // Routine shots stop at the zone's daily limit: amber from 80 %.
+  const limit = dailyLimit(controller, zone.id);
+  const share = budgetShare(water.zoneL, limit);
   const lastShot = zone.lastIrrigation.timestamp ?? null;
   const next = lane && day ? nextWords(lane, day) : null;
   const dryback = lane?.dryback;
@@ -688,15 +692,36 @@ function ZoneNumbers({
             </dd>
           )}
         </div>
-        <div>
+        <div data-status={share !== null && share >= 80 ? "above" : undefined}>
           <dt>Water today</dt>
-          <dd>
-            {number(water.zoneL)}
-            {water.zoneL !== null && <span className="unit"> L</span>}
-          </dd>
-          {each && (
-            <dd className="zone-sub">
-              {number(each.value, each.digits)} {each.unit}/plant
+          {/* The room's choice (Settings › Appearance) leads; the other reading sits under it. */}
+          {view === "plant" && each ? (
+            <>
+              <dd>
+                {number(each.value, each.digits)}
+                <span className="unit"> {each.unit}/plant</span>
+              </dd>
+              <dd className="zone-sub">{number(water.zoneL)} L in the zone</dd>
+            </>
+          ) : (
+            <>
+              <dd>
+                {number(water.zoneL)}
+                {water.zoneL !== null && <span className="unit"> L</span>}
+              </dd>
+              {each && (
+                <dd className="zone-sub">
+                  {number(each.value, each.digits)} {each.unit}/plant
+                </dd>
+              )}
+            </>
+          )}
+          {share !== null && (
+            <dd
+              className="zone-sub"
+              title="Routine shots stop at the zone's daily water limit; ramp, rescue and watchdog shots and high-EC flushes can go past it"
+            >
+              {number(share, 0)}% of the {number(limit)} L limit
             </dd>
           )}
         </div>

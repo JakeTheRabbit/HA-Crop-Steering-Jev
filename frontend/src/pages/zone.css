@@ -295,6 +295,18 @@
   font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
+.zone-waiting {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: var(--muted);
+  line-height: 1.5;
+}
+.zone-waiting > span {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
 .zone-control-row {
   display: flex;
   flex-wrap: wrap;

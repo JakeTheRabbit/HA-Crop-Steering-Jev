@@ -175,8 +175,7 @@
   stroke: var(--border);
   stroke-width: 0.8;
 }
-.comparison-legend,
-.comparison-actions {
+.comparison-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;

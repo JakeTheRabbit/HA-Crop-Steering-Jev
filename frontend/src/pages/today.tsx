@@ -67,9 +67,8 @@ function excludedProbes(entity: EntityState | undefined, kind: "vwc" | "ec") {
 /** A shot in P3 is a rescue: the controller waters overnight only below the rescue floor. */
 const isRescue = (event: LogEvent) =>
   event.zoneId !== undefined &&
-  event.type !== "warning" &&
-  /\bP3\b|rescue|emergency/i.test(event.message) &&
-  /shot|fired|water|rescue|emergency/i.test(event.message);
+  event.type === "water" &&
+  /\bP3\b|rescue|emergency/i.test(event.message);
 
 /** When the zone's last shot was, the short way: its time today, "yesterday 21:40", or its date. */
 function shotWhen(stamp: string | null, day: GrowDay | null, now: number): string {
@@ -335,24 +334,36 @@ function TodayStatus({
               : phases.join(" and ")}
           </span>
         )}
-        {alerts.length > 0 ? (
+        {notices.length > 0 && (
           <button
             type="button"
             className="today-alerts"
             data-severity={
-              alerts.some((notice) => notice.severity === "critical") ? "critical" : "warning"
+              alerts.some((notice) => notice.severity === "critical")
+                ? "critical"
+                : alerts.length
+                  ? "warning"
+                  : "info"
             }
             aria-expanded={open}
             aria-controls={listId}
             onClick={() => setOpen(!open)}
           >
-            <TriangleAlert size={14} aria-hidden="true" />
-            {alerts.length} {alerts.length === 1 ? "alert" : "alerts"}
+            {alerts.length > 0 ? (
+              <>
+                <TriangleAlert size={14} aria-hidden="true" />
+                {alerts.length} {alerts.length === 1 ? "alert" : "alerts"}
+              </>
+            ) : (
+              // Only notes (a grow plan in control, a shot running): no alert, but worth a look.
+              <>
+                No alerts · {notices.length} {notices.length === 1 ? "note" : "notes"}
+              </>
+            )}
             <ChevronDown size={14} aria-hidden="true" className="today-alerts-chevron" />
           </button>
-        ) : (
-          <span className="today-fact muted">No alerts</span>
         )}
+        {notices.length === 0 && <span className="today-fact muted">No alerts</span>}
       </p>
       {!room.roomActive && <RoomOffBanner controller={controller} />}
       {room.roomActive && (status.tone === "stopped" || status.tone === "stale") && (
@@ -679,7 +690,13 @@ function ZoneCard({
         <div>
           <dt>Last shot</dt>
           <dd>
-            {shotWhen(zone.lastIrrigation.timestamp, day, now)}
+            {zone.lastIrrigation.timestamp ? (
+              <time dateTime={zone.lastIrrigation.timestamp} data-last-irrigation={zone.id}>
+                {shotWhen(zone.lastIrrigation.timestamp, day, now)}
+              </time>
+            ) : (
+              shotWhen(zone.lastIrrigation.timestamp, day, now)
+            )}
             {zone.shots.value !== null && (
               <span className="muted">
                 {" · "}

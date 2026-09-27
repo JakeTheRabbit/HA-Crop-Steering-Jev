@@ -133,6 +133,9 @@
   font-weight: 650;
   line-height: 17px;
 }
+.dark .timeline-jev-tag {
+  color: color-mix(in srgb, #7c4dbc 50%, var(--foreground));
+}
 .timeline-jev-tag[data-by="you"] {
   background: color-mix(in srgb, var(--success) 14%, var(--surface));
   color: color-mix(in srgb, var(--success) 60%, var(--foreground));
