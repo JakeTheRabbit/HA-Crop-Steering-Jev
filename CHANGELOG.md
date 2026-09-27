@@ -9,6 +9,29 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-09-28
+
+Pair: **controller 3.1.0**. Class **C3**. One pull request (#5): every decision Jev makes is journalled with what the
+controller did with it, and published for the dashboard's live Jev log. The integration's code is unchanged; its
+version moves with the pair. Not run on hardware; checked by the lean and controller suites.
+
+### 🌱 In plain English
+
+- **Follow Jev live.** Every answer Jev gives is recorded with what the controller did about it: acted, refused
+  (and why), nothing to do, or waiting, plus how earlier actions turned out and whether an alert went to the phone
+  or stayed a card. The newest 30 per room are published for the dashboard's Jev log, and the room's Jev sensor
+  carries today's stage of flower as numbers for the day chart.
+
+### 🔧 Technical notes
+
+- `jev/journal.py`: `/data/jev_journal.jsonl` (the last 400 decisions, kept across restarts). `jev/brain.py`
+  journals each new answer once with its result on that pass, a later admission of a standing answer, and each
+  outcome; journalling never raises into the pass.
+- `jev_bridge.py`: `sensor.crop_steering_<prefix>jev_log` (state: the newest decision in one line; `entries`: the
+  last 30, newest first, free text capped under the recorder's 16 KB), `stage` on
+  `sensor.crop_steering_<prefix>jev` (day of flower, stage, steering, pore EC range, dryback points, runoff %),
+  and an alert's push-or-card call journalled whenever it changes.
+
 ## [3.0.1] - 2026-09-27
 
 Pair: **controller 3.0.1**. Class **C3**. One pull request (#3): Jev's zones judge compares each zone's water per
