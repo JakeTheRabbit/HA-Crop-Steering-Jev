@@ -149,7 +149,9 @@ class SetpointsJudge(Judge):
                                               "shots are bigger")
                 else:
                     e["pore_ec_calls_for"] = "nothing: pore EC is inside the stage's range"
-        rescues = [sh for sh in today if sh.kind in ("p3_emergency", "watchdog", "min_daily")]
+        # a rescue or the lights-on watchdog means the zone ran short; the minimum-daily floor fires routinely from
+        # lights-on, so it is not a safety event
+        rescues = [sh for sh in today if sh.kind in ("p3_emergency", "watchdog")]
         e["safety_shots_today"] = "none" if not rescues else ", ".join(f"{sh.kind} at {sh.start:%H:%M}" for sh in rescues)
         settings = []
         for suffix, label in ((SHOT, "P2 shot size"), (THRESHOLD, "re-waters under")):
