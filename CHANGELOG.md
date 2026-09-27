@@ -9,6 +9,28 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-09-27
+
+Pair: **controller 3.0.1**. Class **C3**. One pull request (#3): Jev's zones judge compares each zone's water per
+plant with the room's median zone, itself included, so only the odd zone out gets the CS-702 alert. Found on the
+work HA on 3.0.0's first live evening. An advice-only judge: no water decision changes. The integration's code is
+unchanged; its version moves with the pair. Not run on hardware; checked by the lean and controller suites (four new
+tests that fail on 3.0.0) and against the real Jev (14 of 14).
+
+### 🌱 In plain English
+
+- **Only the odd zone out is flagged.** The check of each zone's water per plant compared every zone with its
+  thirstiest neighbour, so when one zone had far more water than the rest, the others were flagged too and told of
+  a valve or dripper fault they did not have (F2, 27 Sep: zone 1 had 2477 mL a plant, zones 2 and 3 about 1000,
+  and all three were flagged). Each zone is now compared with the room's middle zone.
+
+### 🔧 Technical notes
+
+- `jev/judges/zones.py` `_ratio`: the comparison is `statistics.median` of every zone in the room, this zone
+  included (it was `others[len(others) // 2]`, the larger of two sorted siblings). A room of two zones compares each
+  zone with the other, as before. The evidence (`compared_with`, `share_of_that`) and the CS-702 message say what
+  the zone was compared with.
+
 ## [3.0.0] - 2026-09-27
 
 **The Jev edition.** Pair: **controller 3.0.0**. Class **C3**. This repository starts from Crop Steering 2.25.1 and
