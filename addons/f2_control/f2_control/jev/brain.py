@@ -155,7 +155,8 @@ class Brain:
                 self.ledger.resolve(entry["id"], result[0], result[1])
                 if self.journal is not None:
                     self.journal.add(jn.outcome(ctx.room, ctx.zone, entry["judge"], ctx.now, entry["label"],
-                                                result[0], result[1]))
+                                                result[0], result[1], of=entry.get("at"),
+                                                action=entry.get("action")))
 
     @staticmethod
     def _shown(st, d, why):

@@ -111,10 +111,24 @@ def decision(room, zone, judge, at, verdicts, directive, result, reason):
     }
 
 
-def outcome(room, zone, judge, at, label, what, good):
-    """An outcome entry: how an earlier action turned out."""
+def label_words(action, label):
+    """A ledger entry's action and label in plain words ("hold the EC steer", "smaller shots")."""
+    label = "" if label is None else str(label)
+    if action == "advance":
+        return ADVANCE.get(label, f"move to {label}")
+    if action == "ec_mode":
+        return EC_MODE.get(label, f"EC steer: {label}")
+    if action == "distrust":
+        return f"set the probe aside ({label.replace('_', ' ')})"
+    return label.replace("_", " ")
+
+
+def outcome(room, zone, judge, at, label, what, good, of=None, action=None):
+    """An outcome entry: how an earlier action turned out. `of` is the time of the decision it checks (the
+    decision entry's `t`), so the dashboard can show the outcome on that decision instead of as its own row."""
     return {
         "t": at.isoformat(timespec="seconds"), "room": room, "zone": zone, "judge": judge,
-        "title": TITLES.get(judge, judge), "kind": "outcome", "verdict": str(label), "p": None, "agreed": None,
+        "title": TITLES.get(judge, judge), "kind": "outcome", "verdict": label_words(action, label),
+        "of": of, "p": None, "agreed": None,
         "action": "", "result": "worked" if good else "did not work", "reason": str(what or "")[:120],
     }

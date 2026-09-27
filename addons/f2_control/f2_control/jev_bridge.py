@@ -6,6 +6,7 @@ zone is decided and watered by the base engine exactly as it would be without it
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 from datetime import datetime, timedelta
 
@@ -62,6 +63,8 @@ def build(options, cf, state_path, log):
     brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
     brain.journal = Journal(os.path.join(data, "jev_journal.jsonl"))
     brain.setpoints = SetpointMemory(os.path.join(data, "jev_setpoints.json"))
+    brain.usage_path = os.path.join(data, "jev_usage.json")
+    restore_usage(asker, brain.usage_path)
     brain.triage = Triage(asker) if "alerts" in allowed else None
     brain.flower_start = flower_option(options.get("jev_flower_start"))
     brain.flower_days = int(options.get("jev_flower_days") or 56)
@@ -307,6 +310,7 @@ def siblings(c, room, snaps, params, now):
         if v:
             out[zone] = v
     room._jev_sib = out
+    room._jev_params = params  # this pass's params, for the setpoints published with the zone's Jev sensor
 
 
 def stage_info(c, room, now):
@@ -348,14 +352,74 @@ def triaged(c, room, zone, key, code, title, push, why):
                  "result": "acted", "reason": str(title)[:120]})
 
 
+USAGE_KEYS = ("day", "calls", "errors", "input_tokens", "last_error")
+
+
+def restore_usage(asker, path):
+    """Today's call count survives a controller restart: the asker starts from what was saved, if it is today's."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        if saved.get("day") == datetime.fromtimestamp(asker.clock()).date().isoformat():
+            asker.stats.update({k: saved[k] for k in USAGE_KEYS if k in saved})
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass  # no usable file: the day's count starts from zero, as before
+
+
+def save_usage(brain):
+    path = getattr(brain, "usage_path", None)
+    s = brain.asker.stats
+    key = tuple(s.get(k) for k in USAGE_KEYS)
+    if not path or s.get("day") is None or brain.__dict__.get("_usage_saved") == key:
+        return
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({k: s.get(k) for k in USAGE_KEYS}, fh)
+        os.replace(tmp, path)
+        brain._usage_saved = key
+    except OSError:
+        pass
+
+
+def setpoints_published(c, room, zone, now, managed):
+    """What the dashboard shows of the Setpoints judge for a zone: the operator's values, Jev's range around them,
+    the current values, the last move and any pause. None without Jev's Setpoints judge or this pass's params."""
+    mem = getattr(c.jev, "setpoints", None)
+    p = (room.__dict__.get("_jev_params") or {}).get(zone)
+    if mem is None or p is None or not owns_setpoints(c):
+        return None
+    rec = mem.zone(room.slug, zone)
+    offset = float(room.state[zone].get("ec_offset") or 0.0)  # the EC steer's offset is baked into the threshold
+    current = {SHOT: round(float(p.p2_shot_size), 2), THRESHOLD: round(float(p.p2_threshold) - offset, 2)}
+    home = {s: float(rec["home"].get(s, v)) for s, v in current.items()}
+    frozen = rec.get("frozen_until")
+    last = rec.get("last") or {}
+    return {
+        "managed": bool(managed), "home": home, "current": current,
+        "range": {s: [round(x, 2) for x in setpoint_band(s, home[s], p)] for s in current},
+        "last": None if not last else f"{last.get('at', '')[:16].replace('T', ' ')}: {last.get('words')}"
+                                      + (" (put back after a rescue shot)" if last.get("reverted") else ""),
+        "paused_until": frozen if frozen and datetime.fromisoformat(frozen) > now else None,
+    }
+
+
 def publish(c, room, now, ha_set):
     brain = c.jev
     s = brain.asker.stats
+    managed = None
+    if owns_setpoints(c):
+        managed = (c._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
+                   and not getattr(room, "strategy_required", False))
     for zone in room.zones:
         status = brain.zone_status(room.slug, zone)
         acting = sorted(n for n, v in status.items() if v.get("directive") and not str(v.get("why", "")).startswith("refused"))
-        ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_jev", ", ".join(acting) or "watching",
-               {"judges": status, "friendly_name": f"Zone {zone} Jev", "engine": "f2-control"})
+        attrs = {"judges": status, "friendly_name": f"Zone {zone} Jev", "engine": "f2-control"}
+        sp = setpoints_published(c, room, zone, now, managed)
+        if sp is not None:
+            attrs["setpoints"] = sp
+        ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_jev", ", ".join(acting) or "watching", attrs)
+    save_usage(brain)
     ha_set(f"sensor.crop_steering_{room.prefix}jev", "error" if s.get("last_error") and not s.get("last_call") else "on",
            {"calls_today": s.get("calls"), "input_tokens_today": s.get("input_tokens"),
             "errors_today": s.get("errors"), "last_error": s.get("last_error"),
