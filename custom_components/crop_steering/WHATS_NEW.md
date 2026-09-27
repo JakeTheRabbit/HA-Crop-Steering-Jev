@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.3.0 - 2026-09-28
+
+- Today's grow day is redrawn in the style of Athena's charts: one clear chart per zone, its numbers above it, the stage's targets on top.
+- Jev's decisions now show live: what it answered, what it asked for, and what the controller did about it.
+- Jev also knows Athena's crop-steering guide now, alongside your own doctrine, which still leads.
+- Bug fixes and improvements.
+
 ## 3.2.0 - 2026-09-28
 
 - With Auto setpoints on, Jev may nudge each zone's maintenance shot size or re-water point one small step a night.

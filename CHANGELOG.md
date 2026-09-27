@@ -9,6 +9,41 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-09-28
+
+Pair: **controller 3.3.0**. Class **C3**. Two pull requests: #7 (C3), Athena's Grow Guide Handbook as a second cited
+source in Jev's doctrine; #10 (C1), the dashboard's grow day redrawn in Athena's chart language and Jev's decisions
+shown live. Not run on hardware; checked by the lean, controller, dashboard and browser suites and against the
+real Jev (17 of 17).
+
+### 🌱 In plain English
+
+- **A grow day you can read at a glance.** "Today's grow day" follows Athena's charts: the stage and its targets on
+  one line at the top, then a card per zone with its numbers (moisture, pore EC against the stage's range, water
+  today, shots, what comes next, last night's dryback against the target) and one clean chart: the light cycle,
+  the phases P0-P3, field capacity, the runoff zone for the zone's steering, moisture with every shot on the line,
+  pore EC with the stage's range, and Jev's decisions marked where they happened.
+- **Jev's decisions, live.** The latest five sit under the charts and every decision is on the Activity page: what
+  Jev answered and how sure it was, what it asked for, and what the controller did (acted, refused and why, advice,
+  nothing), with how earlier actions turned out.
+- **Jev knows Athena's crop-steering guide too.** Alongside your own GrowLabs pages, every question now carries
+  Athena's handbook: when the first shot should come after lights-on, why the ramp uses small shots, how bigger or
+  smaller maintenance shots move root-zone EC, Athena's drybacks and targets for each stage, runoff targets, where
+  the probe goes and how to check it against caught runoff. Your pages still come first, and where the two differ
+  your stage arc wins.
+
+### 🔧 Technical notes
+
+- `jev/doctrine.py` (#7): Athena's Grow Guide Handbook (metric, Precision Irrigation Strategy, pp. 33-41) as a second
+  cited source, 24 rules after the owner's in ramp, dryback, maintenance, EC, stage, probe, closed loop and slab
+  (123 in all); the last dryback rule says the owner's arc leads where the two differ.
+- Dashboard (#10): an Athena-style SVG chart per zone (light band, phase columns and badges, FC line, runoff zone by
+  steering, maintenance band over P1/P2, rescue floor over P3, VWC with shot dots and projection, pore EC on a right
+  axis with the stage band, Jev markers), a numbers row per zone, a stage line from the room's Jev sensor, a y-axis
+  fitted to the zone, 7-8 legend items; `lib/jev-log.ts` and `components/jev-log.tsx` (compact list on the
+  Overview, full panel with filters on Activity), `jev`/`jev_log` among the watched sensors so a first post shows
+  live. Bundles rebuilt (three identical copies).
+
 ## [3.2.0] - 2026-09-28
 
 Pair: **controller 3.2.0**. Class **C3**. One pull request (#6): the Setpoints judge. Once a night Jev may move one
