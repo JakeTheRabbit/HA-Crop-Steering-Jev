@@ -1664,6 +1664,14 @@ class Controller:
         planned = bool(getattr(room, "strategy_required", False))
         jev_state = room.__dict__.setdefault("_jev_state", {})
         jev = jev_state.get(zone, "ok") if (self._cf[0] and self._cf[1]) else "disabled"
+        # With Jev's Setpoints judge running, the switch hands the zone's setpoints to it (jev_bridge): this
+        # learner still learns and reports, but never writes and never consults the old per-hour judge, so a
+        # zone never has two writers (26 Sep 2026: this learner walked zone 1's shot to 1 %).
+        if jev_bridge.owns_setpoints(self):
+            jev = "disabled"
+            writes = False
+        else:
+            writes = enabled and not planned
         was = learn["outcome"]
         outcome = auto_setpoints.ramp_outcome(learn, st["phase"])
         if outcome != was:
@@ -1690,7 +1698,7 @@ class Controller:
         # size (pore EC) and the working peak, one bounded step per lever per grow-day. It cannot fire,
         # size or delay a shot, and a call that fails or takes too long changes nothing.
         stamp = now.strftime("%Y-%m-%dT%H")
-        if (enabled and not planned and jev != "disabled" and lights_on and st["phase"] == "P2"
+        if (writes and jev != "disabled" and lights_on and st["phase"] == "P2"
                 and auto_setpoints.jev_due(learn, stamp)):
             verdict = jev_policy.verdicts(jev_policy.call(
                 self._cf[0], self._cf[1],
@@ -1703,7 +1711,7 @@ class Controller:
                 self._auto_write(room, zone, suffix, p.p2_shot_size, value, learn, now, by="Jev")
             log(f"[{room.slug}] Z{zone} Jev P2: {learn['jev']['last']}")
             self._save_state()
-        if enabled and not planned:
+        if writes:
             current = {
                 "p1_target_vwc": p.p1_target, "field_capacity": p.field_capacity,
                 "p2_vwc_threshold": self._zone_num(room, zone, "p2_vwc_threshold", 45, optional=True),
@@ -1729,6 +1737,8 @@ class Controller:
         if enabled and planned:
             state, attrs["frozen_reason"] = "frozen", "an armed grow plan owns this room's targets"
         suffixes = auto_setpoints.MANAGED + (auto_setpoints.JEV_MANAGED if jev != "disabled" else ())
+        if jev_bridge.owns_setpoints(self):
+            attrs["managed_by"] = "Jev's Setpoints judge (P2 shot size and re-water threshold, one notch a night)"
         attrs.update(
             jev=jev, jev_last=learn["jev"]["last"], jev_changed_today=learn["jev"]["changed"],
             working_peak_adjust=learn["peak_adj"],
