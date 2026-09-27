@@ -225,7 +225,7 @@ The buttons open the right screen; Home Assistant still asks you to confirm each
 
 | You want to | Do this |
 | --- | --- |
-| Stop Jev changing setpoints | Plan › Targets → **Turn auto off…**. The values stay where they are until you change them. |
+| Stop Jev changing setpoints | Use **Turn auto off…** in Plan › Targets. The values stay where they are until you change them. |
 | Change a value Jev manages | Type your own value in Plan › Targets. It becomes the new centre of Jev's range. |
 | Stop one kind of decision | App option `jev_judges`: list the ones to keep, such as `dawn,ramp,salt,probe,shot,night,zones,stage,setpoints,alerts` (everything except `dusk`, the Day end question). |
 | Switch Jev off completely | App option `jev_enabled` off, then restart the app. The controller runs as the original. |
