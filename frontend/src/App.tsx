@@ -342,6 +342,7 @@ export default function App() {
                 drafts={drafts}
                 setDrafts={setDrafts}
                 selectedZone={focusZone}
+                navigate={navigate}
               />
             )}
             {page === "plan/schedule" && (

@@ -130,6 +130,8 @@
   font-size: var(--text-sm);
 }
 .rw-table th[scope="row"] {
+  color: var(--foreground);
+  font-size: var(--text-sm);
   font-weight: 650;
   white-space: nowrap;
 }

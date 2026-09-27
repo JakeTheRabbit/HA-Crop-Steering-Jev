@@ -62,6 +62,11 @@ export const TARGET_GROUPS: readonly TargetGroup[] = [
   },
 ];
 
+/** The setting groups Equipment › Setup keeps (model.ts group()): what the substrate holds, what turns
+ * a shot's percentage into litres and seconds, and the limits that hold or add watering. Targets
+ * keeps the rest. */
+export const SETUP_GROUPS: readonly string[] = ["Substrate", "Hardware sizing", "Safety"];
+
 /** How far Jev may move a target tonight, as the chip beside it says: "Jev · 4–6 %". Null for a
  * target Jev does not manage on this zone, or while it does not manage any. */
 export function jevChip(setpoints: JevSetpoints | null, key: string, unit: string): string | null {
