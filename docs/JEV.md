@@ -91,6 +91,11 @@ out, so a judge can never raise anything the list does not explain.
 
 ## What it shows
 
+The dashboard reads these live. The Overview's grow day marks each decision above its zone's chart
+(filled when code acted) and puts today's stage in its top line, with the latest five decisions under
+the charts; **Activity → Jev decisions** lists all of them, by zone or actions only, with today's calls,
+tokens and cost. A room without Jev shows none of it.
+
 - `sensor.crop_steering_<prefix>zone_N_jev`: the judges acting on the zone (or `watching`), and per judge its
   latest verdicts (answer, probability, whether both phrasings agreed), the directive, and why code admitted or
   refused it.

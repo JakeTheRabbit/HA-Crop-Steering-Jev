@@ -3,6 +3,7 @@ import { Download, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Empty, EventType, Heading, time } from "@/components/dashboard";
+import { JevDecisions } from "@/components/jev-log";
 import type { Controller } from "@/lib/types";
 
 export function ActivityPage({ controller }: { controller: Controller }) {
@@ -153,6 +154,7 @@ export function ActivityPage({ controller }: { controller: Controller }) {
         Showing records exposed by the selected controller. Home Assistant’s full logbook may
         contain additional history.
       </p>
+      <JevDecisions controller={controller} />
     </>
   );
 }

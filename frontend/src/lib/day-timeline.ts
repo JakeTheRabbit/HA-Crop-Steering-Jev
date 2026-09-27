@@ -101,8 +101,8 @@ const numberOf = (state: string): number | null => {
   return text && Number.isFinite(Number(text)) ? Number(text) : null;
 };
 
-/** What a room's day timeline reads, where it exists: each zone's phase, valve and VWC probe, the
- * room's setpoints, and the controller's decision with its attributes. */
+/** What a room's day timeline reads, where it exists: each zone's phase, valve, VWC and pore EC
+ * probes, the room's setpoints, and the controller's decision with its attributes. */
 export function timelineEntities(room: RoomView, states: States) {
   const root = `sensor.crop_steering_${room.room.prefix}`;
   const exists = (id: string | null): id is string => !!id && !!states[id];
@@ -111,10 +111,11 @@ export function timelineEntities(room: RoomView, states: States) {
     phase: `${root}zone_${zone.id}_phase`,
     valve: zone.valveEntity,
     vwc: zone.vwc.entityId,
+    ec: zone.ec.entityId,
   }));
   const decision = `${root}current_decision`;
   const ids = [
-    ...zones.flatMap((zone) => [zone.phase, zone.valve, zone.vwc]),
+    ...zones.flatMap((zone) => [zone.phase, zone.valve, zone.vwc, zone.ec]),
     ...room.settings.map((setting) => setting.entityId),
   ];
   return {
@@ -579,7 +580,11 @@ export function compareDays(
 }
 
 export type TargetKey =
-  "dryback_target" | "p1_target_vwc" | "p2_vwc_threshold" | "p3_emergency_vwc_threshold";
+  | "dryback_target"
+  | "p1_target_vwc"
+  | "p2_vwc_threshold"
+  | "p3_emergency_vwc_threshold"
+  | "field_capacity";
 const PHASE_TARGET: Record<string, TargetKey> = {
   P0: "dryback_target",
   P1: "p1_target_vwc",

@@ -1,4 +1,4 @@
-import type { TimelineRequest, TimelineRow, TimelineRows } from "./day-timeline";
+import { growDay, type TimelineRequest, type TimelineRow, type TimelineRows } from "./day-timeline";
 import type { EntityState, LogEvent, Series, States } from "./types";
 import type { CounterSample, WaterRecordRequest } from "./water-use";
 import { addDays, daysBetween } from "./comparison";
@@ -243,8 +243,271 @@ export function createDemo(now = Date.now()): States {
     put(`sensor.crop_steering_${prefix}activity_log`, "Demo activity", {
       events: events.sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
     });
+    // Flower 2 runs Jev; Flower 1 is a room without it.
+    if (!index) demoJev(put, prefix, now);
   }
   return states;
+}
+/** Naive local time, as the controller stamps its journal (Python's datetime.now().isoformat()). */
+const localStamp = (time: number) => {
+  const date = new Date(time),
+    two = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+};
+/** A day of Jev's decisions for a room with lights 10:00-22:00 in flower bulk (vegetative): hours
+ * after lights-on, zone, judge, answer, how sure, both phrasings, what it asked for, what code did. */
+const JEV_DAY: [
+  number,
+  number | null,
+  string,
+  string,
+  number | null,
+  boolean | null,
+  string,
+  string,
+  string,
+][] = [
+  [0.2, 1, "dawn", "keep drying", 0.78, true, "", "no action", ""],
+  [0.3, 2, "probe", "healthy", 0.91, true, "", "no action", ""],
+  [
+    0.9,
+    3,
+    "dawn",
+    "start ramp now",
+    0.66,
+    true,
+    "start the ramp now",
+    "refused",
+    "dryback 3.2% under half the target (4.0%) and only 38 of 60 min waited",
+  ],
+  [
+    1.35,
+    1,
+    "dawn",
+    "start ramp now",
+    0.84,
+    true,
+    "start the ramp now",
+    "acted",
+    "P0 far enough along",
+  ],
+  [2.6, 2, "ramp", "keep ramping", 0.74, true, "", "no action", ""],
+  [
+    3.2,
+    1,
+    "ramp",
+    "slab full",
+    0.81,
+    true,
+    "hand over to maintenance",
+    "acted",
+    "ramp near its ceiling with the minimum shots in",
+  ],
+  [3.3, 3, "ramp", "probe lagging", 0.55, false, "", "no action", ""],
+  [
+    4.2,
+    1,
+    "ramp",
+    "slab full",
+    null,
+    null,
+    "",
+    "worked",
+    "VWC held within a point of the peak for the hour after the hand-over",
+  ],
+  [
+    4.4,
+    2,
+    "salt",
+    "below band vegetative",
+    0.72,
+    true,
+    "hold the EC steer",
+    "acted",
+    "the EC steer stays inside its own clamp",
+  ],
+  [4.8, 3, "shot", "landed", 0.93, true, "", "no action", ""],
+  [
+    5,
+    2,
+    "stage",
+    "ec below band",
+    0.68,
+    true,
+    "CS-705: this zone is off the stage's arc",
+    "acted",
+    "alerts never move water",
+  ],
+  [
+    5.02,
+    2,
+    "alerts",
+    "first of its kind today",
+    null,
+    null,
+    "CS-705: card only",
+    "acted",
+    "this zone is off the stage's arc",
+  ],
+  [
+    5.5,
+    3,
+    "salt",
+    "salts accumulating",
+    0.63,
+    true,
+    "let the EC steer work",
+    "acted",
+    "the EC steer stays inside its own clamp",
+  ],
+  [6.3, 1, "zones", "recipe difference", 0.7, true, "", "no action", ""],
+  [
+    6.9,
+    null,
+    "alerts",
+    "not urgent, stock lasts a week",
+    null,
+    null,
+    "CS-608: card only",
+    "acted",
+    "Stock tanks running low",
+  ],
+  [
+    7.5,
+    3,
+    "salt",
+    "salts accumulating",
+    null,
+    null,
+    "",
+    "did not work",
+    "pore EC still rising 0.2 an hour two hours later",
+  ],
+  [8.2, 1, "dusk", "continue p2", 0.77, true, "", "no action", ""],
+  [
+    9.6,
+    2,
+    "dusk",
+    "enter p3 now",
+    0.61,
+    true,
+    "end the day's watering",
+    "refused",
+    "the zone is steered vegetative: its watering stops late (owner's doctrine)",
+  ],
+  [12.5, 1, "night", "real drying", 0.88, true, "", "no action", ""],
+  [16, 3, "night", "real drying", 0.9, true, "", "no action", ""],
+];
+/** The controller's Jev sensors for a demo room: its usage and stage (flower day 37, the bulk), the
+ * decision log over today and yesterday, and what each judge last said about each zone. */
+function demoJev(
+  put: (id: string, state: string | number, attributes?: Record<string, unknown>) => void,
+  prefix: string,
+  now: number,
+) {
+  const day = growDay(10, 22, now)!;
+  const hours = (now - day.start) / 3_600_000;
+  const titles: Record<string, string> = {
+    dawn: "Morning start",
+    ramp: "Ramp hand-over",
+    salt: "Pore EC",
+    dusk: "Day end",
+    probe: "Probe trust",
+    shot: "Shot landing",
+    night: "Night low",
+    zones: "Zone comparison",
+    stage: "Stage arc",
+    alerts: "Alert triage",
+  };
+  // Yesterday ran a little differently: fewer calls, a few minutes later.
+  const days = [
+    { start: day.start - 86_400_000 + 9 * 60_000, keep: (index: number) => index % 3 !== 1 },
+    { start: day.start, keep: () => true },
+  ];
+  const entries = days
+    .flatMap(({ start, keep }) =>
+      JEV_DAY.filter((_, index) => keep(index)).map(
+        ([hour, zone, judge, verdict, p, agreed, action, result, reason]) => ({
+          time: start + hour * 3_600_000,
+          entry: {
+            t: localStamp(start + hour * 3_600_000),
+            zone,
+            judge,
+            title: titles[judge],
+            kind: result === "worked" || result === "did not work" ? "outcome" : "decision",
+            verdict,
+            p,
+            agreed,
+            action,
+            result,
+            reason,
+          },
+        }),
+      ),
+    )
+    .filter((item) => item.time <= now)
+    .sort((a, b) => b.time - a.time)
+    .slice(0, 30)
+    .map((item) => item.entry);
+  const newest = entries[0];
+  put(
+    `sensor.crop_steering_${prefix}jev_log`,
+    newest
+      ? `${newest.t.slice(11, 16)} ${newest.zone === null ? "" : `Z${newest.zone} `}${newest.title}: ${newest.verdict} -> ${newest.action || newest.result}`
+      : "no decisions yet",
+    { entries, friendly_name: "Jev decisions", engine: "f2-control" },
+  );
+  const calls = Math.round(4 + 2.6 * Math.min(24, hours));
+  put(`sensor.crop_steering_${prefix}jev`, "on", {
+    calls_today: calls,
+    input_tokens_today: calls * 3_050,
+    errors_today: hours > 5 ? 1 : 0,
+    last_error:
+      hours > 5 ? "TimeoutError: Workers AI did not answer within 30 s (asked again)" : null,
+    judges: ["alerts", "dawn", "dusk", "night", "probe", "ramp", "salt", "shot", "stage", "zones"],
+    judge_errors: {},
+    stage: {
+      day: 37,
+      days: 56,
+      name: "flower bulk",
+      steering: "vegetative",
+      stage_days: [22, 42],
+      peak: "at or above field capacity",
+      pore_ec: [3.5, 6.0],
+      dryback_points: [10, 15],
+      runoff_pct: [8, 16],
+    },
+    friendly_name: "Jev",
+    engine: "f2-control",
+  });
+  const judge = (answer: string, p: number, directive: string | null, why: string) => ({
+    verdicts: { main: { answer, p, agreed: true } },
+    directive,
+    why,
+    streak: 1,
+  });
+  put(`sensor.crop_steering_${prefix}zone_1_jev`, "watching", {
+    judges: { dusk: judge("continue_p2", 0.77, null, "no action") },
+    friendly_name: "Zone 1 Jev",
+    engine: "f2-control",
+  });
+  put(`sensor.crop_steering_${prefix}zone_2_jev`, "salt", {
+    judges: {
+      salt: judge(
+        "below_band_vegetative",
+        0.72,
+        "ec_mode hold",
+        "the EC steer stays inside its own clamp",
+      ),
+    },
+    friendly_name: "Zone 2 Jev",
+    engine: "f2-control",
+  });
+  put(`sensor.crop_steering_${prefix}zone_3_jev`, "watching", {
+    judges: { shot: judge("landed", 0.93, null, "no action") },
+    friendly_name: "Zone 3 Jev",
+    engine: "f2-control",
+  });
 }
 /** The demo controller reports in like a running one, so it never reads as stopped. */
 export function demoBeat(states: States, now = Date.now()): States {
@@ -514,7 +777,11 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
       ] as const;
       put(`sensor.crop_steering_${prefix}zone_${zone}_phase`, [
         { state: "P3", time: request.start },
-        ...phases.map(([hour, state]) => ({ state, time: at(hour) })),
+        // Lights-on moves every zone to P0 at once; the rest follows the zone's own day.
+        ...phases.map(([hour, state]) => ({
+          state,
+          time: state === "P0" ? request.start + hour * 3_600_000 : at(hour),
+        })),
       ]);
       const hold = !prefix && zone === 2 ? [2.5, 2.7] : null;
       const disabled = prefix && zone === 3 ? 6 : Infinity;
@@ -559,15 +826,19 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
           { time: at(disabled), zone, list: "blocked", text: "P2 zone disabled" },
           { time: at(p3), zone, list: "blocked", text: null },
         );
-      // Every day on one curve that ends at the live reading, so an earlier day joins up with today.
-      const recorded = demoHistory(states, [vwc], (now - request.start) / 3_600_000, now);
-      put(
-        vwc,
-        (recorded[0]?.points ?? []).map((point) => ({
-          state: String(point.value),
-          time: Date.parse(point.time),
-        })),
-      );
+      // Every day on one curve that ends at the live reading, so an earlier day joins up with today;
+      // pore EC on the same day, concentrating as the slab dries and easing as it is watered.
+      const ec = `sensor.crop_steering_${prefix}ec_zone_${zone}`;
+      for (const probe of wanted.has(ec) ? [vwc, ec] : [vwc]) {
+        const recorded = demoHistory(states, [probe], (now - request.start) / 3_600_000, now);
+        put(
+          probe,
+          (recorded[0]?.points ?? []).map((point) => ({
+            state: String(point.value),
+            time: Date.parse(point.time),
+          })),
+        );
+      }
     }
     if (!prefix) {
       moved("number.crop_steering_zone_1_p1_target_vwc", 66, request.start + 0.4 * 3_600_000);

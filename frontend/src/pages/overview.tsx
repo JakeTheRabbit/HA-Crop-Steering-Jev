@@ -89,7 +89,18 @@ export function Overview({
         waterLimits={limits}
         waterPlants={plants}
       />
-      <DayTimeline controller={controller} />
+      <DayTimeline
+        controller={controller}
+        openJevLog={() => {
+          navigate("activity");
+          // The Activity page renders on this click; its Jev panel sits below the records.
+          window.setTimeout(() => {
+            const panel = document.getElementById("jev-decisions");
+            panel?.scrollIntoView({ block: "start" });
+            panel?.focus({ preventScroll: true });
+          }, 0);
+        }}
+      />
       <div className="overview-grid">
         <section className="panel">
           <div className="panel-heading">
