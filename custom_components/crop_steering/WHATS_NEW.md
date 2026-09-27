@@ -19,6 +19,11 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.0.1 - 2026-09-27
+
+- When one zone gets far more water than the others, only that zone is flagged now; its neighbours no longer hear of a fault they don't have.
+- Bug fixes and improvements.
+
 ## 3.0.0 - 2026-09-27
 
 - Jev now judges what the controller decided by fixed rules: when the ramp starts and ends, when watering stops, why pore EC moved, and probe trust.

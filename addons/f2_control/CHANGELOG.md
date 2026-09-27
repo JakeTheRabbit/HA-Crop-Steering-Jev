@@ -1,3 +1,7 @@
+# 3.0.1
+
+Pair with integration 3.0.1. **C3.** Jev's zones judge compares each zone's water per plant with the room's median zone, itself included, instead of its thirstiest sibling, so only the odd zone out gets the CS-702 alert (#3). Advice only: no water decision changes. No change to add-on options or the state file. Not run on hardware.
+
 # 3.0.0
 
 The Jev edition. Pair with integration 3.0.0. **C3.** Jev judges the engine's decisions inside a code envelope (docs/JEV.md); with no Jev key it runs exactly as 2.25.1. New options: `typesafe_api_key`, `jev_enabled`, `jev_judges`, `jev_daily_calls`, `jev_flower_start`, `jev_flower_days`. No state-file change. Not run on hardware.
