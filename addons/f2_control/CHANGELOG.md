@@ -1,3 +1,7 @@
+# 3.4.1
+
+Pair with integration 3.4.1. **C1.** The app's documentation page describes Jev and its options, and the install guide's buttons add this repository (#16); the dashboard demo shows Jev's re-water range as the controller bands it (#15). No change to the controller, its options or the state file. Not run on hardware.
+
 # 3.4.0
 
 Pair with integration 3.4.0. **C3.** Jev's Pore EC judge is asked only while EC stacking is on; journal outcomes name their decision (`of`) in words; the day's Jev usage survives restarts (`/data/jev_usage.json`); each zone's Jev sensor publishes its `setpoints` range (#12). The dashboard is rebuilt to five pages (#13). No change to add-on options or the state file. Not run on hardware.
