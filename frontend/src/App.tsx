@@ -42,8 +42,8 @@ import { AppHeader } from "@/components/app-header";
 import { PageTabs, pageLabel, SECTION_LABELS } from "@/components/page-tabs";
 import { WaterViewProvider } from "@/lib/water-view";
 import { WhatsNewOnUpdate } from "@/components/whats-new";
-import { RoomOffBanner } from "@/components/room-controls";
 import { Overview } from "@/pages/overview";
+import { Today } from "@/pages/today";
 import { Strategy, type Drafts } from "@/pages/strategy";
 import { ActivityPage } from "@/pages/activity";
 import { Sensors } from "@/pages/sensors";
@@ -316,13 +316,15 @@ export default function App() {
                 )}
               </div>
             )}
-            <RoomOffBanner controller={controller} />
             <PageTabs
               page={page}
               navigate={(next) => navigate(next)}
               badges={{ "plan/targets": Object.keys(drafts).length }}
             />
-            {(page === "today" || page === "zone") && (
+            {page === "today" && (
+              <Today key={pageKey} controller={controller} navigate={navigate} />
+            )}
+            {page === "zone" && (
               <Overview key={pageKey} controller={controller} navigate={navigate} />
             )}
             {page === "plan/targets" && (

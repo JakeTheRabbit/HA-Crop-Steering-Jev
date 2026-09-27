@@ -17,6 +17,7 @@ import {
 import {
   createDemo,
   demoBeat,
+  demoClock,
   demoDay,
   demoHistory,
   demoReact,
@@ -65,7 +66,7 @@ export class ControllerStore {
   private historyAborters = new Set<AbortController>();
   constructor(demo = typeof window !== "undefined" && isDemoLocation(window.location)) {
     this.demo = demo;
-    this.states = demo ? createDemo() : {};
+    this.states = demo ? demoClock(createDemo()) : {};
     this.connection = demo ? "demo" : "connecting";
     if (demo)
       this.operatorDemo = new OperatorDemo(
@@ -171,7 +172,7 @@ export class ControllerStore {
   refresh = async () => {
     if (this.demo) {
       this.updated = Date.now();
-      this.states = demoBeat(this.states, this.updated);
+      this.states = demoClock(demoBeat(this.states, this.updated), this.updated);
       this.publish();
       return;
     }

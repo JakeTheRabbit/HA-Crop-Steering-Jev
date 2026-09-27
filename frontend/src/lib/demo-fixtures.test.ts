@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDemo } from "./demo";
+import { createDemo, demoClock } from "./demo";
 import { OperatorDemo } from "./operator-demo";
 import { RunDemo, demoHistoryWindow, demoTimeZone } from "./comparison-demo";
 import { buildComparisonTarget } from "./comparison-target";
@@ -137,6 +137,40 @@ describe("isolated example recipes", () => {
     expect(writes).toBe(0);
   });
 });
+describe("the demo keeps the clock", () => {
+  const at = (hour: number) => new Date(2026, 8, 28, hour, 0).getTime();
+  const phases = (states: ReturnType<typeof createDemo>) =>
+    [1, 2, 3].map((zone) => states[`sensor.crop_steering_zone_${zone}_phase`].state);
+  it("puts every zone in P3 with nothing firing from lights-off to lights-on, and back by day", () => {
+    const night = demoClock(createDemo(at(2)), at(2));
+    expect(phases(night)).toEqual(["P3", "P3", "P3"]);
+    expect(night["sensor.crop_steering_current_decision"].attributes.fired).toEqual([]);
+    expect(night["switch.demo_valve_1"].state).toBe("off");
+    expect(night["sensor.crop_steering_zone_1_waiting_for_app"].state).toBe("P3");
+    // Flower 1's lights run 8-20, so at 21:00 it is night there and still evening in Flower 2.
+    const evening = demoClock(createDemo(at(21)), at(21));
+    expect(evening["sensor.crop_steering_f1_zone_1_phase"].state).toBe("P3");
+    expect(phases(evening)).toEqual(["P1", "P2", "P2"]);
+    const day = demoClock(night, at(16));
+    expect(phases(day)).toEqual(["P1", "P2", "P2"]);
+    expect(day["sensor.crop_steering_current_decision"].attributes.fired).toEqual([
+      "Z1 P1 ramp shot 3/6 (demo)",
+    ]);
+  });
+  it("leaves a change made in the demo alone until the lights next change", () => {
+    const day = demoClock(createDemo(at(16)), at(16));
+    const picked = {
+      ...day,
+      "sensor.crop_steering_zone_1_phase": {
+        ...day["sensor.crop_steering_zone_1_phase"],
+        state: "P2",
+      },
+    };
+    expect(demoClock(picked, at(17))["sensor.crop_steering_zone_1_phase"].state).toBe("P2");
+    expect(demoClock(picked, at(23))["sensor.crop_steering_zone_1_phase"].state).toBe("P3");
+  });
+});
+
 describe("synthetic current and previous run examples", () => {
   it("seeds bounded room-scoped current, previous and archived records without replacing later edits", () => {
     const states = createDemo(now),

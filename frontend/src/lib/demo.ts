@@ -127,7 +127,7 @@ export function createDemo(now = Date.now()): States {
         friendly_name: `${name} Zone ${id} VWC`,
         unit_of_measurement: "%",
       });
-      put(`${base}ec_zone_${id}`, (2.6 + id * 0.2 + index * 0.3).toFixed(1), {
+      put(`${base}ec_zone_${id}`, demoEc(index, id).toFixed(1), {
         friendly_name: `${name} Zone ${id} EC`,
         unit_of_measurement: "mS/cm",
       });
@@ -147,7 +147,7 @@ export function createDemo(now = Date.now()): States {
         at: new Date(now).toISOString(),
         conditions: demoWaiting(id === 1 ? "P1" : "P2", {
           vwc: 54 + id * 2 + index * 3,
-          ec: Number((2.6 + id * 0.2 + index * 0.3).toFixed(1)),
+          ec: Number(demoEc(index, id).toFixed(1)),
           peak: 64 + index * 2,
           trigger: 61 + index * 2,
           ecTarget: index ? 3.5 : 3,
@@ -248,6 +248,10 @@ export function createDemo(now = Date.now()): States {
   }
   return states;
 }
+/** A demo zone's pore EC. Flower 2 is in the bulk (3.5-6): zone 1 reads under that band, as the
+ * owner's own zone 1 did, and the others sit inside it. */
+const demoEc = (room: number, zone: number) =>
+  room ? 2.9 + zone * 0.2 : ([2.8, 4.4, 4.1][zone - 1] ?? 4.2);
 /** Naive local time, as the controller stamps its journal (Python's datetime.now().isoformat()). */
 const localStamp = (time: number) => {
   const date = new Date(time),
@@ -255,7 +259,9 @@ const localStamp = (time: number) => {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
 };
 /** A day of Jev's decisions for a room with lights 10:00-22:00 in flower bulk (vegetative): hours
- * after lights-on, zone, judge, answer, how sure, both phrasings, what it asked for, what code did. */
+ * after lights-on, zone, judge, answer, how sure, both phrasings, what it asked for, what code did,
+ * code's why, and for an outcome the hour of the decision it checks (its answer is then that
+ * decision's action, in words). */
 const JEV_DAY: [
   number,
   number | null,
@@ -266,6 +272,7 @@ const JEV_DAY: [
   string,
   string,
   string,
+  number?,
 ][] = [
   [0.2, 1, "dawn", "keep drying", 0.78, true, "", "no action", ""],
   [0.3, 2, "probe", "healthy", 0.91, true, "", "no action", ""],
@@ -308,12 +315,13 @@ const JEV_DAY: [
     4.2,
     1,
     "ramp",
-    "slab full",
+    "hand over to maintenance",
     null,
     null,
     "",
     "worked",
     "VWC held within a point of the peak for the hour after the hand-over",
+    3.2,
   ],
   [
     4.4,
@@ -376,12 +384,13 @@ const JEV_DAY: [
     7.5,
     3,
     "salt",
-    "salts accumulating",
+    "let the EC steer work",
     null,
     null,
     "",
     "did not work",
     "pore EC still rising 0.2 an hour two hours later",
+    5.5,
   ],
   [8.2, 1, "dusk", "continue p2", 0.77, true, "", "no action", ""],
   [
@@ -397,6 +406,30 @@ const JEV_DAY: [
   ],
   [12.5, 1, "night", "real drying", 0.88, true, "", "no action", ""],
   [16, 3, "night", "real drying", 0.9, true, "", "no action", ""],
+  // The Setpoints judge's nightly notch; yesterday's copy keeps it (index 21).
+  [
+    12.8,
+    3,
+    "setpoints",
+    "smaller shots",
+    0.7,
+    true,
+    "P2 shot 4.5% -> 4%",
+    "acted",
+    "inside Jev's range 3.5–5.5%",
+  ],
+  // Zone 2's re-water point set by hand (demoDay records it): Jev only notes it. Today only (22).
+  [
+    5.22,
+    2,
+    "setpoints",
+    "set by hand",
+    null,
+    null,
+    "p2 vwc threshold 62 -> 61",
+    "acted",
+    "your value is the new centre of Jev's range",
+  ],
 ];
 /** The controller's Jev sensors for a demo room: its usage and stage (flower day 37, the bulk), the
  * decision log over today and yesterday, and what each judge last said about each zone. */
@@ -418,6 +451,7 @@ function demoJev(
     zones: "Zone comparison",
     stage: "Stage arc",
     alerts: "Alert triage",
+    setpoints: "Setpoints",
   };
   // Yesterday ran a little differently: fewer calls, a few minutes later.
   const days = [
@@ -427,7 +461,7 @@ function demoJev(
   const entries = days
     .flatMap(({ start, keep }) =>
       JEV_DAY.filter((_, index) => keep(index)).map(
-        ([hour, zone, judge, verdict, p, agreed, action, result, reason]) => ({
+        ([hour, zone, judge, verdict, p, agreed, action, result, reason, of]) => ({
           time: start + hour * 3_600_000,
           entry: {
             t: localStamp(start + hour * 3_600_000),
@@ -441,6 +475,7 @@ function demoJev(
             action,
             result,
             reason,
+            ...(of === undefined ? {} : { of: localStamp(start + of * 3_600_000) }),
           },
         }),
       ),
@@ -464,7 +499,19 @@ function demoJev(
     errors_today: hours > 5 ? 1 : 0,
     last_error:
       hours > 5 ? "TimeoutError: Workers AI did not answer within 30 s (asked again)" : null,
-    judges: ["alerts", "dawn", "dusk", "night", "probe", "ramp", "salt", "shot", "stage", "zones"],
+    judges: [
+      "alerts",
+      "dawn",
+      "dusk",
+      "night",
+      "probe",
+      "ramp",
+      "salt",
+      "setpoints",
+      "shot",
+      "stage",
+      "zones",
+    ],
     judge_errors: {},
     stage: {
       day: 37,
@@ -486,8 +533,26 @@ function demoJev(
     why,
     streak: 1,
   });
+  // What the Setpoints judge may move on each zone tonight: the grower's own value is the middle of
+  // each range. Zone 3's shot size was notched down last night (the journal's 22:48 entry); zone 2's
+  // re-water point was set by hand today, so its range follows it.
+  const notch = localStamp(days[0].start + 12.8 * 3_600_000)
+    .slice(0, 16)
+    .replace("T", " ");
+  const setpoints = (zone: number) => {
+    const shot = zone === 3 ? 4.5 : 4;
+    return {
+      managed: true,
+      home: { p2_shot_size: shot, p2_vwc_threshold: 61 },
+      range: { p2_shot_size: [shot - 1, shot + 1], p2_vwc_threshold: [59.5, 62.5] },
+      current: { p2_shot_size: 4, p2_vwc_threshold: 61 },
+      last: zone === 3 ? `${notch}: P2 shot 4.5% -> 4%` : null,
+      paused_until: null,
+    };
+  };
   put(`sensor.crop_steering_${prefix}zone_1_jev`, "watching", {
     judges: { dusk: judge("continue_p2", 0.77, null, "no action") },
+    setpoints: setpoints(1),
     friendly_name: "Zone 1 Jev",
     engine: "f2-control",
   });
@@ -500,14 +565,111 @@ function demoJev(
         "the EC steer stays inside its own clamp",
       ),
     },
+    setpoints: setpoints(2),
     friendly_name: "Zone 2 Jev",
     engine: "f2-control",
   });
   put(`sensor.crop_steering_${prefix}zone_3_jev`, "watching", {
-    judges: { shot: judge("landed", 0.93, null, "no action") },
+    judges: {
+      shot: judge("landed", 0.93, null, "no action"),
+      setpoints: judge("smaller_shots", 0.7, "setpoint p2_shot_size 4", "inside Jev's range"),
+    },
+    setpoints: setpoints(3),
     friendly_name: "Zone 3 Jev",
     engine: "f2-control",
   });
+}
+/** The demo's controller keeps the clock as a real one does: from lights-off to lights-on every zone
+ * is in P3 with nothing firing, its valve shut and only a rescue shot possible; by day the demo's own
+ * day returns (zone 1 ramping, the others in maintenance). It changes a room only when its lights
+ * do, so what someone changes in the demo (a phase picked by hand) stays until then. */
+export function demoClock(states: States, now = Date.now()): States {
+  let next: States | null = null;
+  let base: States | null = null;
+  for (const config of Object.values(states)) {
+    if (!/^sensor\.crop_steering_.*engine_config$/.test(config.entity_id)) continue;
+    const prefix = String(config.attributes.prefix ?? "");
+    const root = `sensor.crop_steering_${prefix}`;
+    const day = growDay(
+      numeric(states[`number.crop_steering_${prefix}lights_on_hour`]),
+      numeric(states[`number.crop_steering_${prefix}lights_off_hour`]),
+      now,
+    );
+    const decision = states[`${root}current_decision`];
+    if (!day || !decision) continue;
+    const night = now >= day.lightsOff;
+    if (decision.attributes.demo_night === night) continue;
+    base ??= createDemo(now);
+    const out = (next ??= { ...states });
+    const stamp = new Date(now).toISOString();
+    const set = (id: string, state: string, attributes?: Record<string, unknown>) => {
+      if (!out[id]) return;
+      out[id] = {
+        ...out[id],
+        state,
+        attributes: attributes ?? out[id].attributes,
+        last_changed: stamp,
+        last_updated: stamp,
+      };
+    };
+    const valves = (config.attributes.valves ?? {}) as Record<string, string>;
+    for (let zone = 1; zone <= Number(config.attributes.num_zones); zone++) {
+      const z = `${root}zone_${zone}_`;
+      for (const id of [
+        `${z}phase`,
+        `${z}status`,
+        `${z}waiting_for_app`,
+        `${z}last_irrigation_app`,
+        valves[zone],
+      ])
+        if (id && base[id] && !night) set(id, base[id].state, base[id].attributes);
+      if (!night) continue;
+      set(`${z}phase`, "P3");
+      // The day's last maintenance shot, two hours or so before lights-off (demoDay's day).
+      set(
+        `${z}last_irrigation_app`,
+        new Date(day.lightsOff - 2.25 * 3_600_000 - zone * 3 * 60_000).toISOString(),
+      );
+      set(`${z}status`, "Overnight dryback — rescue only", { reason: "demo" });
+      if (valves[zone]) set(valves[zone], "off");
+      set(`${z}waiting_for_app`, "P3", {
+        at: stamp,
+        conditions: [
+          {
+            rule: "p3_emergency",
+            shot: true,
+            to: null,
+            metric: "vwc",
+            op: "<",
+            value: numeric(
+              states[`number.crop_steering_${prefix}zone_${zone}_p3_emergency_vwc_threshold`],
+            ),
+            now: numeric(states[`${root}vwc_zone_${zone}`]),
+          },
+          {
+            rule: "lights_on",
+            shot: false,
+            to: "P0",
+            in_min: Math.round((day.end - now) / 60_000),
+          },
+        ],
+      });
+    }
+    const pump = typeof config.attributes.pump === "string" ? config.attributes.pump : "";
+    if (night) {
+      set(pump, "off");
+      set(`${root}current_decision`, "Holding — all zones in band", {
+        fired: [],
+        blocked: [],
+        demo_night: true,
+      });
+    } else {
+      if (base[pump]) set(pump, base[pump].state);
+      const day = base[`${root}current_decision`];
+      set(`${root}current_decision`, day.state, { ...day.attributes, demo_night: false });
+    }
+  }
+  return next ?? states;
 }
 /** The demo controller reports in like a running one, so it never reads as stopped. */
 export function demoBeat(states: States, now = Date.now()): States {

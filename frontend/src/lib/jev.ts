@@ -30,6 +30,10 @@ export interface JevEntry {
   key: string;
   /** When Jev decided (epoch ms); null when the entry's time could not be read. */
   time: number | null;
+  /** The entry's time as the controller wrote it: what an outcome's `of` names. */
+  stamp: string;
+  /** An outcome: the `stamp` of the decision it checks ("" from a controller before 3.4). */
+  of: string;
   /** The zone it was about; null for the room (an alert-triage call without a zone). */
   zone: number | null;
   judge: string;
@@ -112,6 +116,8 @@ export function parseJevEntry(raw: unknown, index = 0): JevEntry | null {
   return {
     key: `${index}:${text(item.t)}:${judge}`,
     time: entryTime(item.t ?? item.time),
+    stamp: text(item.t ?? item.time),
+    of: outcome ? text(item.of) : "",
     zone: zoneOf(item.zone),
     judge,
     title: title.charAt(0).toUpperCase() + title.slice(1),
@@ -351,4 +357,130 @@ export function jevResult(entry: JevEntry): { label: string; tone: JevTone; acte
 export function jevAnswer(entry: Pick<JevEntry, "verdict" | "p">): string {
   const verdict = entry.verdict || "no answer";
   return entry.p === null ? verdict : `${verdict}, ${Math.round(entry.p * 100)}%`;
+}
+
+/** The two setpoints Jev's Setpoints judge may move on a zone. */
+export const JEV_SETPOINTS = ["p2_shot_size", "p2_vwc_threshold"] as const;
+export type JevSetpointKey = (typeof JEV_SETPOINTS)[number];
+export interface JevSetpoints {
+  /** Jev moves these setpoints tonight (Auto setpoints on, no grow plan holding them). */
+  managed: boolean;
+  /** The grower's own value: the middle of each range. */
+  home: Partial<Record<JevSetpointKey, number>>;
+  /** How far Jev may move each one. */
+  range: Partial<Record<JevSetpointKey, [number, number]>>;
+  current: Partial<Record<JevSetpointKey, number>>;
+  /** Jev's last change, in its own words ("2026-09-28 22:30: P2 shot 5% -> 4.5%"). */
+  last: string | null;
+  /** A rescue shot after a change put it back: Jev leaves the zone alone until then (epoch ms). */
+  pausedUntil: number | null;
+}
+/** A zone Jev sensor's `setpoints` attribute; null from a controller before it. */
+export function parseJevSetpoints(entity: EntityState | undefined): JevSetpoints | null {
+  const raw = entity?.attributes?.setpoints;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const item = raw as Record<string, unknown>;
+  const numbers = (value: unknown) =>
+    Object.fromEntries(
+      JEV_SETPOINTS.flatMap((key) => {
+        const number =
+          value && typeof value === "object"
+            ? finite((value as Record<string, unknown>)[key])
+            : null;
+        return number === null ? [] : [[key, number]];
+      }),
+    ) as Partial<Record<JevSetpointKey, number>>;
+  const ranges = Object.fromEntries(
+    JEV_SETPOINTS.flatMap((key) => {
+      const band =
+        item.range && typeof item.range === "object"
+          ? pair((item.range as Record<string, unknown>)[key])
+          : null;
+      return band ? [[key, band]] : [];
+    }),
+  ) as Partial<Record<JevSetpointKey, [number, number]>>;
+  const paused = item.paused_until ?? item.frozen_until;
+  return {
+    managed: item.managed === true,
+    home: numbers(item.home),
+    range: ranges,
+    current: numbers(item.current),
+    last: text(item.last) || null,
+    pausedUntil: paused === null || paused === undefined ? null : entryTime(paused),
+  };
+}
+
+/** What a decision changed, when it changed something: a phase brought forward, a setpoint moved, a
+ * probe set aside, the EC steer's mode, or an alert raised. Null for everything else (no action,
+ * waiting, refused, an outcome, and a setpoint the grower set by hand, which Jev only noted). */
+export type JevChange = "phase" | "setpoint" | "probe" | "ec" | "alert" | "other";
+export function jevChange(entry: JevEntry): JevChange | null {
+  if (entry.kind !== "decision") return null;
+  const action = entry.action.toLowerCase();
+  if (entry.result === "advice") return /^cs-\d+/.test(action) ? "alert" : null;
+  if (entry.result !== "acted" || !action) return null;
+  if (entry.judge === "alerts" || /^cs-\d+/.test(action)) return "alert";
+  if (entry.judge === "setpoints") return entry.verdict === "set by hand" ? null : "setpoint";
+  if (
+    /^(start the ramp|hand over to maintenance|end the day's watering|move to p[0-3])/.test(action)
+  )
+    return "phase";
+  if (action.startsWith("set the probe aside")) return "probe";
+  if (action.includes("ec steer")) return "ec";
+  return "other";
+}
+/** A change in a few words. An alert triage entry names its code, its title and how it was sent. */
+export function jevChangeText(entry: JevEntry): string {
+  if (entry.judge === "alerts") {
+    const [code, how] = entry.action.split(/:\s*/, 2);
+    return `${code}: ${entry.reason || "alert"}${how ? ` (${how})` : ""}`;
+  }
+  return entry.action.replaceAll("->", "→");
+}
+/** The decisions since `since` that changed something, newest first. One alert raised twice (by
+ * its judge, then by the triage that sent it) is one change. */
+export function jevChanges(entries: readonly JevEntry[], since: number): JevEntry[] {
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (entry.time === null || entry.time < since || !jevChange(entry)) return false;
+    const code = jevChange(entry) === "alert" ? entry.action.match(/^CS-\d+/i)?.[0] : undefined;
+    if (!code) return true;
+    const key = `${entry.zone}:${code.toUpperCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Outcome entries attached to the decision each checks: same judge and zone, and `of` naming the
+ * decision's time. `rest` keeps the entries, newest first, without the attached outcomes; an
+ * outcome that names no decision on the list stays in it, on a row of its own. */
+export function attachOutcomes(entries: readonly JevEntry[]): {
+  rest: JevEntry[];
+  outcomes: Map<string, JevEntry[]>;
+} {
+  const outcomes = new Map<string, JevEntry[]>();
+  const attached = new Set<JevEntry>();
+  const decisions = entries.filter((entry) => entry.kind === "decision");
+  for (const outcome of entries) {
+    if (outcome.kind !== "outcome" || !outcome.of) continue;
+    // To the minute or to the second: both name the same decision.
+    const at = entryTime(outcome.of) ?? entryTime(`${outcome.of}:00`);
+    const decision = decisions.find(
+      (entry) =>
+        entry.judge === outcome.judge &&
+        entry.zone === outcome.zone &&
+        (entry.stamp === outcome.of || (at !== null && entry.time === at)),
+    );
+    if (!decision) continue;
+    outcomes.set(decision.key, [...(outcomes.get(decision.key) ?? []), outcome]);
+    attached.add(outcome);
+  }
+  return { rest: entries.filter((entry) => !attached.has(entry)), outcomes };
+}
+/** An outcome in words for its badge: what it checked, and how it turned out. */
+export function outcomeText(outcome: JevEntry): string {
+  const worked = outcome.result === "worked";
+  const what = outcome.verdict ? `After “${outcome.verdict}”: ` : "";
+  return `${what}${worked ? "worked" : "did not work"}${outcome.reason ? `. ${outcome.reason}` : ""}`;
 }
