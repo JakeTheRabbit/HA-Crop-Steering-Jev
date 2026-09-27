@@ -570,10 +570,11 @@ function demoJev(
     why,
     streak: 1,
   });
-  // What the Setpoints judge may move on each zone tonight: the grower's own value is the middle of
-  // each range. Zone 3's shot size was notched down at its latest setpoint check (the journal's
-  // 22:48 entry, tonight's once it has run); zone 2's re-water point was set by hand today, so its
-  // range follows it.
+  // What the Setpoints judge may move on each zone tonight, around the grower's own value as the
+  // controller bands it: the shot size 1 % either side, the re-water point 2 under to 1 over.
+  // Zone 3's shot size was notched down at its latest setpoint check (the journal's 22:48 entry,
+  // tonight's once it has run); zone 2's re-water point was set by hand today, so its range
+  // follows it.
   const notch = localStamp(
     [days[1], days[0]].map((item) => item.start + 12.8 * 3_600_000).find((time) => time <= now)!,
   )
@@ -584,7 +585,7 @@ function demoJev(
     return {
       managed: true,
       home: { p2_shot_size: shot, p2_vwc_threshold: 61 },
-      range: { p2_shot_size: [shot - 1, shot + 1], p2_vwc_threshold: [59.5, 62.5] },
+      range: { p2_shot_size: [shot - 1, shot + 1], p2_vwc_threshold: [59, 62] },
       current: { p2_shot_size: 4, p2_vwc_threshold: 61 },
       last: zone === 3 ? `${notch}: P2 shot 4.5% -> 4%` : null,
       paused_until: null,
