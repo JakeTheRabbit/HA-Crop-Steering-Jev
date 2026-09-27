@@ -91,10 +91,14 @@ out, so a judge can never raise anything the list does not explain.
 
 ## What it shows
 
-The dashboard reads these live. The Overview's grow day marks each decision above its zone's chart
-(filled when code acted) and puts today's stage in its top line, with the latest five decisions under
-the charts; **Activity → Jev decisions** lists all of them, by zone or actions only, with today's calls,
-tokens and cost. A room without Jev shows none of it.
+The dashboard reads these live. **Today** puts today's stage in the room's line and lists what Jev changed
+today. Each zone's page marks every decision above its day chart (filled when code acted) and shows **Jev on
+this zone**: the range Jev may use for the P2 shot size and re-water point, and its latest decisions with the
+later check of how they worked. **Plan › Targets** puts Jev's range beside the values it manages, and **Plan ›
+Schedule** opens with the stage arc. **History › Timeline** lists every decision (the actions by default, all of
+them with **All Jev decisions**) with today's calls, tokens and cost, and **Equipment › Probes** says whether Jev
+is on. A room without Jev shows none of it. The [README](../README.md#the-dashboard-page-by-page) walks through
+each page with screenshots.
 
 - `sensor.crop_steering_<prefix>zone_N_jev`: the judges acting on the zone (or `watching`); `setpoints` (the
   operator's values, Jev's range around them, the current values, the last move and any pause, and whether the
