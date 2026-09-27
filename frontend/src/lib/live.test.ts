@@ -159,6 +159,23 @@ describe("watched entities", () => {
     expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_phase");
     expect(ids).not.toContain("sensor.crop_steering_f1_zone_2_jev");
   });
+  it("includes each probe a zone's combined reading names, used or left out", () => {
+    const ids = watchedEntities({
+      ...home(),
+      ...states(
+        entity("sensor.crop_steering_vwc_zone_1", "58", {
+          used: ["sensor.z1_front_vwc"],
+          excluded: { "sensor.z1_back_vwc": "not reporting", "sensor.gone": "no reading" },
+        }),
+        entity("sensor.z1_front_vwc", "58.8"),
+        entity("sensor.z1_back_vwc", "57.2"),
+      ),
+    });
+    expect(ids).toContain("sensor.z1_front_vwc");
+    expect(ids).toContain("sensor.z1_back_vwc");
+    // A probe Home Assistant does not have would make it reject the whole subscription.
+    expect(ids).not.toContain("sensor.gone");
+  });
   it("is empty without crop-steering entities, so nothing subscribes to all of Home Assistant", () => {
     expect(watchedEntities(states(entity("light.kitchen", "on")))).toEqual([]);
   });
@@ -501,6 +518,76 @@ describe("inside Home Assistant", () => {
         end: 1,
       }),
     ).rejects.toThrow("limited to the selected room");
+    store.stop();
+  });
+  const EC = "sensor.crop_steering_ec_zone_1";
+  it("reads a run's daily lows and highs from long-term statistics over the websocket", async () => {
+    const { home, store } = await started();
+    const day = Date.UTC(2026, 7, 24);
+    home.connection.sendMessagePromise.mockImplementation(async () => ({
+      [VWC]: [
+        { start: day, end: day + 86_400_000, min: 55.2, max: 66.1 },
+        { start: day + 86_400_000, end: day + 2 * 86_400_000, min: 54.8, max: 65.9 },
+      ],
+      [EC]: [
+        { start: new Date(day).toISOString(), min: 3.9, max: 4.6 },
+        { start: day, min: null },
+      ],
+    }));
+    home.calls.length = 0;
+    const request = {
+      entityIds: [VWC, EC],
+      start: new Date(day).toISOString(),
+      end: new Date(day + 2 * 86_400_000).toISOString(),
+      timeZone: "UTC",
+    };
+    const ranges = await store.getSnapshot().dailyRanges(request);
+    expect(ranges.source).toBe("statistics");
+    expect(ranges.series).toEqual([
+      {
+        entityId: VWC,
+        daily: [
+          { date: "2026-08-24", records: 1, min: 55.2, max: 66.1 },
+          { date: "2026-08-25", records: 1, min: 54.8, max: 65.9 },
+        ],
+      },
+      { entityId: EC, daily: [{ date: "2026-08-24", records: 1, min: 3.9, max: 4.6 }] },
+    ]);
+    expect(home.connection.sendMessagePromise).toHaveBeenCalledWith({
+      type: "recorder/statistics_during_period",
+      start_time: request.start,
+      end_time: request.end,
+      statistic_ids: [VWC, EC],
+      period: "day",
+      types: ["min", "max"],
+    });
+    expect(home.calls).toEqual([]);
+    store.stop();
+  });
+  it("reads a sensor without statistics, and every sensor standalone, from recorded history", async () => {
+    const { home, store } = await started();
+    const end = Date.now(),
+      start = end - 3 * 86_400_000;
+    home.connection.sendMessagePromise.mockImplementation(async () => ({
+      [VWC]: [{ start, min: 55, max: 66 }],
+    }));
+    home.calls.length = 0;
+    const request = {
+      entityIds: [VWC, EC],
+      start: new Date(start).toISOString(),
+      end: new Date(end).toISOString(),
+      timeZone: "UTC",
+    };
+    const mixed = await store.getSnapshot().dailyRanges(request);
+    expect(mixed.source).toBe("statistics");
+    expect(mixed.series.map((item) => item.entityId)).toEqual([VWC, EC]);
+    expect(mixed.warnings.join(" ")).toContain(`No long-term statistics for ${EC}`);
+    expect(home.calls.some((call) => call.startsWith("GET history/period/"))).toBe(true);
+    delete (home.connection as { sendMessagePromise?: unknown }).sendMessagePromise;
+    expect((await store.getSnapshot().dailyRanges(request)).source).toBe("history");
+    await expect(
+      store.getSnapshot().dailyRanges({ ...request, entityIds: ["sensor.somewhere_else"] }),
+    ).rejects.toThrow();
     store.stop();
   });
   it("keeps a grow day to the selected room and one day", async () => {

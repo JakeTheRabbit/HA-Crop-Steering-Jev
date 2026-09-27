@@ -1,22 +1,21 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { JevDecisions } from "@/components/jev-log";
-import { createDemo } from "./demo";
 import {
-  filterJev,
+  attachOutcomes,
   jevAnswer,
+  jevChange,
+  jevChanges,
+  jevChangeText,
   jevCost,
   jevResult,
+  outcomeText,
   parseJevEntry,
   parseJevLog,
   parseJevRoom,
+  parseJevSetpoints,
   parseJevStage,
   parseJevZone,
-  type JevEntry,
 } from "./jev";
-import { buildRoom, discoverRooms } from "./model";
-import type { Controller, EntityState, States } from "./types";
+import type { EntityState } from "./types";
 
 const entity = (
   entity_id: string,
@@ -161,32 +160,6 @@ describe("the Jev log sensor", () => {
   });
 });
 
-describe("filtering the log", () => {
-  const entries = [
-    { ...decision, zone: 1, result: "acted" },
-    { ...decision, zone: 2, result: "no action", action: "" },
-    { ...decision, zone: null, judge: "alerts", result: "acted" },
-    { ...decision, zone: 2, result: "refused" },
-    { ...decision, zone: 1, kind: "outcome", result: "worked" },
-    { ...decision, zone: 3, result: "waiting" },
-  ].map((raw, index) => parseJevEntry(raw, index)!);
-  const zones = (list: JevEntry[]) => list.map((entry) => entry.zone);
-  it("by zone, or the room only", () => {
-    expect(zones(filterJev(entries, "all", false))).toEqual([1, 2, null, 2, 1, 3]);
-    expect(zones(filterJev(entries, 2, false))).toEqual([2, 2]);
-    expect(zones(filterJev(entries, "room", false))).toEqual([null]);
-  });
-  it("actions only: what did something or tried to, and how it turned out", () => {
-    expect(filterJev(entries, "all", true).map((entry) => entry.result)).toEqual([
-      "acted",
-      "acted",
-      "refused",
-      "worked",
-    ]);
-    expect(filterJev(entries, 3, true)).toEqual([]);
-  });
-});
-
 describe("the room's Jev sensor", () => {
   const stage = {
     day: 37,
@@ -301,45 +274,170 @@ describe("a zone's Jev sensor", () => {
   });
 });
 
-describe("the Jev decisions panel", () => {
-  const controller = (states: States, prefix: string) =>
-    ({
-      states,
-      room: buildRoom(
-        states,
-        discoverRooms(states).find((room) => room.prefix === prefix)!,
-      ),
-    }) as Controller;
-  const now = new Date(2026, 8, 28, 16, 0).getTime();
-  it("draws nothing for a room without the log", () => {
-    const states = createDemo(now);
-    const f1 = controller(states, "f1_");
-    expect(renderToStaticMarkup(createElement(JevDecisions, { controller: f1 }))).toBe("");
+describe("what changed something", () => {
+  const at = (hour: number, minute = 0) =>
+    `2026-09-28T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
+  const entry = (raw: Record<string, unknown>, index = 0) =>
+    parseJevEntry({ ...decision, ...raw }, index)!;
+  it("is a phase brought forward, a setpoint moved, a probe set aside, the EC steer's mode or an alert", () => {
+    expect(jevChange(entry({ judge: "dawn", action: "start the ramp now" }))).toBe("phase");
+    expect(jevChange(entry({ judge: "ramp", action: "hand over to maintenance" }))).toBe("phase");
+    expect(jevChange(entry({ judge: "dusk", action: "end the day's watering" }))).toBe("phase");
     expect(
-      renderToStaticMarkup(createElement(JevDecisions, { controller: f1, compact: true })),
-    ).toBe("");
+      jevChange(
+        entry({ judge: "setpoints", verdict: "smaller shots", action: "P2 shot 5% -> 4.5%" }),
+      ),
+    ).toBe("setpoint");
+    expect(jevChange(entry({ judge: "probe", action: "set the probe aside (reads flat)" }))).toBe(
+      "probe",
+    );
+    expect(jevChange(entry({ action: "hold the EC steer" }))).toBe("ec");
+    expect(jevChange(entry({ judge: "alerts", zone: null, action: "CS-608: card only" }))).toBe(
+      "alert",
+    );
+    expect(
+      jevChange(entry({ judge: "stage", action: "CS-705: this zone is off the stage's arc" })),
+    ).toBe("alert");
   });
-  it("lists the demo room's decisions: the latest five beside the grow day, all of them on Activity", () => {
-    const states = createDemo(now);
-    const f2 = controller(states, "");
-    const compact = renderToStaticMarkup(
-      createElement(JevDecisions, { controller: f2, compact: true, onViewAll: () => {} }),
+  it("is not an answer that asked for nothing, a refusal, an outcome, or the grower's own edit", () => {
+    expect(jevChange(entry({ result: "no action", action: "" }))).toBeNull();
+    expect(jevChange(entry({ result: "refused" }))).toBeNull();
+    expect(jevChange(entry({ result: "waiting" }))).toBeNull();
+    expect(jevChange(entry({ kind: "outcome", result: "worked", action: "" }))).toBeNull();
+    expect(
+      jevChange(
+        entry({ judge: "setpoints", verdict: "set by hand", action: "p2 shot size 5 -> 4" }),
+      ),
+    ).toBeNull();
+  });
+  it("lists today's changes newest first, one row per alert however many judges raised it", () => {
+    const log = parseJevLog(
+      entity("sensor.crop_steering_jev_log", "x", {
+        entries: [
+          {
+            ...decision,
+            t: at(15, 2),
+            zone: 2,
+            judge: "alerts",
+            title: "Alert triage",
+            action: "CS-705: card only",
+            reason: "this zone is off the stage's arc",
+          },
+          {
+            ...decision,
+            t: at(15),
+            zone: 2,
+            judge: "stage",
+            action: "CS-705: this zone is off the stage's arc",
+          },
+          { ...decision, t: at(14), zone: 1, result: "no action", action: "" },
+          { ...decision, t: at(12), zone: 1, judge: "ramp", action: "hand over to maintenance" },
+          {
+            ...decision,
+            t: "2026-09-27T21:00:00",
+            zone: 3,
+            judge: "dusk",
+            action: "end the day's watering",
+          },
+        ],
+      }),
+    )!;
+    const today = jevChanges(log.entries, new Date(2026, 8, 28, 10).getTime());
+    expect(today.map((item) => [item.judge, item.zone])).toEqual([
+      ["alerts", 2],
+      ["ramp", 1],
+    ]);
+    expect(jevChangeText(today[0])).toBe("CS-705: this zone is off the stage's arc (card only)");
+    expect(jevChangeText(today[1])).toBe("hand over to maintenance");
+  });
+});
+
+describe("an outcome, on the decision it checks", () => {
+  const log = (entries: Record<string, unknown>[]) =>
+    parseJevLog(entity("sensor.crop_steering_jev_log", "x", { entries }))!.entries;
+  const hold = { ...decision, t: "2026-09-28T01:56:00", zone: 3 };
+  const checked = {
+    ...decision,
+    t: "2026-09-28T05:56:00",
+    zone: 3,
+    kind: "outcome",
+    verdict: "hold the EC steer",
+    action: "",
+    result: "worked",
+    reason: "four hours after, pore EC read 3.95 (was 3.93)",
+    of: "2026-09-28T01:56:00",
+  };
+  it("is found by judge, zone and the decision's time, and leaves the list", () => {
+    const entries = log([hold, checked, { ...hold, zone: 1 }]);
+    const { rest, outcomes } = attachOutcomes(entries);
+    expect(rest.map((item) => [item.kind, item.zone])).toEqual([
+      ["decision", 3],
+      ["decision", 1],
+    ]);
+    const on = outcomes.get(rest[0].key)!;
+    expect(on.map((item) => item.result)).toEqual(["worked"]);
+    expect(outcomeText(on[0])).toBe(
+      "After “hold the EC steer”: worked. four hours after, pore EC read 3.95 (was 3.93)",
     );
-    expect(compact.match(/class="jev-row"/g)).toHaveLength(5);
-    expect(compact).toContain("View all");
-    const full = renderToStaticMarkup(createElement(JevDecisions, { controller: f2 }));
-    expect(full.match(/class="jev-row"/g)).toHaveLength(
-      (states["sensor.crop_steering_jev_log"].attributes.entries as unknown[]).length,
+    expect(outcomes.has(rest[1].key)).toBe(false);
+  });
+  it("matches a time written another way, and not another judge's or zone's decision", () => {
+    const { rest, outcomes } = attachOutcomes(log([hold, { ...checked, of: "2026-09-28T01:56" }]));
+    expect(rest).toHaveLength(1);
+    expect(outcomes.size).toBe(1);
+    expect(attachOutcomes(log([hold, { ...checked, judge: "dusk" }])).rest).toHaveLength(2);
+    expect(attachOutcomes(log([hold, { ...checked, zone: 2 }])).rest).toHaveLength(2);
+  });
+  it("stays a row of its own when it names no decision on the list, or none at all", () => {
+    const orphan = attachOutcomes(log([{ ...checked, of: "2026-09-27T01:00:00" }]));
+    expect(orphan.rest.map((item) => item.kind)).toEqual(["outcome"]);
+    const { of: _of, ...older } = checked;
+    const before = attachOutcomes(log([hold, older]));
+    expect(before.rest.map((item) => item.kind)).toEqual(["outcome", "decision"]);
+    expect(before.outcomes.size).toBe(0);
+  });
+});
+
+describe("the setpoints Jev manages on a zone", () => {
+  const zone = (setpoints: unknown) =>
+    parseJevSetpoints(entity("sensor.crop_steering_zone_1_jev", "watching", { setpoints }));
+  it("reads the range, the grower's home value and the last change", () => {
+    expect(
+      zone({
+        managed: true,
+        home: { p2_shot_size: 5.0, p2_vwc_threshold: 30.5 },
+        range: { p2_shot_size: [4.0, 6.0], p2_vwc_threshold: [28.5, 31.5] },
+        current: { p2_shot_size: 4.5, p2_vwc_threshold: 30.5 },
+        last: "2026-09-28 22:30: P2 shot 5% -> 4.5%",
+        paused_until: null,
+      }),
+    ).toEqual({
+      managed: true,
+      home: { p2_shot_size: 5, p2_vwc_threshold: 30.5 },
+      range: { p2_shot_size: [4, 6], p2_vwc_threshold: [28.5, 31.5] },
+      current: { p2_shot_size: 4.5, p2_vwc_threshold: 30.5 },
+      last: "2026-09-28 22:30: P2 shot 5% -> 4.5%",
+      pausedUntil: null,
+    });
+  });
+  it("reads a pause after a revert, in the controller's local time", () => {
+    expect(zone({ managed: true, paused_until: "2026-09-29T09:30:00" })!.pausedUntil).toBe(
+      new Date(2026, 8, 29, 9, 30).getTime(),
     );
-    for (const text of [
-      "Actions only",
-      "Refused",
-      "Advice",
-      "Didn’t work",
-      "Worked",
-      "input tokens",
-    ])
-      expect(full).toContain(text);
-    expect(full).toContain("both phrasings agreed");
+  });
+  it("keeps what is sound, and is null from a controller that does not publish it", () => {
+    expect(
+      zone({ managed: "yes", range: { p2_shot_size: [6, "4"], p2_vwc_threshold: [1] }, home: 5 }),
+    ).toEqual({
+      managed: false,
+      home: {},
+      range: { p2_shot_size: [4, 6] },
+      current: {},
+      last: null,
+      pausedUntil: null,
+    });
+    expect(zone(undefined)).toBeNull();
+    expect(zone("managed")).toBeNull();
+    expect(parseJevSetpoints(undefined)).toBeNull();
   });
 });

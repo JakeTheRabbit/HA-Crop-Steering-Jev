@@ -131,6 +131,32 @@ export function axisRange(
   return { min, max, step, ticks };
 }
 
+/** A zone's day on its two axes. VWC fits today's readings, today's projected rest of the day and
+ * the zone's own targets near them (field capacity, the maintenance band's edges, the rescue floor
+ * overnight): an earlier day drawn for comparison is clipped to that scale and never widens it, so
+ * yesterday's spike cannot squash today's line. Pore EC fits today's readings and the stage's band. */
+export function dayScales(input: {
+  today: readonly number[];
+  projection?: readonly number[];
+  targets: readonly (number | null | undefined)[];
+  ec: readonly number[];
+  ecBand: readonly [number, number] | null;
+}): { vwc: Axis | null; ec: Axis | null } {
+  return {
+    vwc: axisRange([...input.today, ...(input.projection ?? [])], input.targets, VWC_AXIS),
+    ec: axisRange(input.ec, input.ecBand ?? [], EC_AXIS),
+  };
+}
+
+/** Points of VWC the runoff zone spans beside field capacity. */
+export const RUNOFF_POINTS = 3;
+/** The runoff zone drawn with field capacity, as a thin band: just above it while steering
+ * vegetative (a shot past field capacity runs off), just under it while generative (Athena's
+ * generative runoff starts a little below). */
+export function runoffBand(fc: number, steering: Steering): [number, number] {
+  return steering === "vegetative" ? [fc, fc + RUNOFF_POINTS] : [fc - RUNOFF_POINTS, fc];
+}
+
 export interface Marker<T> {
   x: number;
   /** 0 on the plot's top edge, then one row down for each marker it would have touched. */

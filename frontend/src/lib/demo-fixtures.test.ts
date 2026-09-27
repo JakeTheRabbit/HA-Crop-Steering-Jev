@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDemo } from "./demo";
+import { createDemo, demoClock } from "./demo";
 import { OperatorDemo } from "./operator-demo";
 import { RunDemo, demoHistoryWindow, demoTimeZone } from "./comparison-demo";
 import { buildComparisonTarget } from "./comparison-target";
@@ -137,6 +137,60 @@ describe("isolated example recipes", () => {
     expect(writes).toBe(0);
   });
 });
+describe("the demo keeps the clock", () => {
+  const at = (hour: number) => new Date(2026, 8, 28, hour, 0).getTime();
+  const phases = (states: ReturnType<typeof createDemo>) =>
+    [1, 2, 3].map((zone) => states[`sensor.crop_steering_zone_${zone}_phase`].state);
+  it("puts every zone in P3 with nothing firing from lights-off to lights-on, and back by day", () => {
+    const night = demoClock(createDemo(at(2)), at(2));
+    expect(phases(night)).toEqual(["P3", "P3", "P3"]);
+    expect(night["sensor.crop_steering_current_decision"].attributes.fired).toEqual([]);
+    expect(night["switch.demo_valve_1"].state).toBe("off");
+    expect(night["sensor.crop_steering_zone_1_waiting_for_app"].state).toBe("P3");
+    // Flower 1's lights run 8-20, so at 21:00 it is night there and still evening in Flower 2.
+    const evening = demoClock(createDemo(at(21)), at(21));
+    expect(evening["sensor.crop_steering_f1_zone_1_phase"].state).toBe("P3");
+    expect(phases(evening)).toEqual(["P1", "P2", "P2"]);
+    const day = demoClock(night, at(16));
+    expect(phases(day)).toEqual(["P1", "P2", "P2"]);
+    expect(day["sensor.crop_steering_current_decision"].attributes.fired).toEqual([
+      "Z1 P1 ramp shot 3/6 (demo)",
+    ]);
+  });
+  it("ends the night's activity records with the day's watering, and each zone's move to P3", () => {
+    type Event = { timestamp: string; message: string; type: string };
+    const log = (states: ReturnType<typeof createDemo>) =>
+      states["sensor.crop_steering_activity_log"].attributes.events as Event[];
+    const night = log(demoClock(createDemo(at(2)), at(2)));
+    const lightsOff = new Date(2026, 8, 27, 22, 0).getTime();
+    expect(night.every((event) => Date.parse(event.timestamp) < lightsOff)).toBe(true);
+    expect(night.slice(0, 3).map((event) => event.message)).toEqual(
+      Array(3).fill("P2 → P3: the day's watering is done (demo)."),
+    );
+    // No shot after the move to P3.
+    const p3 = Math.min(...night.slice(0, 3).map((event) => Date.parse(event.timestamp)));
+    expect(
+      night.filter((event) => event.type === "water" && Date.parse(event.timestamp) > p3),
+    ).toEqual([]);
+    // By day, the demo's own records again.
+    expect(log(demoClock(demoClock(createDemo(at(2)), at(2)), at(16)))).toEqual(
+      log(createDemo(at(16))),
+    );
+  });
+  it("leaves a change made in the demo alone until the lights next change", () => {
+    const day = demoClock(createDemo(at(16)), at(16));
+    const picked = {
+      ...day,
+      "sensor.crop_steering_zone_1_phase": {
+        ...day["sensor.crop_steering_zone_1_phase"],
+        state: "P2",
+      },
+    };
+    expect(demoClock(picked, at(17))["sensor.crop_steering_zone_1_phase"].state).toBe("P2");
+    expect(demoClock(picked, at(23))["sensor.crop_steering_zone_1_phase"].state).toBe("P3");
+  });
+});
+
 describe("synthetic current and previous run examples", () => {
   it("seeds bounded room-scoped current, previous and archived records without replacing later edits", () => {
     const states = createDemo(now),
@@ -150,7 +204,7 @@ describe("synthetic current and previous run examples", () => {
     for (const document of documents) {
       expect(document.runs).toHaveLength(3);
       const [current, previous, archived] = document.runs;
-      expect(daysBetween(current.start_date, dateInZone(now, timeZone))).toBe(35);
+      expect(daysBetween(current.start_date, dateInZone(now, timeZone))).toBe(14);
       expect(daysBetween(previous.start_date, previous.end_date!)).toBe(55);
       expect(archived.archived).toBe(true);
       expect(

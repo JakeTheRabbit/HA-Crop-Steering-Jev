@@ -102,21 +102,29 @@ const numberOf = (state: string): number | null => {
 };
 
 /** What a room's day timeline reads, where it exists: each zone's phase, valve, VWC and pore EC
- * probes, the room's setpoints, and the controller's decision with its attributes. */
-export function timelineEntities(room: RoomView, states: States) {
+ * probes, the room's setpoints, and the controller's decision with its attributes. With `zoneId`,
+ * only that zone's (and the room's own setpoints). */
+export function timelineEntities(room: RoomView, states: States, zoneId?: number) {
   const root = `sensor.crop_steering_${room.room.prefix}`;
   const exists = (id: string | null): id is string => !!id && !!states[id];
-  const zones = room.zones.map((zone) => ({
-    id: zone.id,
-    phase: `${root}zone_${zone.id}_phase`,
-    valve: zone.valveEntity,
-    vwc: zone.vwc.entityId,
-    ec: zone.ec.entityId,
-  }));
+  const zones = room.zones
+    .filter((zone) => zoneId === undefined || zone.id === zoneId)
+    .map((zone) => ({
+      id: zone.id,
+      phase: `${root}zone_${zone.id}_phase`,
+      valve: zone.valveEntity,
+      vwc: zone.vwc.entityId,
+      ec: zone.ec.entityId,
+    }));
   const decision = `${root}current_decision`;
   const ids = [
     ...zones.flatMap((zone) => [zone.phase, zone.valve, zone.vwc, zone.ec]),
-    ...room.settings.map((setting) => setting.entityId),
+    ...room.settings
+      .filter(
+        (setting) =>
+          zoneId === undefined || setting.zoneId === undefined || setting.zoneId === zoneId,
+      )
+      .map((setting) => setting.entityId),
   ];
   return {
     zones,
@@ -325,11 +333,13 @@ export function valueAt(rows: TimelineRow[] = [], time: number): number | null {
 /** What the earlier grow-days are read from: each zone's VWC probe and valve, the lights hours
  * (a changed schedule moves a day's lights-on), the room switch (a room that was off has nothing to
  * compare) and, with its attributes, the room descriptor (its setup revision). */
-export function earlierEntities(room: RoomView, states: States) {
+export function earlierEntities(room: RoomView, states: States, zoneId?: number) {
   const root = `crop_steering_${room.room.prefix}`;
   const exists = (id: string | null | undefined): id is string => !!id && !!states[id];
   const ids = [
-    ...room.zones.flatMap((zone) => [zone.vwc.entityId, zone.valveEntity]),
+    ...room.zones
+      .filter((zone) => zoneId === undefined || zone.id === zoneId)
+      .flatMap((zone) => [zone.vwc.entityId, zone.valveEntity]),
     `number.${root}lights_on_hour`,
     `number.${root}lights_off_hour`,
     `switch.${root}room_active`,

@@ -126,11 +126,16 @@ export function createDemo(now = Date.now()): States {
       put(`${base}vwc_zone_${id}`, 54 + id * 2 + index * 3, {
         friendly_name: `${name} Zone ${id} VWC`,
         unit_of_measurement: "%",
+        ...(index ? {} : demoProbes(put, id, "vwc", 54 + id * 2)),
       });
-      put(`${base}ec_zone_${id}`, (2.6 + id * 0.2 + index * 0.3).toFixed(1), {
+      put(`${base}ec_zone_${id}`, demoEc(index, id).toFixed(1), {
         friendly_name: `${name} Zone ${id} EC`,
         unit_of_measurement: "mS/cm",
+        ...(index ? {} : demoProbes(put, id, "ec", demoEc(index, id))),
       });
+      // Zone 3's back EC probe stopped reporting three hours ago: its zone reads the front one.
+      if (!index && id === 3)
+        states["sensor.demo_z3_back_ec"].last_updated = new Date(now - 3 * 3_600_000).toISOString();
       put(`${base}${key}phase`, id === 1 ? "P1" : "P2");
       put(
         `${base}${key}status`,
@@ -147,7 +152,7 @@ export function createDemo(now = Date.now()): States {
         at: new Date(now).toISOString(),
         conditions: demoWaiting(id === 1 ? "P1" : "P2", {
           vwc: 54 + id * 2 + index * 3,
-          ec: Number((2.6 + id * 0.2 + index * 0.3).toFixed(1)),
+          ec: Number(demoEc(index, id).toFixed(1)),
           peak: 64 + index * 2,
           trigger: 61 + index * 2,
           ecTarget: index ? 3.5 : 3,
@@ -226,6 +231,7 @@ export function createDemo(now = Date.now()): States {
             0.1,
             "mS/cm",
           );
+      // Newest first: two maintenance shots, the hand-over to P2, and the ramp's last shot.
       for (let event = 0; event < 4; event++)
         events.push({
           id: `${prefix}${id}-${event}`,
@@ -233,10 +239,12 @@ export function createDemo(now = Date.now()): States {
           message:
             event === 0 && index && id === 3
               ? "Zone paused for routine probe inspection (demo)."
-              : event % 2 === 0
+              : event < 2
                 ? `Scheduled P2 maintenance shot: ${(0.8 + id * 0.1).toFixed(1)} L (demo).`
-                : "P1 → P2: target VWC reached (demo).",
-          type: event === 0 && index && id === 3 ? "warning" : event % 2 === 0 ? "water" : "phase",
+                : event === 2
+                  ? "P1 → P2: target VWC reached (demo)."
+                  : `P1 ramp shot 6/6: ${(0.5 + id * 0.1).toFixed(1)} L (demo).`,
+          type: event === 0 && index && id === 3 ? "warning" : event === 2 ? "phase" : "water",
           zoneId: id,
         });
     }
@@ -248,6 +256,39 @@ export function createDemo(now = Date.now()): States {
   }
   return states;
 }
+/** Flower 2's probes, front and back of each zone's row, and the combined sensor's attributes as
+ * the integration's fuse_probes publishes them (calculations.py): every probe used, except zone 3's
+ * back EC probe, which stopped reporting. */
+function demoProbes(
+  put: (id: string, state: string | number, attributes?: Record<string, unknown>) => void,
+  zone: number,
+  kind: "vwc" | "ec",
+  value: number,
+) {
+  const step = kind === "vwc" ? 0.8 : 0.15;
+  const ids = ["front", "back"].map((side) => `sensor.demo_z${zone}_${side}_${kind}`);
+  const out = kind === "ec" && zone === 3 ? ids[1] : null;
+  // The zone reads the mean of the probes it uses: with one left out, the other one's reading; the
+  // silent one kept its last, drifted reading.
+  const reading = (id: string, side: number) =>
+    id === out ? value + 0.75 : out ? value : value + (side ? -step : step);
+  ids.forEach((id, side) =>
+    put(id, reading(id, side).toFixed(kind === "ec" ? 2 : 1), {
+      friendly_name: `Zone ${zone} ${side ? "back" : "front"} ${kind === "vwc" ? "VWC" : "EC"}`,
+      unit_of_measurement: kind === "vwc" ? "%" : "mS/cm",
+    }),
+  );
+  return {
+    probes: 2,
+    used: ids.filter((id) => id !== out),
+    excluded: out ? { [out]: "not reporting" } : {},
+    spread: out ? 0 : Math.round(step * 200) / 100,
+  };
+}
+/** A demo zone's pore EC. Flower 2 is in the bulk (3.5-6): zone 1 reads under that band, as the
+ * owner's own zone 1 did, and the others sit inside it. */
+const demoEc = (room: number, zone: number) =>
+  room ? 2.9 + zone * 0.2 : ([2.8, 4.4, 4.1][zone - 1] ?? 4.2);
 /** Naive local time, as the controller stamps its journal (Python's datetime.now().isoformat()). */
 const localStamp = (time: number) => {
   const date = new Date(time),
@@ -255,7 +296,9 @@ const localStamp = (time: number) => {
   return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}T${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
 };
 /** A day of Jev's decisions for a room with lights 10:00-22:00 in flower bulk (vegetative): hours
- * after lights-on, zone, judge, answer, how sure, both phrasings, what it asked for, what code did. */
+ * after lights-on, zone, judge, answer, how sure, both phrasings, what it asked for, what code did,
+ * code's why, and for an outcome the hour of the decision it checks (its answer is then that
+ * decision's action, in words). */
 const JEV_DAY: [
   number,
   number | null,
@@ -266,6 +309,7 @@ const JEV_DAY: [
   string,
   string,
   string,
+  number?,
 ][] = [
   [0.2, 1, "dawn", "keep drying", 0.78, true, "", "no action", ""],
   [0.3, 2, "probe", "healthy", 0.91, true, "", "no action", ""],
@@ -308,12 +352,13 @@ const JEV_DAY: [
     4.2,
     1,
     "ramp",
-    "slab full",
+    "hand over to maintenance",
     null,
     null,
     "",
     "worked",
     "VWC held within a point of the peak for the hour after the hand-over",
+    3.2,
   ],
   [
     4.4,
@@ -376,12 +421,13 @@ const JEV_DAY: [
     7.5,
     3,
     "salt",
-    "salts accumulating",
+    "let the EC steer work",
     null,
     null,
     "",
     "did not work",
     "pore EC still rising 0.2 an hour two hours later",
+    5.5,
   ],
   [8.2, 1, "dusk", "continue p2", 0.77, true, "", "no action", ""],
   [
@@ -397,6 +443,30 @@ const JEV_DAY: [
   ],
   [12.5, 1, "night", "real drying", 0.88, true, "", "no action", ""],
   [16, 3, "night", "real drying", 0.9, true, "", "no action", ""],
+  // The Setpoints judge's nightly notch; yesterday's copy keeps it (index 21).
+  [
+    12.8,
+    3,
+    "setpoints",
+    "smaller shots",
+    0.7,
+    true,
+    "P2 shot 4.5% -> 4%",
+    "acted",
+    "inside Jev's range 3.5–5.5%",
+  ],
+  // Zone 2's re-water point set by hand (demoDay records it): Jev only notes it. Today only (22).
+  [
+    5.22,
+    2,
+    "setpoints",
+    "set by hand",
+    null,
+    null,
+    "p2 vwc threshold 62 -> 61",
+    "acted",
+    "your value is the new centre of Jev's range",
+  ],
 ];
 /** The controller's Jev sensors for a demo room: its usage and stage (flower day 37, the bulk), the
  * decision log over today and yesterday, and what each judge last said about each zone. */
@@ -418,6 +488,7 @@ function demoJev(
     zones: "Zone comparison",
     stage: "Stage arc",
     alerts: "Alert triage",
+    setpoints: "Setpoints",
   };
   // Yesterday ran a little differently: fewer calls, a few minutes later.
   const days = [
@@ -427,7 +498,7 @@ function demoJev(
   const entries = days
     .flatMap(({ start, keep }) =>
       JEV_DAY.filter((_, index) => keep(index)).map(
-        ([hour, zone, judge, verdict, p, agreed, action, result, reason]) => ({
+        ([hour, zone, judge, verdict, p, agreed, action, result, reason, of]) => ({
           time: start + hour * 3_600_000,
           entry: {
             t: localStamp(start + hour * 3_600_000),
@@ -441,6 +512,7 @@ function demoJev(
             action,
             result,
             reason,
+            ...(of === undefined ? {} : { of: localStamp(start + of * 3_600_000) }),
           },
         }),
       ),
@@ -464,7 +536,19 @@ function demoJev(
     errors_today: hours > 5 ? 1 : 0,
     last_error:
       hours > 5 ? "TimeoutError: Workers AI did not answer within 30 s (asked again)" : null,
-    judges: ["alerts", "dawn", "dusk", "night", "probe", "ramp", "salt", "shot", "stage", "zones"],
+    judges: [
+      "alerts",
+      "dawn",
+      "dusk",
+      "night",
+      "probe",
+      "ramp",
+      "salt",
+      "setpoints",
+      "shot",
+      "stage",
+      "zones",
+    ],
     judge_errors: {},
     stage: {
       day: 37,
@@ -486,8 +570,29 @@ function demoJev(
     why,
     streak: 1,
   });
+  // What the Setpoints judge may move on each zone tonight: the grower's own value is the middle of
+  // each range. Zone 3's shot size was notched down at its latest setpoint check (the journal's
+  // 22:48 entry, tonight's once it has run); zone 2's re-water point was set by hand today, so its
+  // range follows it.
+  const notch = localStamp(
+    [days[1], days[0]].map((item) => item.start + 12.8 * 3_600_000).find((time) => time <= now)!,
+  )
+    .slice(0, 16)
+    .replace("T", " ");
+  const setpoints = (zone: number) => {
+    const shot = zone === 3 ? 4.5 : 4;
+    return {
+      managed: true,
+      home: { p2_shot_size: shot, p2_vwc_threshold: 61 },
+      range: { p2_shot_size: [shot - 1, shot + 1], p2_vwc_threshold: [59.5, 62.5] },
+      current: { p2_shot_size: 4, p2_vwc_threshold: 61 },
+      last: zone === 3 ? `${notch}: P2 shot 4.5% -> 4%` : null,
+      paused_until: null,
+    };
+  };
   put(`sensor.crop_steering_${prefix}zone_1_jev`, "watching", {
     judges: { dusk: judge("continue_p2", 0.77, null, "no action") },
+    setpoints: setpoints(1),
     friendly_name: "Zone 1 Jev",
     engine: "f2-control",
   });
@@ -500,14 +605,141 @@ function demoJev(
         "the EC steer stays inside its own clamp",
       ),
     },
+    setpoints: setpoints(2),
     friendly_name: "Zone 2 Jev",
     engine: "f2-control",
   });
   put(`sensor.crop_steering_${prefix}zone_3_jev`, "watching", {
-    judges: { shot: judge("landed", 0.93, null, "no action") },
+    judges: {
+      shot: judge("landed", 0.93, null, "no action"),
+      setpoints: judge("smaller_shots", 0.7, "setpoint p2_shot_size 4", "inside Jev's range"),
+    },
+    setpoints: setpoints(3),
     friendly_name: "Zone 3 Jev",
     engine: "f2-control",
   });
+}
+/** The demo's controller keeps the clock as a real one does: from lights-off to lights-on every zone
+ * is in P3 with nothing firing, its valve shut and only a rescue shot possible; by day the demo's own
+ * day returns (zone 1 ramping, the others in maintenance). It changes a room only when its lights
+ * do, so what someone changes in the demo (a phase picked by hand) stays until then. */
+export function demoClock(states: States, now = Date.now()): States {
+  let next: States | null = null;
+  let base: States | null = null;
+  for (const config of Object.values(states)) {
+    if (!/^sensor\.crop_steering_.*engine_config$/.test(config.entity_id)) continue;
+    const prefix = String(config.attributes.prefix ?? "");
+    const root = `sensor.crop_steering_${prefix}`;
+    const day = growDay(
+      numeric(states[`number.crop_steering_${prefix}lights_on_hour`]),
+      numeric(states[`number.crop_steering_${prefix}lights_off_hour`]),
+      now,
+    );
+    const decision = states[`${root}current_decision`];
+    if (!day || !decision) continue;
+    const night = now >= day.lightsOff;
+    if (decision.attributes.demo_night === night) continue;
+    base ??= createDemo(now);
+    const out = (next ??= { ...states });
+    const stamp = new Date(now).toISOString();
+    const set = (id: string, state: string, attributes?: Record<string, unknown>) => {
+      if (!out[id]) return;
+      out[id] = {
+        ...out[id],
+        state,
+        attributes: attributes ?? out[id].attributes,
+        last_changed: stamp,
+        last_updated: stamp,
+      };
+    };
+    const valves = (config.attributes.valves ?? {}) as Record<string, string>;
+    for (let zone = 1; zone <= Number(config.attributes.num_zones); zone++) {
+      const z = `${root}zone_${zone}_`;
+      for (const id of [
+        `${z}phase`,
+        `${z}status`,
+        `${z}waiting_for_app`,
+        `${z}last_irrigation_app`,
+        valves[zone],
+      ])
+        if (id && base[id] && !night) set(id, base[id].state, base[id].attributes);
+      if (!night) continue;
+      set(`${z}phase`, "P3");
+      // The day's last maintenance shot, two hours or so before lights-off (demoDay's day).
+      set(
+        `${z}last_irrigation_app`,
+        new Date(day.lightsOff - 2.25 * 3_600_000 - zone * 3 * 60_000).toISOString(),
+      );
+      set(`${z}status`, "Overnight dryback — rescue only", { reason: "demo" });
+      if (valves[zone]) set(valves[zone], "off");
+      set(`${z}waiting_for_app`, "P3", {
+        at: stamp,
+        conditions: [
+          {
+            rule: "p3_emergency",
+            shot: true,
+            to: null,
+            metric: "vwc",
+            op: "<",
+            value: numeric(
+              states[`number.crop_steering_${prefix}zone_${zone}_p3_emergency_vwc_threshold`],
+            ),
+            now: numeric(states[`${root}vwc_zone_${zone}`]),
+          },
+          {
+            rule: "lights_on",
+            shot: false,
+            to: "P0",
+            in_min: Math.round((day.end - now) / 60_000),
+          },
+        ],
+      });
+    }
+    // Its records end with the day's last shots and each zone's move to P3 two hours before
+    // lights-off (demoDay's day); by day they are the demo's own.
+    const log = `${root}activity_log`;
+    const events = (base[log]?.attributes.events ?? []) as LogEvent[];
+    if (!night && base[log]) set(log, base[log].state, base[log].attributes);
+    if (night && events.length) {
+      const shift =
+        Math.max(...events.map((event) => Date.parse(event.timestamp))) -
+        (day.lightsOff - 2.25 * 3_600_000);
+      const p3: LogEvent[] = Array.from(
+        { length: Number(config.attributes.num_zones) },
+        (_, i) => ({
+          id: `${prefix}${i + 1}-p3`,
+          timestamp: new Date(day.lightsOff - 2 * 3_600_000 + (i + 1) * 180_000).toISOString(),
+          message: "P2 → P3: the day's watering is done (demo).",
+          type: "phase",
+          zoneId: i + 1,
+        }),
+      );
+      set(log, base[log].state, {
+        ...base[log].attributes,
+        events: [
+          ...p3.reverse(),
+          ...events.map((event) => ({
+            ...event,
+            timestamp: new Date(Date.parse(event.timestamp) - shift).toISOString(),
+          })),
+        ],
+      });
+    }
+    const pump = typeof config.attributes.pump === "string" ? config.attributes.pump : "";
+    if (night) {
+      set(pump, "off");
+      set(`${root}current_decision`, "Holding — all zones in band", {
+        fired: [],
+        blocked: [],
+        demo_night: true,
+      });
+    } else {
+      if (base[pump]) set(pump, base[pump].state);
+      const day = base[`${root}current_decision`];
+      set(`${root}current_decision`, day.state, { ...day.attributes, demo_night: false });
+    }
+  }
+  return next ?? states;
 }
 /** The demo controller reports in like a running one, so it never reads as stopped. */
 export function demoBeat(states: States, now = Date.now()): States {
@@ -874,13 +1106,24 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
 }
 /** Recorded water for the Water use panel, as the hourly statistics of each zone's water-today
  * counter: a grow that began on the demo grow plan's start date after eight dry grow-days, drinking
- * a little more each day. Complete grow-days only; the live counter supplies today. */
+ * a little more each day. Complete grow-days only; the live counter supplies today. Before it, the
+ * demo's previous run (112 to 57 days ago, comparison-demo) drank a fifth less by grow day. */
 export function demoWaterRecord(
   states: States,
   request: WaterRecordRequest,
   now = Date.now(),
 ): Record<string, CounterSample[]> {
-  const growStart = dateForDay(localDate(new Date(now)), -13); // as the demo plan (operator-demo)
+  const today = localDate(new Date(now));
+  const growStart = dateForDay(today, -13); // as the demo plan (operator-demo)
+  const grows = [
+    {
+      start: addDays(today, -112),
+      first: addDays(today, -112),
+      last: addDays(today, -57),
+      scale: 0.8,
+    },
+    { start: growStart, first: addDays(growStart, -8), last: today, scale: 1 },
+  ];
   const samples: Record<string, CounterSample[]> = {};
   for (const entityId of request.entityIds) {
     const match = entityId.match(
@@ -897,34 +1140,36 @@ export function demoWaterRecord(
       return new Date(year, month - 1, date, 0, Math.round(on * 60)).getTime();
     };
     const list: CounterSample[] = [];
-    for (
-      let day = addDays(growStart, -8);
-      lightsOn(addDays(day, 1)) <= now;
-      day = addDays(day, 1)
-    ) {
-      const age = daysBetween(growStart, day) + 1;
-      const total =
-        age < 1
-          ? 0
-          : Math.min(
-              38,
-              16 +
-                0.9 * age +
-                1.6 * Number(zone) +
-                (prefix ? 2 : 0) +
-                2.5 * Math.sin(1.7 * age + Number(zone)),
-            );
-      // One reading at the end of each hour; a daylight-saving grow-day has 23 or 25 of them.
-      const from = lightsOn(day);
-      for (let time = from + 3_600_000 - 1; time < lightsOn(addDays(day, 1)); time += 3_600_000) {
-        const share = Math.min(
-          1,
-          Math.max(0, ((time + 1 - from) / 3_600_000 - 1) / (photoperiod - 3)),
-        );
-        if (time >= request.start && time <= request.end)
-          list.push({ time, value: Math.round(total * share * 100) / 100 });
+    for (const grow of grows)
+      for (
+        let day = grow.first;
+        day <= grow.last && lightsOn(addDays(day, 1)) <= now;
+        day = addDays(day, 1)
+      ) {
+        const age = daysBetween(grow.start, day) + 1;
+        const total =
+          age < 1
+            ? 0
+            : grow.scale *
+              Math.min(
+                38,
+                16 +
+                  0.9 * age +
+                  1.6 * Number(zone) +
+                  (prefix ? 2 : 0) +
+                  2.5 * Math.sin(1.7 * age + Number(zone)),
+              );
+        // One reading at the end of each hour; a daylight-saving grow-day has 23 or 25 of them.
+        const from = lightsOn(day);
+        for (let time = from + 3_600_000 - 1; time < lightsOn(addDays(day, 1)); time += 3_600_000) {
+          const share = Math.min(
+            1,
+            Math.max(0, ((time + 1 - from) / 3_600_000 - 1) / (photoperiod - 3)),
+          );
+          if (time >= request.start && time <= request.end)
+            list.push({ time, value: Math.round(total * share * 100) / 100 });
+        }
       }
-    }
     samples[entityId] = list;
   }
   return samples;

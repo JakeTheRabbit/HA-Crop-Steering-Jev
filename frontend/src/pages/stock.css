@@ -140,3 +140,21 @@
     grid-column: 1 / -1;
   }
 }
+/* The headline: which tank runs out first. */
+.stock-next {
+  margin: 0 0 16px;
+  font-size: var(--text-sm);
+}
+.stock-history-more {
+  margin-top: 16px;
+}
+.stock-history-more > summary {
+  cursor: pointer;
+  padding: 6px 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.stock-history-more[open] > summary {
+  margin-bottom: 10px;
+}

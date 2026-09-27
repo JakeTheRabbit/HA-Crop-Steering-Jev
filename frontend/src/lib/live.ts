@@ -1,3 +1,5 @@
+import { dailyStatistics } from "./comparison";
+import type { DailyReading, HistoryRequest } from "./comparison-types";
 import type { TimelineRequest, TimelineRows } from "./day-timeline";
 import type { EntityState, States } from "./types";
 import { statisticSamples, type CounterSample, type WaterRecordRequest } from "./water-use";
@@ -139,6 +141,40 @@ export async function liveStatistics(
   }
 }
 
+/** Each sensor's daily low and high from Home Assistant's long-term statistics, over its own
+ * websocket: kept indefinitely for a measurement sensor, where its recorded history is kept only
+ * for the recorder's purge window. */
+export async function liveDailyStatistics(
+  connection: LiveConnection,
+  request: HistoryRequest,
+  timeoutMs = 60_000,
+): Promise<Record<string, DailyReading[]>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Home Assistant did not return the daily statistics in time.")),
+      timeoutMs,
+    );
+  });
+  try {
+    return dailyStatistics(
+      await Promise.race([
+        connection.sendMessagePromise!({
+          type: "recorder/statistics_during_period",
+          start_time: request.start,
+          end_time: request.end,
+          statistic_ids: request.entityIds,
+          period: "day",
+          types: ["min", "max"],
+        }),
+        deadline,
+      ]),
+      request.timeZone,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
 /** One subscribe_entities event applied to a snapshot, as home-assistant-js-websocket applies it.
  * Returns the same object when nothing changed. */
 export function applyEntityUpdate(states: States, update: EntityUpdate): States {
@@ -213,6 +249,12 @@ export function watchedEntities(states: States): string[] {
     if (!/^[a-z_]+\.crop_steering_/.test(id)) continue;
     ids.add(id);
     if (/^sensor\.crop_steering_.*ai_heartbeat$/.test(id)) visit(entity.attributes.enable_flag);
+    // A zone's probes, as its combined reading names them: Equipment › Probes shows each one.
+    if (/^sensor\.crop_steering_.*(vwc|ec)_zone_\d+$/.test(id)) {
+      visit(entity.attributes.used);
+      const excluded = entity.attributes.excluded;
+      if (excluded && typeof excluded === "object") visit(Object.keys(excluded));
+    }
     if (!/^sensor\.crop_steering_.*engine_config$/.test(id)) continue;
     visit(entity.attributes);
     const { prefix, num_zones } = entity.attributes;

@@ -29,6 +29,8 @@ const errors = [],
   forbidden = [];
 async function open(target) {
   const page = await target.newPage();
+  // The demo keeps the clock: overnight its pump rests. Read it at 4 PM, mid-maintenance.
+  await page.clock.setFixedTime(new Date(2026, 8, 28, 16, 0, 0));
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/*", (route) => {
     if (
@@ -65,7 +67,12 @@ async function noSmallText(sheet) {
 }
 const page = await open(context);
 try {
-  await page.goto(`${origin}/dashboard.html?demo=1#/overview`);
+  // Each zone's last shot on Today is a machine-readable time.
+  await page.goto(`${origin}/dashboard.html?demo=1#/today`);
+  await page.locator('[data-last-irrigation="1"]').waitFor();
+  assert.ok(await page.locator('[data-last-irrigation="1"]:visible').getAttribute("datetime"));
+  // The tank: Equipment › Tank & pump.
+  await page.goto(`${origin}/dashboard.html?demo=1#/equipment/tank`);
   const tank = page.locator("[data-tank-status]");
   await tank.waitFor();
   assert.equal(await tank.locator("[data-tank-level]").getAttribute("data-tank-level"), "42");
@@ -74,7 +81,6 @@ try {
   assert.match(await tank.innerText(), /5.66 pH/);
   assert.match(await tank.innerText(), /17.6 °C/);
   assert.ok(await tank.locator("time").getAttribute("datetime"));
-  assert.ok(await page.locator('[data-last-irrigation="1"]:visible').getAttribute("datetime"));
   // The tank and its first reading sit as far below the heading as the tank sits from the left.
   const inset = await tank.evaluate((panel) => {
     const box = panel.getBoundingClientRect();
@@ -95,7 +101,7 @@ try {
     Math.abs(inset.readingTop - inset.left) <= 2,
     `first reading inset: top ${inset.readingTop}, left ${inset.left}`,
   );
-  // A last-day sparkline beside the EC and the pH value, and no full graph on the Overview.
+  // A last-day sparkline beside the EC and the pH value; the full graph opens on request.
   for (const key of ["ec", "ph"]) {
     const spark = tank.locator(`[data-tank-spark="${key}"]`);
     await spark.waitFor();
@@ -105,7 +111,7 @@ try {
     );
     assert.match(await spark.getAttribute("aria-label"), /over the last 24 h: [\d.]+ to [\d.]+/);
   }
-  assert.equal(await page.locator("[data-tank-chart]").count(), 0, "a full graph on the Overview");
+  assert.equal(await page.locator("[data-tank-chart]").count(), 0, "a full graph before History");
   await tank.screenshot({ path: file("tank-status.png") });
   await tank.screenshot({ path: img("tank-status.png") });
   for (const width of [1440, 390]) {
@@ -122,7 +128,7 @@ try {
   }
   await page.screenshot({ path: file("tank-status-mobile.png"), fullPage: true });
 
-  // History: both readings over time, in a panel beside the Overview.
+  // History: both readings over time, in a panel beside the page.
   await page.setViewportSize({ width: 1440, height: 1000 });
   let sheet = await openHistory(page);
   const chart = sheet.locator("[data-tank-chart]");
@@ -177,9 +183,14 @@ try {
       throw new Error("focus did not return to the History button");
     });
 
-  // The Overview stays two screens at most at 1440×800, zones beside the tank, and History
+  // Tank & pump is one screen at 1440×800 (a 1440×900 laptop's browser window), with History
   // beside Map sensors in the tank's heading.
   await page.setViewportSize({ width: 1440, height: 800 });
+  await page
+    .waitForFunction(() => document.documentElement.scrollHeight <= innerHeight, null, {
+      timeout: 2_000,
+    })
+    .catch(() => {});
   const layout = await page.evaluate(() => {
     const box = (selector) => document.querySelector(selector).getBoundingClientRect();
     const [history, map] = [
@@ -188,18 +199,15 @@ try {
     return {
       height: document.documentElement.scrollHeight,
       window: innerHeight,
-      zonesTop: box(".overview-grid > .panel").top,
-      tankTop: box("[data-tank-status]").top,
       historyTop: history.getBoundingClientRect().top,
       mapTop: map.getBoundingClientRect().top,
       titleBottom: box("[data-tank-status] .panel-heading h2").bottom,
     };
   });
   assert.ok(
-    layout.height <= 2 * layout.window,
-    `Overview is ${layout.height}px tall in a ${layout.window}px window`,
+    layout.height <= layout.window,
+    `Tank & pump is ${layout.height}px tall in a ${layout.window}px window`,
   );
-  assert.equal(layout.zonesTop, layout.tankTop, "zones and tank share a row");
   assert.equal(layout.historyTop, layout.mapTop, "History sits beside Map sensors");
   assert.ok(layout.historyTop < layout.titleBottom, "the tank's actions share the title's line");
 
@@ -209,7 +217,7 @@ try {
     colorScheme: "light",
   });
   const light = await open(lightContext);
-  await light.goto(`${origin}/dashboard.html?demo=1#/overview`);
+  await light.goto(`${origin}/dashboard.html?demo=1#/equipment/tank`);
   sheet = await openHistory(light);
   await noSmallText(sheet);
   const audit = await new AxeBuilder({ page: light }).analyze();
@@ -233,7 +241,7 @@ try {
   );
   await lightContext.close();
 
-  await page.goto(`${origin}/dashboard.html?demo=1&room=room%3Af1_#/overview`);
+  await page.goto(`${origin}/dashboard.html?demo=1&room=room%3Af1_#/equipment/tank`);
   await page.waitForFunction(
     () => document.querySelector("[data-tank-level]")?.getAttribute("data-tank-level") === "72",
   );
@@ -257,11 +265,11 @@ try {
     "graphical mapped tank readings",
     "zone event timestamps",
     "mobile layout and accessibility",
-    "EC and pH sparklines, no full graph on the Overview",
+    "EC and pH sparklines, the full graph on request",
     "History panel: both series over 24 h, 7 days and 30 days, with the source-water gate",
     "History panel and tooltip accessibility, light and dark, no text below 12 px",
     "focus returns to History on close",
-    "Overview two screens at most, zones beside the tank, History beside Map sensors",
+    "Tank & pump one screen, History beside Map sensors",
     "room isolation, and no gate where no feed-water probe is mapped",
   ];
   await writeFile(
