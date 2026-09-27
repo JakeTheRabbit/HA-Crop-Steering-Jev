@@ -1,3 +1,7 @@
+# 3.3.0
+
+Pair with integration 3.3.0. **C3.** Jev's doctrine gains Athena's Grow Guide Handbook as a second cited source (24 rules after the owner's, 123 in all; #7). The dashboard's grow day and live Jev log (#10) ship with the integration and this app's page. No change to add-on options or the state file. Not run on hardware.
+
 # 3.2.0
 
 Pair with integration 3.2.0. **C3.** The Setpoints judge: one notch a night on a zone's own P2 shot size or re-water threshold, inside a range around the operator's value, while the room's Auto setpoints switch is on; a rescue shot after a change puts it back and pauses the zone 48 h; the base Auto Setpoints learner never writes while it runs (#6). New file `/data/jev_setpoints.json`; no change to add-on options or the state file. Not run on hardware.
