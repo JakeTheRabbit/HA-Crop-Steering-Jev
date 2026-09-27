@@ -21,9 +21,9 @@ version being released.
 
 ## 3.0.0 - 2026-09-27
 
-- Jev now judges the moments the controller used to decide by fixed rules: when the morning ramp starts and ends, when the day's watering stops, why pore EC moved, and whether a probe or a shot can be trusted.
-- Your own crop-steering doctrine and stage arc are part of every judgement, and each zone is checked against today's stage of flower.
-- Every judgement shows on its zone with how sure Jev was and what the controller did with it. Without a Jev key the controller runs exactly as before.
+- Jev now judges what the controller decided by fixed rules: when the ramp starts and ends, when watering stops, why pore EC moved, and probe trust.
+- Your own crop-steering doctrine is part of every judgement, and each zone is checked against today's stage of flower.
+- Every judgement shows on its zone with how sure Jev was. Without a Jev key the controller runs exactly as before.
 - Bug fixes and improvements.
 
 ## 2.25.1 - 2026-09-27
