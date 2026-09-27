@@ -232,14 +232,6 @@ input[type="number"] {
   font-weight: 600;
   height: 41px;
 }
-.room-selector > span {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  font-size: var(--text-xs);
-  color: var(--muted-foreground);
-  margin-top: 9px;
-}
 nav {
   display: flex;
   flex-direction: column;
@@ -317,70 +309,25 @@ nav button.nav-separated {
   display: flex;
   flex-direction: column;
 }
+/* The frame's top bar (components/app-header.css draws what is in it). */
 .topbar {
-  height: 66px;
+  height: 56px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 0 36px;
-}
-.breadcrumbs {
-  display: flex;
-  align-items: center;
   gap: 12px;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-.breadcrumbs strong {
-  color: var(--foreground);
-  font-weight: 500;
+  padding: 0 28px;
 }
 .connection-info {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
+  flex-shrink: 0;
   font-size: var(--text-xs);
 }
-.connection-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-}
-.connection-label.live {
-  color: var(--primary-strong);
-}
-.connection-label.offline {
-  color: var(--destructive);
-}
-.connection-label.demo {
-  color: var(--warning);
-}
-.connection-dot {
-  width: 6px;
-  height: 6px;
-  background: var(--muted-foreground);
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-}
-.connection-dot.live {
-  background: var(--primary);
-}
-.connection-dot.demo {
-  background: var(--warning);
-}
-.connection-dot.offline {
-  background: var(--destructive);
-}
-.last-updated {
-  color: var(--muted-foreground);
-}
 #main-content {
-  padding: 26px 36px 40px;
+  padding: 20px 32px 36px;
   flex: 1;
   outline: none;
 }
@@ -404,23 +351,6 @@ nav button.nav-separated {
 .page-heading > button {
   flex-shrink: 0;
 }
-.demo-banner {
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-.demo-banner strong {
-  color: var(--warning);
-}
-.demo-banner > span:last-child {
-  white-space: nowrap;
-}
 .connection-banner {
   display: flex;
   justify-content: space-between;
@@ -437,14 +367,6 @@ nav button.nav-separated {
 }
 .connection-banner p {
   font-size: 12px;
-}
-.page-footer {
-  padding: 15px 36px;
-  display: flex;
-  justify-content: space-between;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
 }
 .panel {
   background: var(--surface);
@@ -1614,13 +1536,10 @@ nav button.nav-separated {
 }
 @media (max-width: 1200px) {
   .topbar {
-    padding: 0 25px;
+    padding: 0 20px;
   }
   #main-content {
-    padding: 22px 25px 35px;
-  }
-  .last-updated {
-    display: none;
+    padding: 20px 24px 32px;
   }
   .metric-item {
     padding: 0 18px;
@@ -1642,9 +1561,6 @@ nav button.nav-separated {
   .setting-field {
     grid-template-columns: minmax(0, 1fr) 140px;
     gap: 15px;
-  }
-  .demo-banner > span:last-child {
-    display: none;
   }
 }
 @media (max-width: 960px) {
@@ -1740,23 +1656,15 @@ nav button.nav-separated {
     display: inline-flex;
   }
   .topbar {
-    height: 60px;
-    padding: 0 14px 0 6px;
-    gap: 8px;
+    padding: 0 10px 0 4px;
+    gap: 6px;
   }
-  .breadcrumbs {
+  .connection-info {
     gap: 6px;
     font-size: var(--text-xs);
   }
-  .connection-info {
-    gap: 5px;
-    font-size: var(--text-xs);
-  }
-  .connection-info button {
-    width: 28px;
-  }
   #main-content {
-    padding: 16px 18px 28px;
+    padding: 14px 16px 28px;
   }
   .page-heading {
     margin-top: 16px;
@@ -1914,15 +1822,6 @@ nav button.nav-separated {
     flex-wrap: wrap;
     padding: 13px;
     gap: 12px;
-  }
-  .page-footer {
-    padding: 14px 18px;
-    gap: 12px;
-    font-size: var(--text-xs);
-  }
-  .demo-banner {
-    font-size: var(--text-xs);
-    padding: 9px 11px;
   }
   .empty-state {
     padding: 30px 20px;

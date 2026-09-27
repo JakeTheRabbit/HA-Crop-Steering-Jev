@@ -402,7 +402,7 @@ export function GrowPlanner({
           detail="Room and zone configuration comes first."
           action={
             <Button asChild>
-              <a href="#/setup">Open room setup</a>
+              <a href="#/equipment/setup">Open room setup</a>
             </Button>
           }
         />
@@ -466,7 +466,7 @@ export function GrowPlanner({
                   Retry
                 </Button>
                 <Button asChild variant="outline">
-                  <a href="#/setup">Installation & setup</a>
+                  <a href="#/equipment/setup">Installation & setup</a>
                 </Button>
               </div>
             }

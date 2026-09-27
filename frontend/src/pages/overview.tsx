@@ -53,7 +53,7 @@ export function Overview({
         action={
           <div className="heading-actions">
             <RoomPower controller={controller} />
-            <Button variant="outline" onClick={() => navigate("grow-plan")}>
+            <Button variant="outline" onClick={() => navigate("plan/schedule")}>
               Irrigation plan <ArrowUpRight size={16} />
             </Button>
           </div>
@@ -76,7 +76,7 @@ export function Overview({
             </div>
           ))}
           {room.alerts.length > notices.length && (
-            <Button variant="ghost" onClick={() => navigate("sensors")}>
+            <Button variant="ghost" onClick={() => navigate("equipment/probes")}>
               Review {room.alerts.length - notices.length} more notices in Sensors{" "}
               <ArrowRight size={15} />
             </Button>
@@ -92,7 +92,7 @@ export function Overview({
       <DayTimeline
         controller={controller}
         openJevLog={() => {
-          navigate("activity");
+          navigate("history/timeline");
           // The Activity page renders on this click; its Jev panel sits below the records.
           window.setTimeout(() => {
             const panel = document.getElementById("jev-decisions");
@@ -107,7 +107,7 @@ export function Overview({
             <h2>Zones at a glance</h2>
             <div className="zones-heading-actions">
               {room.zones.length > 0 && <AllZonesSwitch controller={controller} />}
-              <Button variant="ghost" onClick={() => navigate("zones")}>
+              <Button variant="ghost" onClick={() => navigate("history/water")}>
                 All zones <ArrowRight size={16} />
               </Button>
             </div>
@@ -131,7 +131,7 @@ export function Overview({
             />
           )}
         </section>
-        <TankStatus controller={controller} onConfigure={() => navigate("setup")} />
+        <TankStatus controller={controller} onConfigure={() => navigate("equipment/setup")} />
       </div>
       <ZoneDetails
         controller={controller}

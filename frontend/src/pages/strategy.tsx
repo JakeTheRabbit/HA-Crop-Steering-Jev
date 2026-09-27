@@ -215,7 +215,7 @@ export function Strategy({
         <div className="workspace-message">
           The active schedule owns today’s targets. Edit its dated targets in Schedule.{" "}
           <Button asChild variant="outline">
-            <a href="#/grow-plan">Open schedule</a>
+            <a href="#/plan/schedule">Open schedule</a>
           </Button>
         </div>
       )}

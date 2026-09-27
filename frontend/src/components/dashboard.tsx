@@ -39,6 +39,7 @@ import { budgetShare, DRYBACK_WINDOW_H, drybackTrend, type DrybackTrend } from "
 import { useRecentHistory } from "@/lib/use-recent-moisture";
 import { coreWaterValue, dailyWater, waterParameters } from "@/lib/water-delivery";
 import { waitingText } from "@/lib/waiting-for";
+import type { Page } from "@/lib/routes";
 import {
   mlPerPlant,
   plantAmount,
@@ -59,19 +60,7 @@ import {
 } from "./mini-visuals";
 import "./zone-state.css";
 
-export type Page =
-  | "overview"
-  | "zones"
-  | "strategy"
-  | "grow-plan"
-  | "compare"
-  | "insights"
-  | "setup"
-  | "activity"
-  | "sensors"
-  | "settings"
-  | "stock"
-  | "help";
+export type { Page };
 export const number = (value: number | null, digits = 1) =>
   value === null || !Number.isFinite(value)
     ? "Unavailable"
@@ -1200,7 +1189,7 @@ export function ZoneDetails({
                 className="full-width"
                 onClick={() => {
                   close();
-                  navigate("strategy", zone.id);
+                  navigate("plan/targets", zone.id);
                 }}
               >
                 Edit {zone.name} strategy <ArrowUpRight size={16} />

@@ -191,7 +191,7 @@ export function Insights({
       <Heading
         title="Insights"
         action={
-          <Button variant="outline" onClick={() => open("setup")}>
+          <Button variant="outline" onClick={() => open("equipment/setup")}>
             Room setup <ArrowUpRight size={16} />
           </Button>
         }
@@ -201,7 +201,7 @@ export function Insights({
           <Empty
             title="Choose a configured room"
             detail="Diagnostics need a discovered zone and its controller entities."
-            action={<Button onClick={() => open("setup")}>Open room setup</Button>}
+            action={<Button onClick={() => open("equipment/setup")}>Open room setup</Button>}
           />
         </section>
       ) : (
@@ -290,7 +290,7 @@ export function Insights({
                     <h2>What the readings show</h2>
                     <p>{zone.name} · compared with the current phase references</p>
                   </div>
-                  <Button variant="ghost" onClick={() => open("strategy")}>
+                  <Button variant="ghost" onClick={() => open("plan/targets")}>
                     Review settings <ArrowRight size={16} />
                   </Button>
                 </div>
@@ -339,7 +339,7 @@ export function Insights({
                     <h2>Probe coverage</h2>
                     <p>Controller-valid readings across the room</p>
                   </div>
-                  <Button variant="ghost" onClick={() => open("sensors")}>
+                  <Button variant="ghost" onClick={() => open("equipment/probes")}>
                     All sensors <ArrowRight size={16} />
                   </Button>
                 </div>
@@ -469,7 +469,7 @@ export function Insights({
                     <h2>{controller.room.room.name} equipment map</h2>
                     <p>Logical connections from configuration · not a measured floor plan</p>
                   </div>
-                  <Button variant="ghost" onClick={() => open("setup")}>
+                  <Button variant="ghost" onClick={() => open("equipment/setup")}>
                     Edit mappings <ArrowRight size={16} />
                   </Button>
                 </div>

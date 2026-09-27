@@ -407,7 +407,11 @@ export function StockTanks({
           ) : (
             <>
               No tank last-fill entity is mapped, so record each batch by hand, or{" "}
-              <Button variant="link" className="inline-link" onClick={() => navigate("setup")}>
+              <Button
+                variant="link"
+                className="inline-link"
+                onClick={() => navigate("equipment/setup")}
+              >
                 map one in Rooms & setup
               </Button>
               .
