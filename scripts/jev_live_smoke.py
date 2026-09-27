@@ -196,7 +196,7 @@ def main():
         print(f"{'ok  ' if ok else 'MISS'}  {title}: {v.label} p={v.prob:.2f} agreed={v.agreed} "
               f"-> {acted} [{'admitted' if admitted else 'refused: ' + why}]  (expected {expect})")
     state = {"alert_code": "CS-702", "title": "this zone's water per plant is out of line with the others",
-             "message": "Zone 2 has had 430 mL a plant today against 900 mL on the room's other zones. Watering carries on as normal.",
+             "message": "Zone 2 has had 430 mL a plant today, 48% of the room's median zone (900 mL). Watering carries on as normal.",
              "local_time": "02:10", "raised_today": 3}
     asker.submit("smoke:alerts", state, council.expand(TRIAGE_Q))
     ans = asker.result("smoke:alerts")
