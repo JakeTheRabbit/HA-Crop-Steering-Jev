@@ -19,6 +19,12 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.4.1 - 2026-09-28
+
+- The README explains the Jev edition from scratch, with a screenshot of every page where Jev shows.
+- The demo shows the range Jev may move the re-water point in, as the controller sets it.
+- Bug fixes and improvements.
+
 ## 3.4.0 - 2026-09-28
 
 - The dashboard is simpler: Today, Plan, History and Equipment, plus a page for each zone.

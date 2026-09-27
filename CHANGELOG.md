@@ -9,6 +9,31 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-09-28
+
+Pair: **controller 3.4.1**. Class **C1**. Two pull requests: #15 (C1), the demo shows Jev's re-water range as the
+controller bands it; #16 (C0), the README explains the Jev edition from scratch, with a screenshot of every page
+where Jev shows. Nothing the controller reads changes. Not run on hardware; checked by the dashboard and browser
+suites.
+
+### 🌱 In plain English
+
+- **A front page for newcomers.** The README now starts from zero: what crop steering is and the words it uses,
+  how the controller and Jev work together, the eleven questions Jev answers, what it can never do, every
+  dashboard page that shows Jev with a current screenshot, letting Jev move setpoints and every way to take them
+  back, and what it costs. Its install buttons, and the install guide's, add this repository instead of the
+  original.
+- **The demo's Jev range is the real one.** The demo showed Jev allowed 1.5 points either side of the re-water
+  point. The controller allows 2 under and 1 over, and the demo now shows that.
+
+### 🔧 Technical notes
+
+- Dashboard (#15): the demo's `setpoints.range.p2_vwc_threshold` is `[59, 62]`, what `setpoints.band()` gives for
+  its numbers; the browser checks follow; bundles rebuilt.
+- Docs (#16): README rewritten with nine new `img/jev-*.png`, and the water use, stock tanks and setup screenshots
+  retaken; the `docs/INSTALL.md` buttons point at this repository; the app's `DOCS.md` describes Jev and its
+  options; `docs/JEV.md` names the 3.4.0 pages.
+
 ## [3.4.0] - 2026-09-28
 
 Pair: **controller 3.4.0**. Class **C3**. Two pull requests: #12 (C3), Jev's data for the simplified dashboard and no
