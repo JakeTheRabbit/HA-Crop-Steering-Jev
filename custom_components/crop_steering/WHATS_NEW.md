@@ -19,6 +19,12 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.2.0 - 2026-09-28
+
+- With Auto setpoints on, Jev may nudge each zone's maintenance shot size or re-water point one small step a night.
+- It stays close to your own values, your edits always win, and a change that needs a rescue shot is undone.
+- Bug fixes and improvements.
+
 ## 3.1.0 - 2026-09-28
 
 - Every decision Jev makes is now recorded with what the controller did about it, ready for a live log on the dashboard.
