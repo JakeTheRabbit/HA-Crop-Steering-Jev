@@ -11,7 +11,8 @@ judge. It can only bring the ramp forward: the base engine's own three ways out 
 from datetime import timedelta
 
 from ..context import flat_minutes, trend, words_trend
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 from .dusk import rate_between
 
 STATES = {
@@ -23,14 +24,14 @@ STATES = {
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "dawn_call": [
         choice("You are the head grower watching one zone's morning dryback after lights-on, on rockwool or "
-               "coco. Judge only from the facts given. Doctrine: the morning dryback lets the slab dry after "
-               "the night so the roots get air before the day's watering; the ramp should start once the plants "
-               "are drinking, which shows as moisture falling steadily, and the slab has dried back close to its "
-               "target. Flat moisture after lights-on means the plants are not transpiring yet, and waiting "
-               "costs nothing because the timer starts the ramp at the latest. When the peak the dryback is "
+               "coco. Judge only from the facts given. The overnight dryback does the main drying; the morning "
+               "dryback only lets the slab dry a little further once the plants start drinking, which shows as "
+               "moisture falling steadily. In a vegetative stage the first shot comes early and the morning "
+               "dryback is short; in a generative stage it runs longer. Flat moisture after lights-on means the "
+               "plants are not transpiring yet. When the peak the dryback is "
                "measured from sits above the reading at the start of the dryback, it was free water and the "
                "dryback figure reads high. A reading that has not changed at all for a long time is not "
                "measuring.", STATES),
@@ -40,7 +41,7 @@ QUESTIONS = {
                "began. If moisture is flat or the dryback is still well short, wait. If the probe reading has "
                "not moved at all, its dryback can't be trusted and the timer should decide.", STATES),
     ],
-}
+}, doctrine("dryback", "stage") + " " + doctrine("probe", "closed_loop", limit=3))
 
 
 def _share(done, target):

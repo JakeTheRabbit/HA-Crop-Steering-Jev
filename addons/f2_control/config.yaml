@@ -43,6 +43,8 @@ options:
   jev_enabled: true
   jev_judges: all
   jev_daily_calls: 2000
+  jev_flower_start: ""
+  jev_flower_days: 56
 schema:
   num_zones: int
   lights_on_hour: float
@@ -65,3 +67,5 @@ schema:
   jev_enabled: bool?
   jev_judges: str?
   jev_daily_calls: int?
+  jev_flower_start: str?
+  jev_flower_days: int?

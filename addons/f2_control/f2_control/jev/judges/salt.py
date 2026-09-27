@@ -17,7 +17,8 @@ and only inside the clamp the base steer already has.
 from datetime import timedelta
 
 from ..context import trend, words_trend
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 
 BAND = 0.10  # the steer leaves pore EC alone within 10 % of its target (controller._step_ec_offset)
 SETTLE_MIN = 45.0  # pore EC read sooner than this after a shot is the feed passing (engine EC_SETTLE_MIN)
@@ -30,15 +31,17 @@ CAUSES = {
     "probe_suspect": "The pore EC readings jump, or disagree with how the moisture behaves: the EC reading is not to be trusted. Let the steer decay.",
     "target_unreachable": "The target pore EC is far from anything the feed and this slab have reached: chasing it only shrinks or stretches the shots. Let the steer decay.",
     "in_band": "Pore EC is inside the band around its target and steady: hold the steer.",
+    "below_band_vegetative": "Pore EC is below its band, but the stage steers vegetative with a small dryback: drying the slab deeper to stack EC would fight the stage. Hold the steer; trimming the maintenance shots is the grower's lever here.",
 }
 
 MODE = {
     "salts_accumulating": "steer", "salt_front_passing": "steer",
     "feed_changed": "hold", "in_band": "hold",
     "probe_suspect": "decay", "target_unreachable": "decay",
+    "below_band_vegetative": "hold",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "salt_cause": [
         choice("You are the head grower reading one zone's pore EC during maintenance (P2) of rockwool or coco "
                "irrigation. Judge only from the facts given. Doctrine: pore EC read within 45 minutes of a shot "
@@ -58,7 +61,8 @@ QUESTIONS = {
                "feed EC. A target well outside what this slab and feed have ever read is not worth steering "
                "to.", CAUSES),
     ],
-}
+}, doctrine("ec") + " " + doctrine("closed_loop", "stage", limit=4) + " "
+   + doctrine("maintenance", limit=3))
 
 
 def _words_ec(v):
@@ -117,6 +121,11 @@ class SaltJudge(Judge):
                        + "; at it the base engine flushes, and within 1 of it rescues, whatever the steer does"),
             "feed_ec_change": self._feed_change(ctx),
         })
+        if ctx.stage:
+            lo_s, hi_s = ctx.stage["pore_ec_range"]
+            e["stage_ec_band"] = (f"the owner's stage arc wants {ctx.stage['pore_ec']} in {ctx.stage['stage']} "
+                                  f"({ctx.stage['steering']} steering); the settled reading is "
+                                  + ("inside it" if lo_s <= ec <= hi_s else "below it" if ec < lo_s else "above it"))
         if ctx.feed_ec is not None:
             e["feed_vs_pore_ec"] = (
                 f"feed {ctx.feed_ec:.2f} is lower than pore EC {ec:.2f}, so water through the slab lowers pore EC"
@@ -206,9 +215,12 @@ class SaltJudge(Judge):
 
     def decide(self, verdicts, ctx):
         v = verdicts.get("salt_cause")
-        if v is None or not v.firm(0.6) or v.label not in MODE:
+        if v is None:
             return None
-        mode = MODE[v.label]
+        mode = next((m for m in ("steer", "hold", "decay")
+                     if v.firm_in([c for c, x in MODE.items() if x == m], 0.6)), None)
+        if mode is None:
+            return None
         return self.directive(ctx, "ec_mode", mode, f"pore EC: {v.label} (p={v.prob:.2f}), {mode} the steer")
 
     def outcome(self, entry, ctx):

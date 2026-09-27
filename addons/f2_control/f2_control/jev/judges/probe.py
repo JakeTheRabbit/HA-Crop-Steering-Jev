@@ -12,7 +12,8 @@ and a fresh answer: when a later answer says the probe tracks, it counts again.
 from datetime import timedelta
 
 from ..context import flat_minutes, response, trend, words_response, words_trend
-from .base import Judge, choice, common, noul
+from ..doctrine import doctrine
+from .base import Judge, choice, common, noul, with_doctrine
 
 MODES = {
     "healthy": "The probe answers the shots like a working probe: it rises when water goes in and dries back between shots.",
@@ -21,9 +22,10 @@ MODES = {
     "not_in_block": "The probe barely responds to water at all, as if pulled out of the block or sitting in air.",
     "wrong_zone": "The probe responds to other zones' shots rather than this zone's, as if it is wired or mapped to another row.",
     "drifting": "The probe's level creeps in one direction regardless of shots and drying: calibration drift.",
+    "temperature_artefact": "The reading moves with the slab's daily temperature (it jumps or bends when the lights switch), not with water.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "tracking": [
         noul("You are checking one irrigation zone's moisture probe. Judge only from the facts given. "
              "Doctrine: every shot of water should raise a working probe's reading and most of the rise "
@@ -41,7 +43,7 @@ QUESTIONS = {
         choice("If this probe is not working normally, which failure fits the facts best?", MODES),
         choice("Classify how this moisture probe is behaving.", MODES),
     ],
-}
+}, doctrine("probe") + " " + doctrine("closed_loop", limit=3))
 
 
 class ProbeJudge(Judge):
@@ -69,6 +71,8 @@ class ProbeJudge(Judge):
             "minutes_reading_unchanged": flat_minutes(ctx.history, ctx.now),
             "moisture_last_hour": words_trend(trend(ctx.history, ctx.now, 60)),
             "moisture_vs_field_capacity": f"{s.vwc:.1f}% against a field capacity of {p.field_capacity:.1f}%",
+            "minutes_since_the_lights_switched": (f"{ctx.since_lights_min} (lights "
+                                                  f"{'on' if ctx.lights_on else 'off'})"),
             "pore_ec_last_hour": words_trend(trend(ctx.history, ctx.now, 60, index=2), "mS/cm", "pore EC"),
         })
         sib = {f"zone {z}": v.get("rise_words") for z, v in ctx.siblings.items() if v.get("rise_words")}

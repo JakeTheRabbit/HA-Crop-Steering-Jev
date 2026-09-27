@@ -6,18 +6,21 @@ the maximum shots. Seen live (23 Sep 2026): during a ramp the fresh feed passing
 the curve knows when the slab is full and the EC is just the feed going by. So does this judge.
 """
 from ..context import response, trend, words_response, words_trend
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 
 STATES = {
     "keep_ramping": "The slab is still taking water: each ramp shot still lifts moisture that stays. Keep ramping.",
     "slab_full": "The slab is full: the last shots barely lifted moisture that stays, or it spiked and fell straight back, and moisture is at or near the ramp ceiling. Hand over to maintenance.",
     "ec_is_feed_front": "Moisture has reached the ceiling and the only thing holding the ramp open is pore EC, which is up because fresh feed is passing the probe right after the shots, not because salt is building. Hand over to maintenance.",
-    "real_salt": "Pore EC is genuinely high and not falling after the shots: salt is built up and more water through the slab is needed. Keep flushing in the ramp.",
+    "real_salt": "Pore EC is genuinely high and not falling after the shots: salt is built up. The ramp only refills the slab; salt leaves in the runoff of the maintenance shots once the slab is full, so hand over and let maintenance flush it.",
     "probe_lagging": "The probe has not caught up with the last shot yet (it reads late): wait before judging.",
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+HANDOVER = ("slab_full", "ec_is_feed_front", "real_salt")  # answers that all mean: hand over
+
+QUESTIONS = with_doctrine({
     "ramp_state": [
         choice("You are the head grower watching one zone's morning ramp (P1) of rockwool or coco irrigation. "
                "Judge only from the facts given. Doctrine: a ramp is done when the slab is full, meaning "
@@ -28,7 +31,7 @@ QUESTIONS = {
                "water ran through. EC that rose right after shots with feed EC below it is feed passing by, "
                "and falls again as the slab settles.", STATES),
     ],
-}
+}, doctrine("ramp", "probe", "ec", limit=4))
 
 
 class RampJudge(Judge):
@@ -71,11 +74,10 @@ class RampJudge(Judge):
 
     def decide(self, verdicts, ctx):
         v = verdicts.get("ramp_state")
-        if v is None or not v.firm(0.6):
+        if v is None or not v.firm_in(HANDOVER, 0.6):
             return None
-        if v.label in ("slab_full", "ec_is_feed_front"):
-            return self.directive(ctx, "advance", "P2", f"ramp done: {v.label} (p={v.prob:.2f})")
-        return None
+        p = sum(v.probabilities.get(k, 0.0) for k in HANDOVER)
+        return self.directive(ctx, "advance", "P2", f"ramp done: {v.label} (hand over p={p:.2f})")
 
     def outcome(self, entry, ctx):
         s = ctx.snap

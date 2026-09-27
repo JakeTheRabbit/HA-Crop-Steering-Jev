@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ sys.path[:0] = [str(ROOT / "addons/f2_control/f2_control"), str(ROOT / "addons/f
 import jev_kit as K  # noqa: E402
 from jev import council  # noqa: E402
 from jev.client import Asker  # noqa: E402
+from jev.doctrine import stage_intent  # noqa: E402
+from jev.envelope import admit  # noqa: E402
 from jev.judges.dawn import DawnJudge  # noqa: E402
 from jev.judges.dusk import DuskJudge  # noqa: E402
 from jev.judges.night import NightJudge  # noqa: E402
@@ -25,6 +28,7 @@ from jev.judges.probe import ProbeJudge  # noqa: E402
 from jev.judges.ramp import RampJudge  # noqa: E402
 from jev.judges.salt import SaltJudge  # noqa: E402
 from jev.judges.shot import ShotJudge  # noqa: E402
+from jev.judges.stage import StageJudge  # noqa: E402
 from jev.judges.zones import ZonesJudge  # noqa: E402
 from jev.triage import QUESTIONS as TRIAGE_Q  # noqa: E402
 
@@ -73,11 +77,36 @@ def salt_front_passing():
     return K.ctx("P2", s=s, h=h, feed_ec=2.4, p=K.params(ec_target_p2=4.5))
 
 
-def dusk_ready():
+def dusk_ready(flower_day=12, steering="generative"):
     h = K.history([(m, 38.0 - (180 - m) * 0.004, 4.3) for m in range(180, -1, -1)],
                   shots=[(170, 300, 36.5, 4.3, "p2_topup")])
     s = K.snap(vwc=37.3, hours_to_lights_off=2.0, peak_vwc=38.5, minutes_since_shot=170, shot_count=9)
-    return K.ctx("P2", s=s, h=h, hours_to_off=2.0)
+    return K.ctx("P2", s=s, h=h, hours_to_off=2.0, flower_day=flower_day, stage=stage_intent(flower_day),
+                 steering=steering)
+
+
+def dusk_bulk():
+    return dusk_ready(flower_day=37, steering="vegetative")
+
+
+def stage_mismatch():
+    pts = []
+    for m in range(0, 26 * 60, 10):
+        t = K.NOW - timedelta(minutes=m)
+        v = 36.0 if t.hour >= 10 and t.date() == K.NOW.date() else (38.0 if 12 <= t.hour < 22 else 31.0)
+        pts.append((m, v, 4.6))
+    s = K.snap(ec=4.6, ec_settled=4.6)
+    return K.ctx("P2", s=s, h=K.history(pts), hours_to_on=21.0, hours_to_off=9.0, flower_day=37,
+                 stage=stage_intent(37), steering="generative", plants=42)
+
+
+def ramp_real_salt():
+    pts = [(m, 36.0 + min(4.5, (150 - m) * 0.04), 7.4 - (150 - m) * 0.002) for m in range(150, -1, -1)]
+    h = K.history(pts, shots=[(140, 150, 36.0, 7.4, "p1_ramp"), (110, 150, 37.4, 7.3, "p1_ramp"),
+                              (80, 150, 38.8, 7.3, "p1_ramp"), (50, 150, 40.1, 7.2, "p1_flush")])
+    s = K.snap(phase="P1", vwc=40.6, shot_count=4, minutes_since_shot=50, ec=7.1, ec_settled=7.1)
+    return K.ctx("P1", s=s, h=h, feed_ec=3.0, p=K.params(p1_target=40.0, field_capacity=42.0, ec_target_p1=4.5),
+                 flower_day=37, stage=stage_intent(37), steering="vegetative")
 
 
 def dawn_drinking():
@@ -119,7 +148,12 @@ SCENARIOS = [
     ("probe: rises 1.5 a shot, dries between", ProbeJudge(), probe_healthy, "tracking", {True}),
     ("salt: EC climbing after dilute shots, feed lower", SaltJudge(), salt_front_passing, "salt_cause",
      {"salt_front_passing", "salts_accumulating"}),
-    ("dusk: 2 h to lights-off, well above the threshold", DuskJudge(), dusk_ready, "dusk_call", {"enter_p3_now"}),
+    ("dusk: 2 h to lights-off, flower setting (generative)", DuskJudge(), dusk_ready, "dusk_call", {"enter_p3_now"}),
+    ("dusk: same zone, flower bulk (vegetative): must not stop early", DuskJudge(), dusk_bulk, "dusk_call",
+     "no early stop"),
+    ("stage: generative steering in flower bulk", StageJudge(), stage_mismatch, "arc", "steering flagged"),
+    ("ramp: at the ceiling with real salt (settled EC high, feed lower)", RampJudge(), ramp_real_salt, "ramp_state",
+     {"real_salt", "slab_full"}),
     ("dawn: 70 min in, drying steadily, 9% of 15%", DawnJudge(), dawn_drinking, "dawn_call",
      {"start_ramp_now", "keep_drying"}),
     ("shot: two shots, no rise, sibling rose", ShotJudge(), shots_not_landing, "landing", {"not_reaching_zone"}),
@@ -145,10 +179,17 @@ def main():
             continue
         v = council.combine(ans.answers, question)
         d = judge.decide({q: council.combine(ans.answers, q) for q in judge.questions}, ctx)
-        ok = v is not None and v.label in expect
+        admitted, why = admit(d, ctx, confirmed=2, evidence_ok=True) if d is not None else (False, "no directive")
+        if expect == "no early stop":  # judged on what code lets happen, not on Jev's label
+            ok = not (admitted and d.kind == "advance")
+        elif expect == "steering flagged":
+            ok = d is not None and d.kind == "alert" and "steering, but the stage calls for" in d.value["message"]
+        else:
+            ok = v is not None and v.label in expect
         good += ok
+        acted = f"{d.kind} {d.value}" if d is not None else None
         print(f"{'ok  ' if ok else 'MISS'}  {title}: {v.label} p={v.prob:.2f} agreed={v.agreed} "
-              f"-> {None if d is None else f'{d.kind} {d.value}'}  (expected {sorted(map(str, expect))})")
+              f"-> {acted} [{'admitted' if admitted else 'refused: ' + why}]  (expected {expect})")
     state = {"alert_code": "CS-702", "title": "this zone's water per plant is out of line with the others",
              "message": "Zone 2 has had 430 mL a plant today against 900 mL on the room's other zones. Watering carries on as normal.",
              "local_time": "02:10", "raised_today": 3}

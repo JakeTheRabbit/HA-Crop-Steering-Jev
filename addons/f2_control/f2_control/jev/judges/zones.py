@@ -6,7 +6,8 @@ than water per plant, and only on the low side. Seen live (19-26 Sep 2026): zone
 drifted. This judge is asked whenever a zone's water per plant is under 70 % or over 140 % of its
 siblings', and says why.
 """
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 
 CAUSES = {
     "recipe_difference": "The zone's own settings (thresholds, shot size, targets) are simply different from its siblings', so it is watered differently on purpose.",
@@ -19,7 +20,7 @@ CAUSES = {
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "why_different": [
         choice("You are the head grower comparing irrigation zones in one room that should drink alike. "
                "Judge only from the facts given. This zone's water per plant today is very different from its "
@@ -30,7 +31,7 @@ QUESTIONS = {
                "room, using how fast its moisture falls, how it answers shots, and its settings compared with "
                "theirs.", CAUSES),
     ],
-}
+}, doctrine("probe", "maintenance", "slab"))
 
 ALERT_CAUSES = {"plants_drinking_less", "plants_drinking_more", "probe_wet_spot", "probe_dry_spot",
                 "delivery_fault", "water_not_landing"}
@@ -85,7 +86,7 @@ class ZonesJudge(Judge):
 
     def decide(self, verdicts, ctx):
         v = verdicts.get("why_different")
-        if v is None or not v.firm(0.6) or v.label not in ALERT_CAUSES:
+        if v is None or not v.firm_in(ALERT_CAUSES, 0.6) or v.label not in ALERT_CAUSES:
             return None
         mine, median, ratio = self._ratio(ctx)
         if ratio is None:

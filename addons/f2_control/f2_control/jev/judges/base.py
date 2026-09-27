@@ -18,6 +18,24 @@ def score(instructions, criteria):
     return {"type": "score", "instructions": instructions, "criteria": list(criteria)}
 
 
+def with_doctrine(questions, text):
+    """Every phrasing of every question, with the owner's doctrine (jev.doctrine) appended: Jev knows
+    none of its own, so each question carries the rules it is to judge by."""
+    return {name: [dict(v, instructions=f"{v['instructions']} {text}") for v in variants]
+            for name, variants in questions.items()}
+
+
+def stage_words(ctx):
+    """The day's place on the owner's stage arc, in one sentence, or None."""
+    st = ctx.stage
+    if not st:
+        return None
+    lo, hi = st["days"]
+    return (f"flower day {ctx.flower_day} of about {ctx.flower_days}: {st['stage']} (days {lo}-{hi}), where the "
+            f"owner's doctrine steers {st['steering']}, with a dryback of {st['dryback']}, {st['pore_ec']} and "
+            f"runoff {st['runoff']}; the stage moves on when {st['move_on_when']}")
+
+
 class Judge:
     name = "judge"
     phases = ("P0", "P1", "P2", "P3")  # the phases it may be asked in
@@ -69,4 +87,9 @@ def common(ctx) -> dict:
         e["water_today"] = f"{s.daily_vol:.1f} L of a {p.max_daily_volume:.0f} L daily limit"
     if ctx.feed_ec is not None:
         e["feed_ec"] = f"{ctx.feed_ec:.2f} mS/cm"
+    stage = stage_words(ctx)
+    e["stage_today"] = stage or ("flower day not known" if ctx.flower_day is None
+                                 else f"flower day {ctx.flower_day}: outside the owner's stage arc")
+    if ctx.steering:
+        e["operator_steering_mode"] = ctx.steering
     return e

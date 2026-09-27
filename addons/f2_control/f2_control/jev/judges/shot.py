@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from ..context import response
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 
 CODE = "CS-701"
 
@@ -26,7 +27,7 @@ LANDINGS = {
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "landing": [
         choice("You are the head grower checking one shot of irrigation on one zone of rockwool or coco, about 20 "
                "minutes after it ended. Judge only from the facts given. Doctrine: a shot that lands raises the "
@@ -40,7 +41,7 @@ QUESTIONS = {
                "while moisture stays flat. A slow dripper or a dry, hard-to-wet slab shows a small or late "
                "rise.", LANDINGS),
     ],
-}
+}, doctrine("probe", "maintenance", limit=4) + " " + doctrine("ramp", limit=3))
 
 
 @dataclass

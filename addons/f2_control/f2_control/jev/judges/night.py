@@ -11,7 +11,8 @@ the floor, and that the rescue shot still fires as normal.
 from datetime import timedelta
 
 from ..context import SETTLE_MIN, flat_minutes, response, trend, words_response, words_trend
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 from .dusk import rate_between
 
 STATES = {
@@ -22,12 +23,14 @@ STATES = {
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "night_drop": [
         choice("You are checking one zone overnight, lights off, on rockwool or coco, whose moisture reading is "
                "falling toward the emergency floor where a rescue shot fires. Judge only from the facts given. "
-               "Doctrine: with the lights off the plants drink little, so real overnight drying is slow and "
-               "steady, a fraction of a point an hour, and looks like the same hour on previous nights. A sudden "
+               "With the lights off the plants drink little, so real overnight drying is smooth and "
+               "steady and looks like the same hour on previous nights; how many points it is depends on the "
+               "probe, so compare with this zone's own nights. Lights-off also cools the slab, and a reading "
+               "that bends right at lights-off can be temperature, not water. A sudden "
                "step between two readings in a row is not drying. A fall much faster than the same hour last "
                "night, a reading frozen on one value, or a rescue shot the reading did not rise for, points to "
                "the probe, not the slab.", STATES),
@@ -36,7 +39,7 @@ QUESTIONS = {
                "A step down, a fall far faster than at this hour last night, or a probe stuck on one value is "
                "what a probe fault looks like.", STATES),
     ],
-}
+}, doctrine("dryback", "closed_loop", limit=3) + " " + doctrine("probe", limit=5))
 
 
 def _pace(tonight, last):

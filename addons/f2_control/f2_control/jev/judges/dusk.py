@@ -12,7 +12,8 @@ So does this judge. It can only bring P3 forward, and the overnight rescue shot 
 from datetime import datetime, timedelta
 
 from ..context import SETTLE_MIN, words_trend
-from .base import Judge, choice, common
+from ..doctrine import doctrine
+from .base import Judge, choice, common, with_doctrine
 
 STATES = {
     "enter_p3_now": "Stop watering now and start the overnight dryback: the zone is well above its re-water "
@@ -24,22 +25,25 @@ STATES = {
     "insufficient_evidence": "The facts do not support any of the other answers.",
 }
 
-QUESTIONS = {
+QUESTIONS = with_doctrine({
     "dusk_call": [
         choice("You are the head grower deciding when one zone's watering stops for the day and its overnight "
-               "dryback begins, on rockwool or coco. Judge only from the facts given. Doctrine: generative "
-               "steering wants the last shot earlier, so the slab dries back overnight toward the dryback target "
-               "by lights-on. A zone well above its re-water threshold this close to lights-off does not need "
+               "dryback begins, on rockwool or coco. Judge only from the facts given. Whether to stop early "
+               "depends on the stage and the steering mode: generative steering (flower setting, the finish) "
+               "wants the last shot earlier, so the slab dries back overnight toward the dryback target by "
+               "lights-on; vegetative steering (the bulk of flower) keeps refilling through the day and wants "
+               "only a small overnight dryback, so it stops late. A zone well above its re-water threshold this close to lights-off does not need "
                "another top-up. But never finish the day dry: the zone must go into the night well above the "
                "emergency floor. Pore EC well above its target climbs further as the slab dries overnight; one "
                "more shot of feed that is below pore EC brings it down first.", STATES),
         choice("Should this zone's watering stop now for the night? Stopping earlier gives a deeper overnight "
-               "dryback, the main steering lever. Stopping with the zone low leaves it dry by morning and forces "
+               "dryback, the main steering lever, which suits a generative stage and works against a "
+               "vegetative one. Stopping with the zone low leaves it dry by morning and forces "
                "the emergency rescue shot. A zone well above its re-water threshold near lights-off has enough "
                "water to coast; a zone near its threshold, or with pore EC well above target, gets one more "
                "shot first; a zone that would end the night near the emergency floor keeps watering.", STATES),
     ],
-}
+}, doctrine("dryback", "stage") + " " + doctrine("maintenance", limit=4))
 
 
 def rate_between(history, t0, t1):
@@ -102,6 +106,9 @@ class DuskJudge(Judge):
     questions = QUESTIONS
 
     def due(self, ctx, last_asked):
+        # A zone steered vegetative stops late: the envelope would refuse an early stop, so don't ask.
+        if (ctx.steering or (ctx.stage or {}).get("steering")) == "vegetative":
+            return False
         return ctx.hours_to_off <= 3.0 and super().due(ctx, last_asked)
 
     def evidence(self, ctx):

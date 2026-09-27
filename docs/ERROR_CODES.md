@@ -70,6 +70,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-702](#cs-702) | This zone's water per plant is out of line with the others | Information | Notification |
 | [CS-703](#cs-703) | Overnight low reading looks like a probe fault | Warning | Notification |
 | [CS-704](#cs-704) | Jev set this zone's probe aside | Warning | Notification |
+| [CS-705](#cs-705) | The zone is off the stage's arc | Information | Notification |
 
 ## Sensors (CS-1xx)
 
@@ -899,3 +900,24 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 **Suggested fixes**
 
 - Check the probe's placement and wiring, and which zone it is mapped to in Rooms & setup.
+
+<a id="cs-705"></a>
+
+### CS-705: The zone is off the stage's arc
+
+*Information · Notification*
+
+**What it means.** Jev's daily Stage judge compared the zone with the owner's stage arc for today's day of flower (steering, dryback, pore EC) and found it off, naming what and what the doctrine says.
+
+**Watering meanwhile.** Carries on as normal. This is advice only: nothing is changed.
+
+**Likely causes**
+
+- The zone's steering mode or settings are for another stage.
+- The overnight dryback or the pore EC has drifted outside the stage's band.
+- The stage's move-on signs have appeared.
+
+**Suggested fixes**
+
+- Compare the zone's settings with the stage (docs/JEV.md, the owner's stage arc), and change them if the stage has moved on.
+- Check jev_flower_start points at the right flip date.

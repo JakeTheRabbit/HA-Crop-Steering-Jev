@@ -2196,8 +2196,15 @@ class Controller:
             self._alert(key, "CS-702", title, message, room=room, zone=zone)
         elif code == "CS-703":
             self._alert(key, "CS-703", title, message, room=room, zone=zone)
+        elif code == "CS-705":
+            self._alert(key, "CS-705", title, message, room=room, zone=zone)
         else:
             log("jev alert refused: not in the error-code list", judge, code)
+
+    @staticmethod
+    def _jev_read(entity):
+        """One entity's state for Jev's context (the room's flower start date)."""
+        return ha_get(entity)[0]
 
     def _unreadable(self, entity, lo=0.0, hi=100.0, max_age_min=20):
         """Why `_read_sensor` found no usable moisture reading at `entity`, as (code, sentence).

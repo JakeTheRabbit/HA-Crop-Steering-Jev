@@ -122,3 +122,14 @@ configuration:
     description: >-
       The most calls Jev gets in a day across every room (default 2000). Once spent,
       the engine decides alone until midnight.
+  jev_flower_start:
+    name: Flower start (Jev's stage arc)
+    description: >-
+      Where each room's first day of 12/12 is, so the judges know the stage: an
+      input_datetime or a date for every room, or room=value pairs, e.g.
+      default=input_datetime.f2_flip_date, f1=input_datetime.f1_flip_date. Blank: the
+      judges work without a stage.
+  jev_flower_days:
+    name: Days of flower
+    description: >-
+      The cultivar's flowering length (default 56). The finish is its last 14 days.

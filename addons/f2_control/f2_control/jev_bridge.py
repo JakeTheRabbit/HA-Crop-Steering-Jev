@@ -12,6 +12,7 @@ from datetime import datetime
 from jev.brain import Brain
 from jev.client import Asker
 from jev.context import Shot, ZoneContext, ZoneHistory, response, words_response
+from jev.doctrine import stage_intent
 from jev.judges.dawn import DawnJudge
 from jev.judges.dusk import DuskJudge
 from jev.judges.night import NightJudge
@@ -19,16 +20,17 @@ from jev.judges.probe import ProbeJudge
 from jev.judges.ramp import RampJudge
 from jev.judges.salt import SaltJudge
 from jev.judges.shot import ShotJudge
+from jev.judges.stage import StageJudge
 from jev.judges.zones import ZonesJudge
 from jev.ledger import Ledger
 from jev.triage import Triage
 
-ALL = ("dawn", "ramp", "salt", "dusk", "probe", "shot", "night", "zones", "alerts")
+ALL = ("dawn", "ramp", "salt", "dusk", "probe", "shot", "night", "zones", "stage", "alerts")
 
 
 def judges():
     return [DawnJudge(), RampJudge(), SaltJudge(), DuskJudge(), ProbeJudge(), ShotJudge(), NightJudge(),
-            ZonesJudge()]
+            ZonesJudge(), StageJudge()]
 
 
 def build(options, cf, state_path, log):
@@ -43,7 +45,37 @@ def build(options, cf, state_path, log):
     log(f"jev: on, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
     brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
     brain.triage = Triage(asker) if "alerts" in allowed else None
+    brain.flower_start = flower_option(options.get("jev_flower_start"))
+    brain.flower_days = int(options.get("jev_flower_days") or 56)
     return brain
+
+
+def flower_option(value):
+    """`jev_flower_start`: one entity or date for every room, or `room=value` pairs, comma separated.
+    e.g. "input_datetime.flip" or "default=input_datetime.f2_flip_date, f1=input_datetime.f1_flip_date"."""
+    out = {}
+    for part in str(value or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        room, sep, val = part.partition("=")
+        out[room.strip() if sep else "*"] = (val if sep else room).strip()
+    return out
+
+
+def flower_day(c, room, now):
+    """Day of flower for the room (day 1 = the first day of 12/12), or None when the room doesn't say."""
+    brain = c.jev
+    val = getattr(brain, "flower_start", {}).get(room.slug) or getattr(brain, "flower_start", {}).get("*")
+    if not val:
+        return None
+    raw = c._jev_read(val) if "." in val and not val[:4].isdigit() else val
+    try:
+        start = datetime.fromisoformat(str(raw).strip()[:10]).date()
+    except (TypeError, ValueError):
+        return None
+    day = (now.date() - start).days + 1
+    return day if day >= 1 else None
 
 
 def _hist(room, zone):
@@ -54,7 +86,11 @@ def _hist(room, zone):
 def zone_context(c, room, zone, snap, p, now, lights_on):
     st = room.state[zone]
     plants = c._zone_num(room, zone, "plant_count", 0)
+    fday = flower_day(c, room, now)
+    fdays = getattr(c.jev, "flower_days", 56)
     return ZoneContext(
+        flower_day=fday, flower_days=fdays, stage=stage_intent(fday, fdays),
+        steering="vegetative" if c._veg(room, zone) else "generative",
         room=room.slug, prefix=room.prefix, zone=zone, title=c._zone_title(room, zone), now=now,
         phase=st["phase"], snap=snap, params=p, history=_hist(room, zone), lights_on=lights_on,
         hours_to_on=c._hours_to(now, room.lights_on_hour), hours_to_off=c._hours_to(now, room.lights_off_hour),

@@ -31,10 +31,19 @@ class Verdict:
     n: int  # how many variants answered
     value: float | None = None  # a score's averaged value
     probabilities: dict = field(default_factory=dict)
+    labels: list = field(default_factory=list)  # each phrasing's own answer
 
     def firm(self, min_prob=0.6):
         """Both phrasings agree and the averaged probability of the answer is at least `min_prob`."""
         return self.agreed and self.n >= 2 and self.prob >= min_prob
+
+    def firm_in(self, group, min_prob=0.6):
+        """Every phrasing's answer is one of `group` (answers that lead to the same action) and their
+        averaged probabilities add up to at least `min_prob`. "The slab is full" and "the EC left is the
+        feed passing" both mean hand the ramp over: split between them, neither alone is firm."""
+        group = {str(g) for g in group}
+        return (self.n >= 2 and all(str(x) in group for x in self.labels)
+                and sum(self.probabilities.get(g, 0.0) for g in group) >= min_prob)
 
 
 def _variants(answers, name):
@@ -61,7 +70,8 @@ def combine(answers, name):
             prob = avg if label else 1.0 - avg
             conf = min(abs(p - 0.5) * 2.0 for p in ps)
             return Verdict(name, kind, label, round(prob, 3), round(conf, 3), agreed, len(vs),
-                           probabilities={"true": round(avg, 3), "false": round(1 - avg, 3)})
+                           probabilities={"true": round(avg, 3), "false": round(1 - avg, 3)},
+                           labels=[p >= 0.5 for p in ps])
         probs = {}
         for v in vs:
             for k, p in (v.get("probabilities") or {}).items():
@@ -71,13 +81,15 @@ def combine(answers, name):
             label = max(probs, key=probs.get) if probs else vs[0].get("choice")
             agreed = all(v.get("choice") == label for v in vs)
             return Verdict(name, kind, label, round(probs.get(label, 0.0), 3), round(conf, 3), agreed,
-                           len(vs), probabilities={k: round(p, 3) for k, p in probs.items()})
+                           len(vs), probabilities={k: round(p, 3) for k, p in probs.items()},
+                           labels=[v.get("choice") for v in vs])
         scores = [float(v["score"]) for v in vs]
         value = sum(scores) / len(scores)
         level = int(round(value))
         agreed = all(int(round(s)) == level for s in scores)
         return Verdict(name, "score", level, round(probs.get(str(level), 0.0), 3), round(conf, 3),
                        agreed, len(vs), value=round(value, 3),
-                       probabilities={k: round(p, 3) for k, p in probs.items()})
+                       probabilities={k: round(p, 3) for k, p in probs.items()},
+                       labels=[int(round(x)) for x in scores])
     except (AttributeError, KeyError, TypeError, ValueError):
         return None

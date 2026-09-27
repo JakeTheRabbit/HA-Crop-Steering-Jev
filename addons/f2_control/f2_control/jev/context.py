@@ -148,6 +148,16 @@ class ZoneContext:
     feed_ec: float | None = None
     track: dict = field(default_factory=dict)  # judge -> "their last calls and how they turned out"
     probe_entity: str = ""
+    flower_day: int | None = None  # day of flower (day 1 = the first day of 12/12), when the room says
+    flower_days: int = 56  # the cultivar's flowering length
+    stage: dict | None = None  # doctrine.stage_intent(flower_day): the owner's stage arc row for today
+    steering: str | None = None  # the operator's steering mode for the zone: "vegetative" or "generative"
+
+    @property
+    def since_lights_min(self):
+        """Minutes since the lights last switched (on while on, off while off)."""
+        hours = self.hours_to_on if self.lights_on else self.hours_to_off
+        return round((24.0 - hours) * 60.0) % 1440
 
     def typical_rise(self):
         """The median retained rise of this zone's settled shots today, or None."""

@@ -8,7 +8,9 @@ day's watering stops, why one zone drinks differently, and which alert is worth 
 
 Code keeps everything physical: pumps and valves, shot sizes, the daily floor and cap, every rescue. Jev decides
 inside that envelope, in the background, and when it is off, slow or wrong-footed the engine runs exactly as the
-original. **What "truly insane and amazing" means here, and how each of the nine judges works: [docs/JEV.md](docs/JEV.md).**
+original. Every question carries the owner's own doctrine from his GrowLabs wiki (99 rules, and the stage arc for
+each day of flower). **What "truly insane and amazing" means here, and how each of the ten judges works:
+[docs/JEV.md](docs/JEV.md).**
 
 | Checked against the real Jev (27 Sep 2026) | Jev's answer | What code did |
 |---|---|---|
@@ -17,9 +19,12 @@ original. **What "truly insane and amazing" means here, and how each of the nine
 | EC climbing after dilute shots, feed lower | salt front still passing (p 0.93) | kept steering wetter |
 | Two shots, no rise, a sibling rose | water not reaching the zone (p 0.96) | the CS-701 alert, on the second |
 | A 3.4-point step at 2 AM near the rescue floor | probe fault (p 0.97) | the CS-703 alert; the rescue still fires |
-| Zone on half its siblings' water, probe reading high | the two phrasings disagreed | nothing: the council needs both |
+| Zone on half its siblings' water, probe reading high | wet spot or plants drinking less (both phrasings alert-worthy) | the CS-702 alert |
+| 2 h to lights-off, flower setting (generative) | stop now (p 0.82) | brought P3 forward |
+| The same zone in flower bulk (vegetative) | stop now | refused: a vegetative zone stops late (the owner's doctrine) |
+| A zone left on generative steering in flower bulk | last night's dryback too shallow (p 0.99) | CS-705, naming the steering mismatch too |
 
-Eleven of eleven as an experienced grower would expect, at about 1,300 input tokens a question
+Fourteen of fourteen as an experienced grower would expect, at about 3,000 input tokens a question
 (Cloudflare prices Jev at $0.042 per million: cents a day for a room). Re-run it any time with
 `scripts/jev_live_smoke.py`.
 

@@ -696,6 +696,23 @@
       "fixes": [
         "Check the probe's placement and wiring, and which zone it is mapped to in Rooms & setup."
       ]
+    },
+    {
+      "code": "CS-705",
+      "title": "The zone is off the stage's arc",
+      "source": "notification",
+      "severity": "info",
+      "meaning": "Jev's daily Stage judge compared the zone with the owner's stage arc for today's day of flower (steering, dryback, pore EC) and found it off, naming what and what the doctrine says.",
+      "watering": "Carries on as normal. This is advice only: nothing is changed.",
+      "causes": [
+        "The zone's steering mode or settings are for another stage.",
+        "The overnight dryback or the pore EC has drifted outside the stage's band.",
+        "The stage's move-on signs have appeared."
+      ],
+      "fixes": [
+        "Compare the zone's settings with the stage (docs/JEV.md, the owner's stage arc), and change them if the stage has moved on.",
+        "Check jev_flower_start points at the right flip date."
+      ]
     }
   ]
 }

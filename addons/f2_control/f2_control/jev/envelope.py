@@ -56,6 +56,9 @@ def admit(d: Directive, ctx, confirmed=0, evidence_ok=False):
                 return False, f"VWC {snap.vwc:.1f} more than 3 points under the ramp ceiling {ceiling:.1f}"
             return True, "ramp near its ceiling with the minimum shots in"
         if target == "P3":
+            steering = ctx.steering or ((ctx.stage or {}).get("steering"))
+            if steering == "vegetative":
+                return False, "the zone is steered vegetative: its watering stops late (owner's doctrine)"
             if ctx.hours_to_off > 3.0:
                 return False, f"{ctx.hours_to_off:.1f} h to lights-off: only the last 3 h"
             if snap.vwc < p.p3_emergency_floor + 3.0:
