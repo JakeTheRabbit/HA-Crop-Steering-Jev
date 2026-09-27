@@ -19,6 +19,11 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.1.0 - 2026-09-28
+
+- Every decision Jev makes is now recorded with what the controller did about it, ready for a live log on the dashboard.
+- Bug fixes and improvements.
+
 ## 3.0.1 - 2026-09-27
 
 - When one zone gets far more water than the others, only that zone is flagged now; its neighbours no longer hear of a fault they don't have.
