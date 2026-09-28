@@ -19,6 +19,11 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.4.2 - 2026-09-28
+
+- A pump plug that is slow to report it has switched off no longer stops the room's watering.
+- Bug fixes and improvements.
+
 ## 3.4.1 - 2026-09-28
 
 - The README explains the Jev edition from scratch, with a screenshot of every page where Jev shows.

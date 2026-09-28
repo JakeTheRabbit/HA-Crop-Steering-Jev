@@ -1,3 +1,7 @@
+# 3.4.2
+
+Pair with integration 3.4.2. **C3.** A switch that has not reported OFF 6 s after a close is sent OFF again and read back for 10 s more before a hardware hold (#18). No change to add-on options or the state file. Not run on hardware.
+
 # 3.4.1
 
 Pair with integration 3.4.1. **C1.** The app's documentation page describes Jev and its options, and the install guide's buttons add this repository (#16); the dashboard demo shows Jev's re-water range as the controller bands it (#15). No change to the controller, its options or the state file. Not run on hardware.
