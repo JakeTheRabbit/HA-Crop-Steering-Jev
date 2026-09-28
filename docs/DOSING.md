@@ -17,7 +17,7 @@ pump name or recipe is assumed.
 | Layer | Owns | Never does |
 |---|---|---|
 | Integration | Each room's dosing configuration and its one pending request, in a revisioned store; the services to read, save and request; `sensor.crop_steering_<prefix>dosing_config` for the controller | Switch, press or set any hardware |
-| Controller app | Every action: doses, batches, stops, the irrigation hold during a batch, recovery after a restart, alerts CS-801 to CS-806; `sensor.crop_steering_<prefix>dosing` with live status | Act on a request older than 120 s, or on a room whose configuration it cannot read |
+| Controller app | Every action: doses, batches, stops, the irrigation hold during a batch and while dosing hardware does not read off, recovery after a restart, alerts CS-801 to CS-807; `sensor.crop_steering_<prefix>dosing` with live status | Act on a dose or batch asked for more than 120 s before, or on a room whose configuration it cannot read; switch a dosing pump's power on |
 | Dashboard | Equipment › Dosing: pumps, a dose form, the batch, the recipe, history, and the dosing setup | Write any hardware entity; everything goes through `dosing_request` |
 
 ## Configuration (integration store `crop_steering.dosing.<entry_id>`)
@@ -123,42 +123,70 @@ restart does not take it again, and published as `handled`). A room whose `dosin
 read has no request taken.
 
 - Taken only when it is less than 120 s old. An older one is published as `handled` with the result
-  "too old to act on" and does nothing, so a request left while the controller was down never fires later.
-- `stop`: switches off every pump's `power_entity` in the room (whatever it reads), and ends a dose
-  or a batch (below).
+  "too old to act on" and does nothing, so a request left while the controller was down never fires
+  later. The one exception is a `stop` for a room with a dose or batch running, or with dosing
+  hardware that does not read off (Holding, below): it is acted on however old it is.
+- `stop`: switches off every pump's `power_entity` in the room (whatever it reads), those of the
+  setup the running dose or batch started with as well as the current setup's (a setup saved since
+  may name other pumps), and ends a dose or a batch (below). A dose or batch looks for a stop before
+  every switch-on and at every step, not only on its 2 s passes. In a room held by hardware that does
+  not read off, a stop sends the offs again, and releases the room once everything reads off.
+  `power_entity` is the motor's own switch on the firmwares this drives (off = idle), so a stop never
+  switches it back on.
 - `dose`: one pump, `ml` mL, into the tank as it is.
 - `batch`: the batch sequence. Refused while `hold_entity` is already on (something else is
-  dosing), or while the room has a latched hardware fault.
+  dosing) or can't be read, or while the room has a latched hardware fault.
 - The thread does one thing at a time: while a dose or a batch runs, in any room, a `dose` or a
-  `batch` is refused (a `stop` is always acted on), and so is one for a room whose last batch left
-  hardware that does not read off. A request refused meanwhile keeps its own `handled_result`: the
-  end of the running dose or batch never takes its place.
+  `batch` is refused (a `stop` is always acted on), and so is one for a room held by dosing hardware
+  that does not read off ("refused: <entity> does not read off yet"). A request refused meanwhile
+  keeps its own `handled_result`: the end of the running dose or batch never takes its place.
+- One room's error never stops the others: each room is read in its own turn, and a room that fails
+  15 passes in a row (30 s) raises CS-806 ("dosing in this room keeps failing").
 
 `handled_result` says what came of the request `handled` names: for a dose "dosing" on start, then
-the dose's result ("finished", "ran past its time", "not confirmed", "stopped"; for a pump linked to
-a stock tank, "not confirmed; nothing drawn from its stock tank"); for a batch
-"making a batch", then "finished" or "stopped: <step>: <reason>"; a refusal
-"refused: <reason>" (for example "refused: Bloom is not calibrated (flow 0)" or
-"refused: a batch is running"); an old request "too old to act on"; a stop "stopped".
+the dose's result ("finished", "ended early", "ran past its time", "not confirmed", "stopped",
+"stopped: an error in the controller"; for a pump linked to a stock tank, "not confirmed; nothing
+drawn from its stock tank"); for a batch "making a batch", then "finished", "finished; <entity>
+could not be stamped" or "stopped: <step>: <reason>"; a refusal "refused: <reason>" (for example
+"refused: Bloom is not calibrated (flow 0)" or "refused: a batch is running"); an old request "too
+old to act on"; a stop "stopped", or "stopped; <entity> does not read off".
 
 ### One dose (`ml` into a pump)
 
-1. Refuse unless the pump's `flow_entity` reads a number > 0 (a firmware that divides by a zero
-   flow runs its motor for ever), `ml` ≤ `max_ml`, and `dosing_entity` does not already read dosing.
-2. Write the dose to `/data/dosing_state.json` (atomic) before anything moves.
+1. Refuse unless the pump's `flow_entity` reads a finite number of at least 0.05 mL/s (a firmware
+   that divides by a zero flow runs its motor for ever, and a tiny one would put every time limit
+   hours away: "refused: <pump> is not calibrated (flow 0.01)"), `ml` ≤ `max_ml`, the dose's
+   expected time `ml / flow` is at most 20 minutes, `dosing_entity` reads, and does not read dosing,
+   and `power_entity` does not read on ("refused: <pump> is running by hand": on these firmwares it
+   is the motor's own switch).
+2. Write the dose to `/data/dosing_state.json` (atomic, file and directory synced) before anything
+   moves, with the volume number it is about to change, so even a restart puts it back.
 3. Remember the volume number, set it to `ml`, and read it back (within 0.5 mL). A volume that does
    not read back is never started, and a dose is refused when `restore_volume` is on and the volume
    number can't be read (it could not be put back).
-4. Press `start_entity` (`button.press`, `input_button.press` or `script.turn_on`). The pump's
-   power is never switched on.
+4. Press `start_entity` (`button.press`, `input_button.press` or `script.turn_on`), noting the time
+   just before. The pump's power is never switched on.
 5. Expected time `t = ml / flow`. Wait (reading every second) until the pump has been seen dosing
-   and then reads not dosing. Deadline `t × 1.25 + 20 s`.
+   and then reads not dosing. Deadline `t × 1.25 + 20 s`, and never more than 21 minutes.
+   - It counts as done only when a read saw it dosing, or Home Assistant's recorder shows it dosing
+     after the press (a dose too short to catch between two reads; the recorder may take a few
+     seconds to have it, and is asked again until `t + 15 s`). A change of state alone is not
+     enough: unavailable → idle is a pump that restarted.
+   - Read unavailable or unknown at any point after the press (by a read, or in the recorder):
+     result "not confirmed", alert **CS-802**.
+   - Never seen dosing by `t + 15 s`: result "not confirmed", alert **CS-802**.
+   - Done in less than half of `t`: result "ended early", alert **CS-802**; a batch stops.
    - Still dosing at the deadline: switch `power_entity` off, confirm it reads off (re-sent once),
      result "ran past its time", alert **CS-801**.
-   - Never seen dosing by `t + 15 s`: result "not confirmed", alert **CS-802** (a very short dose
-     can finish between two reads: seeing the pump's state change to dosing and back within the window counts).
-6. Put the volume number back when `restore_volume` is on.
-7. Clear the dose from `dosing_state.json`; publish the result.
+   - An error in the controller: its power off and read back, result "stopped: an error in the
+     controller", alert **CS-806**.
+6. Put the volume number back when `restore_volume` is on, once the pump reads idle or its power
+   reads off (never while it may still be running: until then it is kept, and tried again every
+   30 s), and read it back: when it does not read back, CS-806 says "the volume number of <pump>
+   could not be put back to <x> mL".
+7. Clear the dose from `dosing_state.json`; publish the result. When its power does not read off
+   (after the deadline, a stop or an error), the record is kept instead and the room's watering is
+   held until it does (Holding, below).
 
 ### A batch
 
@@ -168,42 +196,83 @@ room whose pump, main line or valves are among the batch's `mix_pump`, `mix_valv
 (closing them would otherwise cut that room's shot). The hold is set under the lock a shot starts
 under, so a shot in a held room has either started (and the batch waits for it) or never starts.
 
-Before anything moves (before Hold), every recipe pump's amount and flow are checked. A recipe
-entry whose `ml_entity` is set but reads nothing usable refuses the batch
-("refused: the recipe amount for <pump> can't be read"): it is never replaced by the fixed `ml`.
-An amount of 0 skips the pump; any other recipe pump whose flow reads 0 or nothing refuses the
-batch too ("refused: <pump> is not calibrated (flow 0)"), and so does an amount above its `max_ml`.
-The watchdog is set from these doses.
+Before anything moves (before Hold), the batch is checked. It is refused while `hold_entity` is on
+or can't be read, while there is a `fill_valve` and `full_entity` can't be read ("refused: the
+tank's full sensor can't be read"), and when `mix_min_w` is above 0 with a `mix_pump` but no
+`mix_power_sensor`. Every recipe pump's amount and flow are checked too. A recipe entry whose
+`ml_entity` is set but reads nothing usable refuses the batch ("refused: the recipe amount for
+<pump> can't be read"): it is never replaced by the fixed `ml`. An amount of 0 skips the pump; any
+other recipe pump whose flow reads below 0.05 mL/s or nothing refuses the batch too ("refused:
+<pump> is not calibrated (flow 0)"), and so do an amount above its `max_ml` and a dose expected to
+take more than 20 minutes. The watchdog is set from these doses.
 
 | Step | What happens | Ends the batch (with its code) when |
 |---|---|---|
-| Hold | `hold_entity` on; wait for any shot in flight in a held room to finish (10 min at most) | a shot is still running after 10 min |
+| Hold | `hold_entity` on, read back; wait for any shot in flight in a held room to finish (10 min at most) | the hold does not read on; a shot is still running after 10 min |
 | Close | switch off each held room's valves, main line and pump, and `close_entities`; read back | a switch does not read off (CS-806) |
-| Fill | skipped when `full_entity` already reads full or there is no `fill_valve`; else open it and wait for full; always close it and read back | not full within `fill_timeout_min` (**CS-804**) |
-| Mix | skipped without a `mix_pump`; open `mix_valves` and read them back, start `mix_pump`; with `mix_min_w` and a `mix_power_sensor`, wait up to 20 s for the power | a mix valve does not open (CS-806); the pump does not draw its power (**CS-805**) |
+| Fill | skipped when `full_entity` already reads full or there is no `fill_valve`; else open it, read it back on within 10 s, and wait for full; always close it and read back | the fill valve does not read on (**CS-804**, "the fill valve did not open"); `full_entity` reads nothing usable as the fill begins or for 15 s while it fills (**CS-804**, "the full sensor stopped reporting"); not full within `fill_timeout_min` (**CS-804**) |
+| Mix | skipped without a `mix_pump`; open `mix_valves` and read them back, start `mix_pump` and read it back on; with `mix_min_w` and a `mix_power_sensor`, wait up to 20 s for the power | a mix valve does not open (CS-806); the pump does not read on or does not draw its power (**CS-805**) |
 | Premix | `premix_min` minutes | |
 | Dose | each recipe pump in order, as "One dose", with the amounts read before Hold; 0 skips | a dose ends any other way than finished (CS-801/802) |
 | Postmix | `postmix_min` minutes | |
-| Finish | stop `mix_pump`, close `mix_valves`, read back; stamp `filled_at_entity` (`input_datetime.set_datetime` with the end time as a timestamp); `hold_entity` off | a switch does not read off (CS-806) |
+| Finish | stop `mix_pump`, close `mix_valves`, read back; stamp `filled_at_entity` (`input_datetime.set_datetime` with the end time as a timestamp); `hold_entity` off, read back | a switch does not read off (CS-806) |
 
 - A `stop` at any point ends the batch: every dosing pump off, the fill valve closed, the mix pump
-  off, the mix valves closed, `hold_entity` off. The result names the step it stopped in. Every
-  other end (a step that fails, the watchdog, an error in the controller) switches off the same.
+  off, the mix valves closed, and then `hold_entity` off. The result names the step it stopped in.
+  Every other end (a step that fails, the watchdog, an error in the controller) switches off the
+  same. A stop is looked for before every switch-on and at every step.
 - Every end other than finishing raises **CS-806** with the step and the reason, after its own code.
-  When any of that hardware does not read off, the rooms stay held, and the record kept, until it
-  does: it is switched off again every 2 s.
-- The whole batch has a watchdog: fill timeout + premix + postmix + every dose's deadline + 10 min.
+  When any of that hardware does not read off, `hold_entity` stays on, and the rooms stay held and
+  the record kept, until it does (Holding, below).
+- A fill time that could not be stamped still finishes the batch, as "finished; <entity> could not
+  be stamped", with CS-806 (record the batch by hand for the stock tanks that count by it). A
+  `hold_entity` that does not read off at the end holds the rooms like any other switch (Holding).
+- The whole batch has a watchdog: the 10-minute wait for a shot + fill timeout + premix + postmix +
+  every dose's deadline (each capped at 21 minutes) + 10 min.
 - Stamping `filled_at_entity` is what the stock tanks count batches by, so a stock tank whose per-batch
   dose points at the same recipe number is drawn down by exactly what was dosed.
 
+### Holding: dosing hardware that does not read off
+
+Whatever a dose or a batch switched off, or tried to, and does not read off (a dosing pump's power,
+the fill valve, the mix pump, a mix valve, a batch's `hold_entity`) holds watering: the dose's room,
+or every room the batch held. `_blocked` then reads "dosing hardware still on: <entity>". The record
+in `dosing_state.json` is kept, so a restart holds it again. Every 2 s the controller reads it and
+sends the off again to what does not read off; unavailable, unknown or missing never counts as off.
+A batch's `hold_entity` is switched off only once the rest reads off. The alert (CS-801 for a dose
+past its time, CS-803 after a restart, CS-806 otherwise) names what does not read off and comes
+again every 30 minutes; once everything reads off the rooms water again, the record is cleared, and
+the same notification says so. A `stop` for the room sends the offs at once, and releases the room if
+they read off. A dose or a batch in that room is refused meanwhile.
+
 ### After a restart
 
-If `/data/dosing_state.json` holds a dose or a batch in progress, the controller at start-up switches
-off every pump's `power_entity`, the fill valve, the mix pump and the mix valves of that room, turns
-`hold_entity` off, clears the record and raises **CS-803**. It never resumes a batch. While Home
-Assistant can't be reached at start-up, the dosing thread tries again every 2 s. When the app is
-stopped during a dose or a batch (an update, a restart), it switches that hardware off on its way
-out as well, without waiting to read it back, and keeps the record for the next start.
+If `/data/dosing_state.json` holds a dose or a batch in progress, the controller at start-up, before
+its first loop, holds the rooms it held (the batch's, or the dose's own), switches off every pump's
+`power_entity`, the fill valve, the mix pump and the mix valves of that room, and then treats it as
+under Holding: read and sent off again every 2 s until every one reads off (a device that has not
+come back after a host boot reads unavailable, and Home Assistant answers turning it off all the
+same, so it is never counted as off). Only then does a batch's `hold_entity` go off, and the rooms
+water again and the record is cleared. **CS-803** says so once Home Assistant answers: that it was
+all switched off, or what still does not read off (and again every 30 minutes). The volume number
+the dose changed is put back. A single dose's record never names a batch's `hold_entity`, so neither
+a restart nor the way out ever touches it for a dose. It never resumes a dose or a batch.
+
+A `dosing_state.json` that can't be read is kept as `dosing_state.json.bad`, a fresh one is started,
+and CS-803 says so; then every room with dosing set up has its current dosing hardware (every pump's
+power, the fill valve, the mix pump, the mix valves; never `hold_entity`, which may be someone
+else's) switched off and held the same way, as soon as its setup can be read. Every write of the file
+is atomic, and the file and its directory are synced.
+
+The dosing thread is watched: the controller's main loop checks it every loop, and one that has died
+is started again (whatever it had recorded is held and switched off as after a restart) with CS-806;
+one that has not gone round for 10 minutes raises CS-806 (once every 30 minutes).
+
+When the app is stopped (SIGTERM: an update, a restart), the shot in flight is closed first; then no
+dosing switch-on starts any more (one already on its way to Home Assistant lands first, 5 s at most),
+the dosing thread gets 3 s to switch its own dose's or batch's hardware off, and everything recorded
+is switched off again, each off with a 2 s timeout and without waiting to read it back. The record
+stays, and a batch's `hold_entity` stays on, for the next start.
 
 ### Status: `sensor.crop_steering_<prefix>dosing`
 
@@ -213,13 +282,13 @@ State: `idle` | `dosing` | `batch` | `unavailable` (the room's configuration can
 {
   "pumps": {"balance": {"state": "idle" | "dosing" | "unavailable", "flow_ml_s": 11.06,
                         "target_ml": 25, "started_at": "…", "expected_s": 2.3,
-                        "last": {"ml": 25, "at": "…", "result": "finished" | "ran past its time" | "not confirmed" | "stopped"}}},
+                        "last": {"ml": 25, "at": "…", "result": "finished" | "ended early" | "ran past its time" | "not confirmed" | "stopped"}}},
   "batch": {"step": "idle" | "hold" | "close" | "fill" | "mix" | "premix" | "dose" | "postmix" | "finish",
             "pump": "bloom" | null, "started_at": "…", "step_started_at": "…",
             "steps": [{"step": "fill", "state": "done" | "running" | "skipped" | "failed", "at": "…", "note": "…"}],
             "result": null | "finished" | "stopped: <reason>", "ended_at": null | "…"},
   "handled": "<request id>", "handled_result": "…",
-  "history": [{"kind": "dose" | "batch", "at": "…", "ended_at": "…", "result": "…",
+  "history": [{"kind": "dose" | "batch" | "draw", "at": "…", "ended_at": "…", "result": "…",
                "doses": {"balance": 300, "bloom": 1800}, "by": "…"}],  // newest first, 20 kept
   "updated_at": "…"                    // the controller's last publish
 }
@@ -227,20 +296,34 @@ State: `idle` | `dosing` | `batch` | `unavailable` (the room's configuration can
 
 `updated_at` is the time of the controller's last publish, refreshed at least every 60 s even
 when nothing changes, so the page can tell a stale controller. It is published on every change as
-well; each pump's `flow_ml_s` and `state` are read every 30 s and whenever the setup's revision
-changes. Nothing is published for a room whose integration has no `dosing_config` (one from before
-dosing). `dosing_state.json` keeps `handled`, each pump's `last` and the `history` across a restart.
+well; each pump's `flow_ml_s` and `state` are read every 30 s, and whenever the setup's revision
+changes while nothing runs, with a 2 s timeout. While a dose or batch runs, that reading, the stock
+draws not yet taken, alerts not yet created and volume numbers still to put back wait 30 s between
+runs, so they never hold up its watch. When one read of the setup fails while a dose or batch runs
+in the room, the status keeps the setup it started with (`dosing` or `batch`, not `unavailable`).
+Nothing is published for a room whose integration has no `dosing_config` (one from before dosing).
+`dosing_state.json` keeps `handled`, each pump's `last`, the `history` (with a `draw` entry for a
+stock draw that was dropped, below), the draws and alerts not yet delivered and the volume numbers
+still to put back across a restart.
 
 ## Alerts (controller, group CS-8xx "Dosing")
 
 | Code | Title | Watering |
 |---|---|---|
-| CS-801 | A dosing pump ran past its time and was switched off | carries on (a batch stops) |
-| CS-802 | A dose could not be confirmed | carries on (a batch stops) |
-| CS-803 | A dose or batch was interrupted by a restart | carries on; dosing hardware was switched off |
-| CS-804 | The batch tank did not fill in time | held rooms water again; the fill valve was closed |
+| CS-801 | A dosing pump ran past its time and was switched off | carries on (a batch stops), unless its power does not read off: then the room is held until it does |
+| CS-802 | A dose could not be confirmed, or ended early | carries on (a batch stops) |
+| CS-803 | A dose or batch was interrupted by a restart | the rooms it held stay held until its dosing hardware reads off |
+| CS-804 | The batch tank could not be filled | held rooms water again; the fill valve was closed |
 | CS-805 | The mixing pump did not start | held rooms water again |
-| CS-806 | A batch was stopped | held rooms water again once the hardware reads off |
+| CS-806 | Dosing was stopped, or needs a check | held rooms water again once the hardware reads off; a dose's pump that does not read off holds its room |
+| CS-807 | A dose was not taken off its stock tank | carries on |
+
+Each event (a dose, a batch, a restart) raises its own notification, so a second one within half an
+hour is never swallowed by the first, and an alert about hardware that does not read off is updated
+on the same card (every 30 minutes, and once it reads off). An alert Home Assistant does not take (it
+is down, typically at the moment hardware fails) is kept in `dosing_state.json` and raised again
+until it does. Switching a room off does not dismiss its dosing notifications: they are about the
+tank. CS-801, CS-803 and CS-806 always push to a phone, whatever Jev's Alerts judge says.
 
 ## Stock tanks
 
@@ -249,14 +332,18 @@ stock store, `crop_steering.stock.<entry_id>`, or null). A stock tank is linked 
 and its level then follows what that pump has actually dosed:
 
 - When a dose ends, the controller draws it from the pump's stock tank: "finished" → the requested
-  mL; "ran past its time" or "stopped" → the requested mL or the seconds since the start press ×
-  the flow, whichever is less; "not confirmed" → nothing, and the result says so
-  ("not confirmed; nothing drawn from its stock tank"). The doses of a batch draw the same way, one
-  by one.
+  mL; "ended early", "ran past its time" or "stopped" → the requested mL or the seconds from the
+  start press to its end (to the moment its stop or cut was sent) × the flow, whichever is less;
+  "not confirmed" → nothing, and the result says so ("not confirmed; nothing drawn from its stock
+  tank"). The doses of a batch draw the same way, one by one.
 - It draws through `crop_steering.stock_draw` with the key `<prefix>:<pump>:<the dose's
-  started_at>`. Undelivered draws are kept in `/data/dosing_state.json` and sent again every tick
-  until the service answers, so a draw survives Home Assistant being down or a restart; the key
-  means it is never counted twice.
+  started_at>`, asking for the service's answer (`?return_response`), once the dose or batch has
+  ended. Draws not yet taken are kept in `/data/dosing_state.json` and sent again (every 2 s, and
+  every 30 s while a dose or batch runs, each with a 2 s timeout), so a draw survives Home Assistant
+  being down or a restart; the key means it is never counted twice. A draw is dropped, kept in the
+  room's history (a `draw` entry) and alerted once (**CS-807**) when the answer names its tank as one
+  the room does not have (`skipped`), when Home Assistant refuses it (HTTP 4xx: sending it again
+  changes nothing), and when it has not been taken 24 hours after the dose.
 - The stock store's fill-based batch draw (a newer time on the room's tank last-fill entity takes
   each tank's per-batch dose) skips the tanks linked to a pump: their doses draw them, so a batch
   that stamps `filled_at_entity` never counts them twice. A batch recorded by hand
@@ -274,7 +361,8 @@ and its level then follows what that pump has actually dosed:
 ml / 1000 from each named tank's `level_l` (never below 0), appends a history entry
 `{at, source, draw_ml, key}` and commits a new revision, which raises the low-stock Repairs card
 (CS-608) as usual. Unknown tank ids are skipped and listed in the response. It answers only when
-asked (`SupportsResponse.OPTIONAL`): the controller calls it over REST without asking.
+asked (`SupportsResponse.OPTIONAL`): the controller asks, over REST (`?return_response`); a call
+without asking (an older controller) is taken all the same.
 
 ## The page (Equipment › Dosing)
 
