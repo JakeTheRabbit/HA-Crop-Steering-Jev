@@ -4,8 +4,9 @@ The base controller pushes every alert to the phone like a critical fault, every
 lasts, whatever the hour. Every alert still becomes a Home Assistant notification card; this decides
 only the push. The first time an alert is raised it pushes as it always did, because nothing waits on
 Jev; Jev's answer then decides whether its repeats keep buzzing a phone. Some alerts always push: a
-pump or valve fault, a probe the controller has lost, water not reaching a zone, and anything Jev itself
-raises about a probe.
+pump or valve fault, a probe the controller has lost, water not reaching a zone, anything Jev itself
+raises about a probe, and dosing hardware that ran past its time, was interrupted by a restart or
+stopped a batch (CS-801, CS-803, CS-806: they repeat while something does not read off).
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ from datetime import datetime
 from . import council
 from .judges.base import choice
 
-ALWAYS = {"CS-101", "CS-102", "CS-103", "CS-207", "CS-701", "CS-703", "CS-704"}
+ALWAYS = {"CS-101", "CS-102", "CS-103", "CS-207", "CS-701", "CS-703", "CS-704", "CS-801", "CS-803",
+          "CS-806"}
 REASK_H = 6.0
 
 URGENCY = {

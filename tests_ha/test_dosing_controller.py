@@ -48,7 +48,7 @@ async def test_the_controller_doses_what_the_integration_was_asked_for(
     runner._mono = clock.monotonic
     pressed = []
 
-    def call(domain, service, **data):  # the pump's firmware, as the other tests script it
+    def call(domain, service, timeout=None, **data):  # the pump's firmware, as the other tests script it
         fake.calls.append((domain, service, data))
         if service == "set_value":
             fake.set_state(data["entity_id"], f"{float(data['value']):g}")
@@ -78,12 +78,24 @@ async def test_the_controller_doses_what_the_integration_was_asked_for(
     [draw] = [data for domain, service, data in sent if (domain, service) == (DOMAIN, "stock_draw")]
     assert draw["draws"] == {"balance": 22} and draw["source"] == "dose"
 
-    # What the controller sent, as REST carries it and without asking for the answer, is taken
-    # by the real service; sent again (it never heard back), it counts once.
+    # What the controller sent, as REST carries it and asking for the answer (?return_response), is
+    # taken by the real service, whose answer has what the controller reads (a tank it skipped); sent
+    # again (it never heard back), it counts once.
+    answers = []
     for _attempt in range(2):
-        await hass.services.async_call(
-            DOMAIN, "stock_draw", json.loads(json.dumps(draw)), blocking=True
+        answers.append(
+            await hass.services.async_call(
+                DOMAIN,
+                "stock_draw",
+                json.loads(json.dumps(draw)),
+                blocking=True,
+                return_response=True,
+            )
         )
+    assert [(a["counted"], a["duplicate"], a["skipped"]) for a in answers] == [
+        (True, False, []),
+        (False, True, []),
+    ]
     stock = await _call(hass, hass_admin_user, "stock_get")
     assert stock["tanks"][0]["level_l"] == 9.978
     assert stock["history"][0]["key"] == draw["key"]

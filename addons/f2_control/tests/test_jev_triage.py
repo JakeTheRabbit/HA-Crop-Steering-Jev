@@ -32,7 +32,8 @@ def test_an_escalating_or_unsure_repeat_still_pushes():
 
 def test_pump_valve_and_probe_alerts_always_push_without_asking():
     t = _triage(K.both("urgency", K.choice_answer("quiet", {"quiet": 0.99})))
-    for code in ("CS-301", "CS-308", "CS-102", "CS-701", "CS-704"):
+    # CS-801, CS-803 and CS-806: dosing hardware past its time, interrupted, or left on by a batch.
+    for code in ("CS-301", "CS-308", "CS-102", "CS-701", "CS-704", "CS-801", "CS-803", "CS-806"):
         for _ in range(3):
             assert t.push(f"k{code}", code, "t", "m", K.NOW) == (True, "always pushed")
     assert t.asker.stats["calls"] == 0
