@@ -36,8 +36,10 @@ pump name or recipe is assumed.
       "power_entity": "switch.x",      // switch.*   turning it off stops the motor (the stop and the overrun cut)
       "flow_entity": "number.x",       // number.* | input_number.* | sensor.*   calibrated flow, mL/s
       "max_ml": 2000,                  // 1..5000; a request above it is refused
-      "restore_volume": true           // put the volume number back after a single dose (firmware that
+      "restore_volume": true,          // put the volume number back after a single dose (firmware that
                                        // keeps its batch recipe in that number); default true
+      "stock_tank": "balance"          // the id of a stock tank in this room's stock store, or null
+                                       // (Stock tanks, below)
     }
   ],
   "batch": {
@@ -68,13 +70,16 @@ Validation (`dosing.py`, pure): every entity exists and is in its allowed domain
 recipe pumps exist; a pump appears in the recipe at most once; `full_entity` set whenever
 `fill_valve` is; no entity is both a dosing pump's `power_entity` and batch hardware; a `mix_pump`,
 `mix_valves` or `close_entities` switch may be a room's irrigation pump or main line (the batch
-holds that room's watering). A room with no pumps is valid and does nothing.
+holds that room's watering); a pump's `stock_tank` is one of the room's stock tanks, and a stock
+tank is linked to at most one pump. A room with no pumps is valid and does nothing. "Exists" is checked
+when a setup is saved; a stored setup read back at start-up is kept although a device has not come
+back yet.
 
 ## Services
 
 | Service | Who | Data | Response |
 |---|---|---|---|
-| `crop_steering.dosing_get` | any user | `room_id` | `{schema_version: 1, room_id, config, candidates[], error}` |
+| `crop_steering.dosing_get` | any user | `room_id` | `{schema_version: 1, room_id, config, candidates[], can_edit, error}` |
 | `crop_steering.dosing_save` | admin | `room_id, expected_revision, pumps, batch` | the same as `dosing_get`, or `error` |
 | `crop_steering.dosing_request` | admin | `room_id, action ("dose" \| "batch" \| "stop"), pump?, ml?` | `{request, error}` |
 
@@ -82,12 +87,22 @@ holds that room's watering). A room with no pumps is valid and does nothing.
 - `candidates` lists entities of every domain the configuration can use (`number`, `input_number`,
   `button`, `input_button`, `script`, `binary_sensor`, `sensor`, `switch`, `input_boolean`,
   `input_datetime`): `{entity_id, name, domain, state, unit, device_class}`.
+- `can_edit` (in `dosing_get`, and in `dosing_save`'s response): the calling user is an
+  administrator (`call.context.user_id` → `hass.auth.async_get_user(...).is_admin`; false when
+  there is no user).
+- A request is **pending** while `request` is set AND its `id` differs from the `handled` attribute
+  of `sensor.crop_steering_<prefix>dosing` (read with `hass.states.get`; Status, below) AND it is
+  less than 120 s old. The stored request is not cleared by the integration; it simply stops being
+  pending (the controller never acts on one older than 120 s).
 - `dosing_request` stores one request `{id, action, pump, ml, at, by}` (`id` a uuid4 hex, `by` the
-  user's name). A `stop` always replaces what is pending. A `dose` or `batch` is refused with
-  `error: "busy"` while another one is pending (not yet handled by the controller), and a `dose`
-  is refused when the pump is unknown or `ml` is not in 0 < ml ≤ `max_ml`.
-- `dosing_save` is refused while a request is pending, and with `error: "revision"` when
-  `expected_revision` is stale.
+  user's name, null for an automation). A `stop` always replaces what is pending. A `dose` or a
+  `batch` returns `error: "busy"` while one is pending, and a `dose` is refused when the pump is
+  unknown or `ml` is not in 0 < ml ≤ `max_ml` (`error` then says which). A request does not move
+  the revision.
+- `dosing_save` returns `error: "busy"` too (the same word) while a request is pending,
+  `error: "revision"` when `expected_revision` is stale, and an `error` naming the field when the
+  setup breaks a rule under Validation; a refused save answers with the stored setup, unchanged. A
+  pump saved without an `id` gets one made from its name.
 
 `sensor.crop_steering_<prefix>dosing_config`: state = the revision; attributes `pumps`, `batch`,
 `request`. This is what the controller reads (every 2 s).
@@ -179,6 +194,37 @@ State: `idle` | `dosing` | `batch` | `unavailable` (the room's configuration can
 | CS-804 | The batch tank did not fill in time | held rooms water again; the fill valve was closed |
 | CS-805 | The mixing pump did not start | held rooms water again |
 | CS-806 | A batch was stopped | held rooms water again once the hardware reads off |
+
+## Stock tanks
+
+A pump may be linked to one of the room's stock tanks (`stock_tank`: the id of a tank in the room's
+stock store, `crop_steering.stock.<entry_id>`, or null). A stock tank is linked to at most one pump,
+and its level then follows what that pump has actually dosed:
+
+- When a dose ends, the controller draws it from the pump's stock tank: "finished" → the requested
+  mL; "ran past its time" or "stopped" → the requested mL or the seconds since the start press ×
+  the flow, whichever is less; "not confirmed" → nothing, and the result says so
+  ("not confirmed; nothing drawn from its stock tank"). The doses of a batch draw the same way, one
+  by one.
+- It draws through `crop_steering.stock_draw` with the key `<prefix>:<pump>:<the dose's
+  started_at>`. Undelivered draws are kept in `/data/dosing_state.json` and sent again every tick
+  until the service answers, so a draw survives Home Assistant being down or a restart; the key
+  means it is never counted twice.
+- The stock store's fill-based batch draw (a newer time on the room's tank last-fill entity takes
+  each tank's per-batch dose) skips the tanks linked to a pump: their doses draw them, so a batch
+  that stamps `filled_at_entity` never counts them twice.
+- `sensor.crop_steering_<prefix>stock_low` gives each entry of its `tanks` attribute an `id`, and a
+  `pump`: the id of the pump linked to it, or null.
+
+| Service | Who | Data | Response |
+|---|---|---|---|
+| `crop_steering.stock_draw` | admin; automations and the controller app (Home Assistant's Supervisor user) too, as for `stock_record_batch` | `room_id, key, draws: {tank_id: ml}, source ("dose" \| "batch"), note?` | the `stock_get` answer, with `counted`, `duplicate` and `skipped` (the tank ids it does not know) |
+
+`stock_draw` is idempotent on `key` (the stock document keeps the last 100 keys). It takes
+ml / 1000 from each named tank's `level_l` (never below 0), appends a history entry
+`{at, source, draw_ml, key}` and commits a new revision, which raises the low-stock Repairs card
+(CS-608) as usual. Unknown tank ids are skipped and listed in the response. It answers only when
+asked (`SupportsResponse.OPTIONAL`): the controller calls it over REST without asking.
 
 ## The page (Equipment › Dosing)
 

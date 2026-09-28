@@ -21,6 +21,7 @@ from . import ha_stubs
 ha_stubs.install()
 
 from custom_components.crop_steering import (  # noqa: E402
+    dosing_api,
     run_api,
     services,
     setup_api,
@@ -38,6 +39,7 @@ READ_ONLY = {
     "strategy_preview",
     "runs_get",
     "stock_get",
+    "dosing_get",
     "whats_new_get",
 }
 # Changes nothing but whether the dashboard's What's new window shows again: whoever opens the
@@ -63,6 +65,12 @@ CHANGES = {
     "stock_save": {"room_id": ROOM, "expected_revision": 0, "tanks": []},
     "stock_refill": {"room_id": ROOM, "expected_revision": 0, "id": "bloom"},
     "stock_record_batch": {"room_id": ROOM, "expected_revision": 0},
+    # What a dose drew from the stock tanks: the controller app calls it, as Home Assistant's
+    # administrator Supervisor user; a signed-in non-administrator may not move a level.
+    "stock_draw": {"room_id": ROOM, "key": "k", "draws": {}, "source": "dose"},
+    # A dosing request is what makes the controller app run a pump: never for a non-administrator.
+    "dosing_save": {"room_id": ROOM, "expected_revision": 0, "pumps": [], "batch": {}},
+    "dosing_request": {"room_id": ROOM, "action": "stop"},
 }
 
 
@@ -118,8 +126,17 @@ def rig(monkeypatch):
         start=MagicMock(return_value=None),
         response=MagicMock(return_value={"tanks": []}),
         mutate=AsyncMock(return_value={"tanks": []}),
+        draw=AsyncMock(return_value={"tanks": []}),
     )
     monkeypatch.setattr(stock_api, "StockStore", lambda hass, entry: tanks)
+    dosing = SimpleNamespace(
+        room_id=ROOM,
+        async_init=AsyncMock(),
+        response=MagicMock(return_value={"config": {}}),
+        save=AsyncMock(return_value={"config": {}}),
+        request=AsyncMock(return_value={"request": None, "error": None}),
+    )
+    monkeypatch.setattr(dosing_api, "DosingStore", lambda hass, entry: dosing)
     notice = SimpleNamespace(
         async_init=AsyncMock(),
         response=AsyncMock(return_value={"seen": None}),
@@ -154,6 +171,7 @@ def rig(monkeypatch):
     asyncio.run(strategy_api.async_setup_strategy_services(hass))
     asyncio.run(run_api.async_setup_runs(hass, ha_stubs.FakeEntry()))
     asyncio.run(stock_api.async_setup_stock(hass, ha_stubs.FakeEntry()))
+    asyncio.run(dosing_api.async_setup_dosing(hass, ha_stubs.FakeEntry()))
     asyncio.run(setup_api.async_setup_setup_services(hass))
     asyncio.run(whats_new.async_setup_whats_new(hass, ha_stubs.FakeEntry(), False))
 
@@ -168,6 +186,9 @@ def rig(monkeypatch):
             strategy.disarm,
             runs.mutate,
             tanks.mutate,
+            tanks.draw,
+            dosing.save,
+            dosing.request,
             setup["create_setup"],
             setup["save_setup"],
             setup["remove_setup"],

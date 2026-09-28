@@ -61,6 +61,58 @@ def test_a_batch_draws_each_dose_and_never_below_empty():
     assert data["history"][0]["draw_ml"] == {"bloom": 1800.0, "cal": 100.0}
 
 
+def test_a_batch_draws_only_the_tanks_it_is_given():
+    """A tank linked to a dosing pump is left out of a fill's draw: its doses draw it."""
+    data = stock.empty()
+    data["tanks"] = tanks(
+        {"name": "Bloom", "capacity_l": 50, "dose_ml": 1800},
+        {"name": "Cal", "capacity_l": 1, "dose_ml": 250},
+    )
+    stock.draw(data, {"cal": 250}, NOW, "fill")
+    assert [t["level_l"] for t in data["tanks"]] == [50, 0.75]
+    assert data["history"][0]["draw_ml"] == {"cal": 250.0}
+
+
+def test_what_was_dosed_is_drawn_once_per_key_and_never_below_empty():
+    data = stock.empty()
+    data["tanks"] = tanks(
+        {"name": "Bloom", "capacity_l": 50, "dose_ml": 1800},
+        {"name": "Cal", "capacity_l": 1, "level_l": 0.1, "dose_ml": 250},
+    )
+    counted, skipped = stock.draw_dosed(
+        data, {"bloom": 25, "cal": 250, "gone": 5}, NOW, "dose", "k1", "Bloom"
+    )
+    assert (counted, skipped) == (True, ["gone"])
+    assert [t["level_l"] for t in data["tanks"]] == [49.975, 0]
+    assert data["history"][0] == {
+        "at": NOW,
+        "source": "dose",
+        "draw_ml": {"bloom": 25.0, "cal": 100.0},
+        "key": "k1",
+        "note": "Bloom",
+    }
+    # The controller sends a draw again until it hears back: the same key changes nothing.
+    assert stock.draw_dosed(data, {"bloom": 25}, NOW, "dose", "k1") == (False, [])
+    assert data["tanks"][0]["level_l"] == 49.975 and len(data["history"]) == 1
+    # Nothing it knows: nothing counted, and nothing remembered.
+    assert stock.draw_dosed(data, {"gone": 5}, NOW, "batch", "k2") == (False, ["gone"])
+    assert data["draw_keys"] == ["k1"]
+    for bad in (-1, "lots", None, True, float("nan")):
+        with pytest.raises(stock.StockError, match="number of mL"):
+            stock.draw_dosed(data, {"bloom": bad}, NOW, "dose", "k3")
+    with pytest.raises(stock.StockError, match="map stock tank ids"):
+        stock.draw_dosed(data, ["bloom"], NOW, "dose", "k3")
+
+
+def test_only_the_last_hundred_draw_keys_are_kept():
+    data = stock.empty()
+    data["tanks"] = tanks({"name": "Bloom", "capacity_l": 5000, "dose_ml": 1})
+    for n in range(stock.DRAW_KEYS + 5):
+        stock.draw_dosed(data, {"bloom": 1}, NOW, "dose", f"k{n}")
+    assert len(data["draw_keys"]) == stock.DRAW_KEYS
+    assert data["draw_keys"][0] == "k5" and data["draw_keys"][-1] == "k104"
+
+
 def test_the_dose_entity_wins_while_it_reads_a_number():
     tank = {"dose_ml": 200, "dose_entity": "number.doser_bloom_dose"}
     assert stock.dose_ml(tank, "1800") == 1800

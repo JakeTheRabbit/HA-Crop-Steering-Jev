@@ -853,5 +853,61 @@
         "pump_mainline_valves": "A pump, a main-line valve, then zone valves"
       }
     }
+  },
+  "services": {
+    "dosing_get": {
+      "name": "Read dosing",
+      "description": "Read this room's dosing pumps, batch hardware and recipe, the request waiting for the controller app, and every entity the setup can use. Does not change anything.",
+      "fields": {
+        "room_id": {
+          "name": "Room ID",
+          "description": "Canonical room identity: room: for the default room or room:f1_ for a named room."
+        }
+      }
+    },
+    "dosing_save": {
+      "name": "Save dosing setup",
+      "description": "Replace this room's dosing pumps, batch hardware and recipe. Refused while a request is waiting for the controller app, or when the expected revision is stale. Switches nothing. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.",
+      "fields": {
+        "room_id": {
+          "name": "Room ID",
+          "description": "Canonical room identity: room: for the default room or room:f1_ for a named room."
+        },
+        "expected_revision": {
+          "name": "Expected revision",
+          "description": "The revision Read dosing returned; a stale one is refused."
+        },
+        "pumps": {
+          "name": "Pumps",
+          "description": "Up to 8 dosing pumps, in the order the dosing page shows them."
+        },
+        "batch": {
+          "name": "Batch",
+          "description": "The batch tank's fill, mixing and hold hardware, and the recipe."
+        }
+      }
+    },
+    "dosing_request": {
+      "name": "Request a dose or batch",
+      "description": "Ask the controller app to dose one pump into the batch tank, make a batch, or stop. A stop replaces any request still waiting; a dose or a batch is refused while another is waiting. The controller acts within seconds, and never on a request older than two minutes. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.",
+      "fields": {
+        "room_id": {
+          "name": "Room ID",
+          "description": "Canonical room identity: room: for the default room or room:f1_ for a named room."
+        },
+        "action": {
+          "name": "Action",
+          "description": "dose, batch or stop."
+        },
+        "pump": {
+          "name": "Pump",
+          "description": "The pump's id, for a dose."
+        },
+        "ml": {
+          "name": "Millilitres",
+          "description": "How much to dose: more than 0, up to the pump's maximum."
+        }
+      }
+    }
   }
 }
