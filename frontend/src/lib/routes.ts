@@ -13,6 +13,7 @@ export type Page =
   | "equipment/probes"
   | "equipment/stock"
   | "equipment/tank"
+  | "equipment/dosing"
   | "equipment/setup"
   | "settings"
   | "help";
@@ -34,6 +35,7 @@ export const PAGES: readonly Page[] = [
   "equipment/probes",
   "equipment/stock",
   "equipment/tank",
+  "equipment/dosing",
   "equipment/setup",
   "settings",
   "help",

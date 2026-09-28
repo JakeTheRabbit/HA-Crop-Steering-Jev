@@ -176,6 +176,37 @@ describe("watched entities", () => {
     // A probe Home Assistant does not have would make it reject the whole subscription.
     expect(ids).not.toContain("sensor.gone");
   });
+  it("includes each room's dosing sensors and the hardware its dosing setup names", () => {
+    const ids = watchedEntities({
+      ...home(),
+      ...states(
+        entity("sensor.crop_steering_dosing_config", "3", {
+          pumps: [
+            {
+              id: "bloom",
+              flow_entity: "number.bloom_flow",
+              dosing_entity: "binary_sensor.bloom_dosing",
+            },
+          ],
+          batch: { mix_valves: ["switch.recirc"], fill_valve: "switch.not_in_ha" },
+        }),
+        entity("number.bloom_flow", "10.5"),
+        entity("binary_sensor.bloom_dosing", "off"),
+        entity("switch.recirc", "off"),
+      ),
+    });
+    for (const id of [
+      "sensor.crop_steering_dosing_config",
+      "number.bloom_flow",
+      "binary_sensor.bloom_dosing",
+      "switch.recirc",
+      // The controller's dosing report, before it has posted one.
+      "sensor.crop_steering_dosing",
+      "sensor.crop_steering_f1_dosing",
+    ])
+      expect(ids).toContain(id);
+    expect(ids).not.toContain("switch.not_in_ha");
+  });
   it("is empty without crop-steering entities, so nothing subscribes to all of Home Assistant", () => {
     expect(watchedEntities(states(entity("light.kitchen", "on")))).toEqual([]);
   });

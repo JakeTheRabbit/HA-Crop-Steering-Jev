@@ -1,4 +1,5 @@
 import { RunDemo } from "./comparison-demo";
+import { DosingDemo } from "./dosing-demo";
 import { StockDemo } from "./stock-demo";
 import type {
   OperatorAction,
@@ -21,6 +22,7 @@ const clone = <T>(value: T): T => structuredClone(value);
 export class OperatorDemo {
   private runDemo?: RunDemo;
   private stockDemo?: StockDemo;
+  private dosingDemo?: DosingDemo;
   private plans = new Map<string, StrategyDocument>();
   private rooms: SetupRoom[] | null = null;
   /** The last release What's new showed: the demo's own unless the page asks otherwise. */
@@ -278,6 +280,10 @@ export class OperatorDemo {
     if (action.startsWith("stock_")) {
       this.stockDemo ||= new StockDemo(this.getStates);
       return this.stockDemo.call(action, data) as T;
+    }
+    if (action.startsWith("dosing_")) {
+      this.dosingDemo ||= new DosingDemo(this.getStates, this.updateStates);
+      return this.dosingDemo.call(action, data) as T;
     }
     let result: unknown;
     if (action.startsWith("strategy_")) {
