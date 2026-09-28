@@ -295,7 +295,7 @@ describe("a pump's stock tank", () => {
     expect(pumpStock(pump, tanks, rows, null)).toEqual({
       id: "bloom_a",
       tank,
-      state: "ok",
+      state: stockState(tank),
       left: { count: 3, per: "batch" },
     });
     // The same name is not a link: a pump without a stock tank has none.
@@ -331,11 +331,11 @@ describe("a pump's stock tank", () => {
     expect(leftWords(null)).toBeNull();
   });
 
-  it("is amber at or under its low mark and red at or under half of it", () => {
-    expect(stockState({ level_l: 4.1, low_l: 4 })).toBe("ok");
-    expect(stockState({ level_l: 4, low_l: 4 })).toBe("low");
-    expect(stockState({ level_l: 2.1, low_l: 4 })).toBe("low");
-    expect(stockState({ level_l: 2, low_l: 4 })).toBe("very-low");
+  it("follows the Stock tanks page: amber within half again of the low mark, red at or under it", () => {
+    expect(stockState({ level_l: 6.1, low_l: 4 })).toBe("ok");
+    expect(stockState({ level_l: 6, low_l: 4 })).toBe("low");
+    expect(stockState({ level_l: 4.1, low_l: 4 })).toBe("low");
+    expect(stockState({ level_l: 4, low_l: 4 })).toBe("very-low");
     expect(stockState({ level_l: 0, low_l: 4 })).toBe("very-low");
     // No low mark: only an empty tank is red.
     expect(stockState({ level_l: 0.1, low_l: 0 })).toBe("ok");
@@ -367,10 +367,11 @@ describe("a pump's stock tank", () => {
     expect(stock("bloom")).toMatchObject({ tank: { level_l: 5.4 }, left: { count: 3 } });
     expect(stock("core", "f1_")).toMatchObject({ left: { count: 287, per: "dose" } });
     expect(stock("fade", "f1_")).toMatchObject({ tank: { level_l: 10 }, left: null });
-    // The demo starts with nothing low: the Today page has nothing to say about stock.
+    // The demo starts with nothing at or under its low mark: the Today page has nothing to say
+    // about stock (a tank getting low is amber on the pages, not an alert).
     expect(
       ["", "f1_"].flatMap((prefix) =>
-        stockTanks(demo(prefix).states, prefix).filter((item) => stockState(item) !== "ok"),
+        stockTanks(demo(prefix).states, prefix).filter((item) => stockState(item) === "very-low"),
       ),
     ).toEqual([]);
   });

@@ -584,8 +584,8 @@ export function Dosing({
     time.seconds === null
       ? "unknown until every dosed pump reads its flow"
       : `about ${seconds(time.seconds)}${time.fillMax ? `, plus the fill (up to ${seconds(time.fillMax)})` : ""}`;
-  // A dosed pump that cannot run now: the controller would stop the batch at its dose, after the
-  // fill and the mix. Said, not refused: the controller decides.
+  // A dosed pump that cannot run now: the controller refuses the batch before anything moves.
+  // Said here, not refused here: the controller decides.
   const unready = rows
     .filter((row) => !row.skipped)
     .flatMap((row) => {
@@ -595,7 +595,7 @@ export function Dosing({
         : [];
     });
   const batchWarning = unready.length
-    ? `${unready.join("; ")}: a batch now would stop at ${unready.length === 1 ? "its dose" : "their doses"}.`
+    ? `${unready.join("; ")}: the controller would refuse a batch now.`
     : null;
   const reviewBatch = () =>
     config &&
@@ -645,7 +645,8 @@ export function Dosing({
       stop: true,
       data: { action: "stop" },
     });
-  const stopAvailable = may && (running || batchRunning || waiting);
+  // Stopping is for anyone signed in (the integration allows it); starting stays with administrators.
+  const stopAvailable = connected && (running || batchRunning || waiting);
 
   const tank = tankTelemetry(states, room.room);
   const fullId = config?.batch.full_entity ?? null;
@@ -971,7 +972,7 @@ export function Dosing({
                   <Button
                     variant="outline"
                     className="dosing-stop"
-                    disabled={!may}
+                    disabled={!connected}
                     onClick={reviewStop}
                   >
                     <CircleStop size={16} /> Stop the batch

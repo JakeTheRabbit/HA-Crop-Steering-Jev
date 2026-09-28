@@ -1392,10 +1392,10 @@ try {
         .getByRole("button", { name: "Start Bloom", exact: true })
         .click();
       await expectVisible(live.locator('[data-request-stage="taken"]'));
-      // A batch now would stop at Grow's dose: said before it is asked for, not refused.
+      // The controller would refuse a batch with Grow unavailable: said before it is asked for.
       assert.equal(
         await live.locator("[data-batch-warning]").innerText(),
-        "Grow is unavailable: a batch now would stop at its dose.",
+        "Grow is unavailable: the controller would refuse a batch now.",
       );
       await live.getByRole("button", { name: "Make a batch", exact: true }).click();
       await live.getByRole("dialog").getByRole("button", { name: "Make the batch" }).click();

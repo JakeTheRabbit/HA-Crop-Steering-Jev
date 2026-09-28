@@ -10,8 +10,8 @@ const EMPTY = 60,
   FULL = 18;
 
 /** A stock tank drawn as a bottle to scale: its liquid at its level and its low mark dashed across,
- * and the bottle itself `scale` of the room's largest (0.3 at the least). Amber at or under the low
- * mark, red at or under half of it. */
+ * and the bottle itself `scale` of the room's largest (0.3 at the least). Amber within half again of
+ * the low mark, red at or under it (the Stock tanks page's rule). */
 export function StockBottle({
   tank,
   state,
