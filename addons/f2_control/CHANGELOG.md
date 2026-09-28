@@ -1,3 +1,7 @@
+# 3.5.0
+
+Pair with integration 3.5.0. **C3.** Batch-tank dosing: the controller runs single doses and batches requested from the new Equipment › Dosing page, holds watering during a batch, draws each dose from its linked stock tank, and recovers after a restart (#19). New file `/data/dosing_state.json`; new app option `timeout: 30` (Supervisor stop timeout); no change to existing options or the state file. Not run on hardware.
+
 # 3.4.2
 
 Pair with integration 3.4.2. **C3.** A switch that has not reported OFF 6 s after a close is sent OFF again and read back for 10 s more before a hardware hold (#18). No change to add-on options or the state file. Not run on hardware.
