@@ -272,7 +272,9 @@ When the app is stopped (SIGTERM: an update, a restart), the shot in flight is c
 dosing switch-on starts any more (one already on its way to Home Assistant lands first, 5 s at most),
 the dosing thread gets 3 s to switch its own dose's or batch's hardware off, and everything recorded
 is switched off again, each off with a 2 s timeout and without waiting to read it back. The record
-stays, and a batch's `hold_entity` stays on, for the next start.
+stays, and a batch's `hold_entity` stays on, for the next start. The app's `timeout: 30`
+(`addons/f2_control/config.yaml`) has the Supervisor wait 30 s after SIGTERM, rather than its
+default 10, before it kills the container.
 
 ### Status: `sensor.crop_steering_<prefix>dosing`
 
