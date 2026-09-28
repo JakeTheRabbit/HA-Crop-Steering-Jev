@@ -9,6 +9,36 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-09-28
+
+Pair: **controller 3.5.0**. Class **C3**. One pull request: #19, batch-tank dosing (a page per room's tank, single
+doses and whole batches through the controller, stock tanks drawn by what was dosed). Not run on hardware; checked
+by the lean, controller, real Home Assistant, dashboard and browser suites.
+
+### 🌱 In plain English
+
+- **Dosing, from the Crop Steering page.** Each room has Equipment › Dosing for its own batch tank: dose any
+  nutrient pump by the mL, or make a whole batch (fill until the float says full, mix, dose each nutrient in the
+  recipe's order, mix again, record the fill). Watering is held while a batch runs, and Stop works at any point.
+- **The pumps' own boards still time every dose.** Crop Steering checks each dose started and finished, cuts a
+  pump's power if it runs past its time, refuses an uncalibrated pump or a dose longer than 20 minutes, and after a
+  restart switches all dosing hardware off and tells you, never carrying on by itself.
+- **Stock tanks that follow the doses.** Link each pump to a stock tank and every dose takes what was actually
+  dosed off its level; each pump shows a small bottle with the litres and batches left.
+- Nothing happens until a room's dosing is set up, and your existing Home Assistant dosing scripts are untouched.
+
+### 🔧 Technical notes
+
+- Integration (#19): `dosing.py`/`dosing_api.py` (store `crop_steering.dosing.<entry_id>`; services `dosing_get`,
+  `dosing_save`, `dosing_request`; `sensor.crop_steering_<prefix>dosing_config`); `stock_draw` (idempotent), linked
+  tanks skipped by the fill rule and by a hand-recorded batch; the stock sensor's tanks gain `id` and `pump`.
+- Controller (#19): `dosing_runner.py` (one thread; write-ahead `/data/dosing_state.json`; stuck hardware held and
+  re-sent until it reads off; restart recovery; SIGTERM switches irrigation off first; alerts CS-801 to CS-807;
+  `sensor.crop_steering_<prefix>dosing`); `_blocked` holds a batch's rooms; app `timeout: 30`.
+- Dashboard (#19): Equipment › Dosing (pump drawings, dose form, live telemetry, batch steps and recipe, stock
+  strip and bottles, history, setup); one stock colour rule on both pages.
+- docs/DOSING.md is the contract; an adversarial safety review's 24 findings are fixed with tests.
+
 ## [3.4.2] - 2026-09-28
 
 Pair: **controller 3.4.2**. Class **C3**. One pull request: #18, a pump plug that reports OFF late is sent OFF

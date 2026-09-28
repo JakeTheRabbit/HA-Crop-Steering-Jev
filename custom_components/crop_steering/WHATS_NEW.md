@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.5.0 - 2026-09-28
+
+- Dose a nutrient pump or make a whole batch from the new Dosing page, one per room's tank.
+- Stock tanks now follow what was actually dosed, and each pump shows how much is left.
+- A batch holds watering, and Stop works at any step.
+- Bug fixes and improvements.
+
 ## 3.4.2 - 2026-09-28
 
 - A pump plug that is slow to report it has switched off no longer stops the room's watering.
