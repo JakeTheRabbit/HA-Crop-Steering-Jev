@@ -45,13 +45,15 @@ import {
 import { errorText } from "@/lib/utils";
 import type { SetupCandidate, SetupDocument, SetupRoom, SetupZone } from "@/lib/operator-types";
 
-function MappingPicker({
+export function MappingPicker({
   label,
   values,
   candidates,
   multiple = false,
   onChange,
   disabled = false,
+  hint,
+  choose,
 }: {
   label: string;
   values: string[];
@@ -59,6 +61,10 @@ function MappingPicker({
   multiple?: boolean;
   onChange: (values: string[]) => void;
   disabled?: boolean;
+  /** What to choose, in the picker; the probes' wording by default. */
+  hint?: string;
+  /** The button's words while nothing is mapped. */
+  choose?: string;
 }) {
   const [open, setOpen] = useState(false),
     [search, setSearch] = useState("");
@@ -102,7 +108,7 @@ function MappingPicker({
             ? selected
                 .map((id) => candidates.find((c) => c.entity_id === id)?.name || id)
                 .join(", ")
-            : "Choose " + (multiple ? "sensors" : "entity")}
+            : (choose ?? "Choose " + (multiple ? "sensors" : "entity"))}
         </span>
         <Search size={16} />
       </Button>
@@ -112,9 +118,10 @@ function MappingPicker({
           <DialogHeader>
             <DialogTitle>Map {label}</DialogTitle>
             <DialogDescription>
-              {multiple
-                ? "Choose one or more probes. The integration combines their readings."
-                : "Choose the entity already configured in Home Assistant."}{" "}
+              {hint ??
+                (multiple
+                  ? "Choose one or more probes. The integration combines their readings."
+                  : "Choose the entity already configured in Home Assistant.")}{" "}
               Availability and units are shown before selection.
             </DialogDescription>
           </DialogHeader>

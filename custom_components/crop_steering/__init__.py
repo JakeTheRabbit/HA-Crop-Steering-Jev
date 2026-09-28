@@ -153,6 +153,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:  # pragma: no cover - never block setup on the stock store
         _LOGGER.warning("Stock tanks unavailable: %s", err)
 
+    # Batch-tank dosing: each room's setup and its one request, stored; the dosing_config sensor
+    # publishes them for the controller app, which does every action (docs/DOSING.md).
+    try:
+        from .dosing_api import async_setup_dosing
+
+        await async_setup_dosing(hass, entry)
+    except Exception as err:  # pragma: no cover - never block setup on the dosing store
+        _LOGGER.warning("Dosing unavailable: %s", err)
+
     _remove_retired_entities(hass, entry)
     _hide_retired_switches(hass, entry)
 
@@ -295,6 +304,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .stock_api import async_unload_stock
 
     await async_unload_stock(hass, entry)
+    from .dosing_api import async_unload_dosing
+
+    await async_unload_dosing(hass, entry)
     from .whats_new import async_unload_whats_new
 
     await async_unload_whats_new(hass, entry)

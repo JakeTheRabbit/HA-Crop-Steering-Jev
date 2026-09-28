@@ -53,6 +53,7 @@ import { GrowPlanner } from "@/pages/grow-planner";
 import { Setup } from "@/pages/setup";
 import { Comparison } from "@/pages/comparison";
 import { StockTanks } from "@/pages/stock";
+import { Dosing } from "@/pages/dosing";
 import { WaterUsePage } from "@/pages/water-use";
 import { TankStatus } from "@/components/tank-status";
 
@@ -370,6 +371,14 @@ export default function App() {
                 key={pageKey}
                 controller={controller}
                 onConfigure={() => navigate("equipment/setup")}
+              />
+            )}
+            {page === "equipment/dosing" && (
+              <Dosing
+                key={pageKey}
+                controller={controller}
+                navigate={navigate}
+                onDirtyChange={setWorkspaceDirty}
               />
             )}
             {page === "equipment/setup" && (

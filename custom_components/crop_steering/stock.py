@@ -12,11 +12,15 @@ stock down for a batch made before the tanks were set up.
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, tzinfo
 
 MAX_TANKS = 12
 HISTORY = 30
+DRAW_KEYS = (
+    100  # the keys of the last draws counted (stock_draw), so none is counted twice
+)
 _ENTITY = re.compile(r"^(number|input_number|sensor)\.[a-z0-9_]+$")
 _DEAD = ("unknown", "unavailable", "none", "")
 
@@ -26,7 +30,13 @@ class StockError(ValueError):
 
 
 def empty() -> dict:
-    return {"revision": 0, "tanks": [], "last_batch": None, "history": []}
+    return {
+        "revision": 0,
+        "tanks": [],
+        "last_batch": None,
+        "history": [],
+        "draw_keys": [],
+    }
 
 
 def _number(raw: dict, key: str, low: float, high: float, default=None) -> float:
@@ -142,10 +152,14 @@ def dose_ml(tank: dict, reading: str | None) -> float:
 
 
 def draw(data: dict, doses: dict[str, float], at: str, source: str) -> dict:
-    """One batch: every tank loses its dose (never below empty), and the batch is logged."""
+    """One batch: every tank in `doses` loses its dose (never below empty), and the batch is logged.
+    A tank left out is not drawn: one linked to a dosing pump is drawn by its doses instead.
+    """
     taken = {}
     for tank in data["tanks"]:
-        ml = max(0.0, float(doses.get(tank["id"], 0)))
+        if tank["id"] not in doses:
+            continue
+        ml = max(0.0, float(doses[tank["id"]]))
         before = tank["level_l"]
         tank["level_l"] = round(max(0.0, before - ml / 1000), 4)
         taken[tank["id"]] = round((before - tank["level_l"]) * 1000, 1)
@@ -154,6 +168,48 @@ def draw(data: dict, doses: dict[str, float], at: str, source: str) -> dict:
         *data["history"],
     ][:HISTORY]
     return data
+
+
+def draw_dosed(data: dict, draws, at: str, source: str, key: str, note=None):
+    """What the controller dosed out of stock tanks linked to its pumps (docs/DOSING.md, Stock
+    tanks): each tank named in `draws` loses its mL, never below empty, and the draw is logged with
+    its key -> (counted, skipped ids). A key already counted changes nothing (the controller sends a
+    draw again until it hears back), and an id that is not one of the room's tanks is skipped.
+    """
+    if not isinstance(draws, dict):
+        raise StockError("draws must map stock tank ids to mL")
+    amounts = {}
+    for tank_id, ml in draws.items():
+        try:
+            value = math.nan if isinstance(ml, bool) else float(ml)
+        except (TypeError, ValueError):
+            value = math.nan
+        if not math.isfinite(value) or value < 0:
+            raise StockError(
+                f"the draw from {tank_id} must be a number of mL, 0 or more"
+            )
+        amounts[str(tank_id)] = value
+    keys = [k for k in data.get("draw_keys") or [] if isinstance(k, str)]
+    if key in keys:
+        return False, []
+    known = {tank["id"]: tank for tank in data["tanks"]}
+    skipped = sorted(tank_id for tank_id in amounts if tank_id not in known)
+    taken = {}
+    for tank_id, ml in amounts.items():
+        tank = known.get(tank_id)
+        if tank is None:
+            continue
+        before = tank["level_l"]
+        tank["level_l"] = round(max(0.0, before - ml / 1000), 4)
+        taken[tank_id] = round((before - tank["level_l"]) * 1000, 1)
+    if not taken:
+        return False, skipped
+    entry = {"at": at, "source": source, "draw_ml": taken, "key": key}
+    if note:
+        entry["note"] = str(note)[:200]
+    data["history"] = [entry, *data["history"]][:HISTORY]
+    data["draw_keys"] = [*keys, key][-DRAW_KEYS:]
+    return True, skipped
 
 
 def refill(data: dict, tank_id: str, level_l: float | None, now: str) -> dict:

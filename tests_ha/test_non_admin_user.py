@@ -1,4 +1,5 @@
-"""A real signed-in Home Assistant user who is not an administrator can look, but not change.
+"""A real signed-in Home Assistant user who is not an administrator can look, but not change; the
+one exception is stopping a room's dosing, which only switches things off.
 
 The sidebar console is open to every login and calls the room services with that login; the stub
 suite (tests/test_admin_only.py) has the reason and the whole matrix. Here every call goes through
@@ -33,6 +34,10 @@ CHANGES = {
     "stock_save": {"room_id": ROOM, "expected_revision": 0, "tanks": []},
     "stock_refill": {"room_id": ROOM, "expected_revision": 0, "id": "bloom"},
     "stock_record_batch": {"room_id": ROOM, "expected_revision": 0},
+    "stock_draw": {"room_id": ROOM, "key": "k", "draws": {}, "source": "dose"},
+    "dosing_save": {"room_id": ROOM, "expected_revision": 0, "pumps": [], "batch": {}},
+    # A stop is the one dosing request anyone may make (test_an_ordinary_user_may_stop_dosing).
+    "dosing_request": {"room_id": ROOM, "action": "dose", "pump": "balance", "ml": 5},
     "save_recipe": {"recipe": {}},
     "apply_recipe": {},
     "set_manual_override": {"zone": 1},
@@ -46,6 +51,7 @@ READS = {
     "strategy_preview": {"room_id": ROOM},
     "runs_get": {"room_id": ROOM},
     "stock_get": {"room_id": ROOM},
+    "dosing_get": {"room_id": ROOM},
     "whats_new_get": {},
 }
 # Changes nothing but whether the dashboard's What's new window shows again: whoever opens the
@@ -99,6 +105,18 @@ async def test_an_ordinary_user_can_look_and_changes_nothing(hass):
             await _call(hass, staff, name, data)
         except HomeAssistantError as err:  # e.g. a fresh room's seeded plan may not preview
             assert REFUSED not in str(err), name
+
+
+async def test_an_ordinary_user_may_stop_dosing(hass):
+    """A stop only switches things off: whoever may look at a room may stop its dosing."""
+    await _install(hass)
+    staff = await _staff(hass)
+    answer = await _call(hass, staff, "dosing_request", {"room_id": ROOM, "action": "stop"})
+    assert answer["error"] is None
+    assert (answer["request"]["action"], answer["request"]["by"]) == ("stop", "Staff phone")
+    await hass.async_block_till_done()
+    stored = hass.states.get("sensor.crop_steering_dosing_config").attributes["request"]
+    assert stored == answer["request"]
 
 
 @pytest.mark.parametrize("who", ["administrator", "no user"])

@@ -151,6 +151,17 @@ class FakeStates:
     def set(self, entity_id, state, attributes=None, last_updated=None):
         self._m[entity_id] = FakeState(state, attributes, last_updated)
 
+    def async_all(self, domain_filter=None):
+        """Every state, or those of the given domain(s), each carrying its entity_id."""
+        domains = (domain_filter,) if isinstance(domain_filter, str) else domain_filter
+        found = []
+        for entity_id in self._m:
+            if domains is None or entity_id.split(".", 1)[0] in domains:
+                state = self.get(entity_id)
+                state.entity_id = entity_id
+                found.append(state)
+        return found
+
 
 class FakeServices:
     def __init__(self):

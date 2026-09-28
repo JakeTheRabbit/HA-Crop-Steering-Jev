@@ -3,7 +3,9 @@
 Response-only services addressed by canonical room id, like the run and strategy services. Reading
 is open to any signed-in user; changing a tank, recording a refill or a batch needs an
 administrator. A batch is counted when the room's mapped tank last-fill entity moves to a newer
-time, or when the operator records one; a room whose tanks run low gets a Repairs card.
+time, or when the operator records one; a room whose tanks run low gets a Repairs card. A tank
+linked to a dosing pump is drawn by what that pump doses instead (stock_draw, docs/DOSING.md), and
+neither way of counting a batch draws it.
 """
 
 from __future__ import annotations
@@ -20,7 +22,13 @@ from .room import room_prefix
 
 _LOGGER = logging.getLogger(__name__)
 
-SERVICES = ("stock_get", "stock_save", "stock_refill", "stock_record_batch")
+SERVICES = (
+    "stock_get",
+    "stock_save",
+    "stock_refill",
+    "stock_record_batch",
+    "stock_draw",
+)
 SIGNAL = f"{DOMAIN}_stock_changed"
 ISSUE = "stock_low"
 
@@ -44,6 +52,12 @@ def _valid(value) -> dict:
     data["last_batch"] = datetime.fromisoformat(last).isoformat() if last else None
     history = value.get("history", [])
     data["history"] = history[: stock.HISTORY] if isinstance(history, list) else []
+    keys = value.get("draw_keys", [])  # a document from before dosing has none
+    data["draw_keys"] = (
+        [k for k in keys if isinstance(k, str)][-stock.DRAW_KEYS :]
+        if isinstance(keys, list)
+        else []
+    )
     return data
 
 
@@ -106,6 +120,19 @@ class StockStore:
 
         return async_track_state_change_event(self.hass, [entity], changed)
 
+    def linked(self) -> dict[str, str]:
+        """Stock tank id -> the dosing pump it is linked to, from the room's dosing setup."""
+        dosing = (
+            self.hass.data.get(DOMAIN, {}).get("_dosing", {}).get(self.entry.entry_id)
+        )
+        if dosing is None or dosing.error:
+            return {}
+        return {
+            pump["stock_tank"]: pump["id"]
+            for pump in dosing.data.get("pumps", [])
+            if pump.get("stock_tank")
+        }
+
     def doses(self) -> dict[str, float]:
         """What one batch takes from each tank right now, in mL."""
         doses = {}
@@ -134,7 +161,10 @@ class StockStore:
             draft = deepcopy(self.data)
             counted = stock.new_batch(draft, fill)
             if counted and draft["tanks"]:
-                stock.draw(draft, self.doses(), fill.isoformat(), "fill")
+                # A tank linked to a dosing pump is drawn by the pump's doses, never here as well.
+                linked = self.linked()
+                doses = {t: ml for t, ml in self.doses().items() if t not in linked}
+                stock.draw(draft, doses, fill.isoformat(), "fill")
                 _LOGGER.info(
                     "Stock tanks for %s: batch at %s counted", self.room_id, fill
                 )
@@ -162,6 +192,7 @@ class StockStore:
                 raise ValueError("Stock tanks changed elsewhere. Reload before saving.")
             now = _now()
             draft = deepcopy(self.data)
+            skipped = None
             if action == "stock_save":
                 draft["tanks"] = stock.clean_tanks(
                     data.get("tanks"), draft["tanks"], now
@@ -169,11 +200,46 @@ class StockStore:
             elif action == "stock_refill":
                 stock.refill(draft, data.get("id"), data.get("level_l"), now)
             elif action == "stock_record_batch":
-                stock.draw(draft, self.doses(), now, "manual")
+                # A tank linked to a dosing pump is drawn by the pump's doses, as for a fill: a batch
+                # the controller made and someone also records by hand never counts twice on it.
+                linked, doses = self.linked(), self.doses()
+                skipped = sorted(tank for tank in doses if tank in linked)
+                doses = {tank: ml for tank, ml in doses.items() if tank not in linked}
+                stock.draw(draft, doses, now, "manual")
             else:
                 raise ValueError("Unsupported stock operation")
             await self._commit(draft)
-            return self.response()
+            response = self.response()
+            if skipped is not None:  # the linked tanks this batch did not draw
+                response["skipped"] = skipped
+            return response
+
+    async def draw(self, data):
+        """stock_draw: what the controller dosed out of linked tanks, counted once per key. No
+        expected revision: the controller cannot know it, and the key makes a repeat harmless.
+        """
+        async with self._lock:
+            if self.error:
+                raise ValueError(self.error)
+            key = data.get("key")
+            duplicate = key in self.data["draw_keys"]
+            draft = deepcopy(self.data)
+            counted, skipped = stock.draw_dosed(
+                draft,
+                data.get("draws"),
+                _now(),
+                data.get("source"),
+                key,
+                data.get("note"),
+            )
+            if counted:
+                await self._commit(draft)
+            return {
+                **self.response(),
+                "counted": counted,
+                "duplicate": duplicate,
+                "skipped": skipped,
+            }
 
     async def _commit(self, draft):
         """Store the next revision; only a saved change becomes the room's tanks."""
@@ -252,15 +318,22 @@ async def async_setup_stock(hass, entry):
             target = resolve_stock(hass, call.data["room_id"])
             if call.service == "stock_get":
                 return target.response()
+            if call.service == "stock_draw":
+                return await target.draw(call.data)
             return await target.mutate(call.service, call.data)
         except (ValueError, KeyError, OSError) as error:
             raise HomeAssistantError(str(error)) from error
 
     for service in SERVICES:
         schema = {vol.Required("room_id"): str}
-        if service != "stock_get":
+        if service not in ("stock_get", "stock_draw"):
             schema[vol.Required("expected_revision")] = vol.All(int, vol.Range(min=0))
-        if service == "stock_save":
+        if service == "stock_draw":
+            schema[vol.Required("key")] = str
+            schema[vol.Required("draws")] = dict
+            schema[vol.Required("source")] = vol.In(("dose", "batch"))
+            schema[vol.Optional("note")] = str
+        elif service == "stock_save":
             schema[vol.Required("tanks")] = vol.All(
                 list, vol.Length(max=stock.MAX_TANKS)
             )
@@ -275,7 +348,12 @@ async def async_setup_stock(hass, entry):
             service,
             handle,
             schema=vol.Schema(schema),
-            supports_response=SupportsResponse.ONLY,
+            # The controller app calls stock_draw over REST without asking for the answer.
+            supports_response=(
+                SupportsResponse.OPTIONAL
+                if service == "stock_draw"
+                else SupportsResponse.ONLY
+            ),
         )
 
 

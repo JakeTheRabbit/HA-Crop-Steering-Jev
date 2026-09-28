@@ -220,6 +220,8 @@ const ROOM_SENSORS = [
   // Jev: the room's usage and stage, and its decision log.
   "jev",
   "jev_log",
+  // Batch-tank dosing: pumps, the batch and their history (docs/DOSING.md).
+  "dosing",
 ];
 const ZONE_SENSORS = [
   "jev",
@@ -234,9 +236,10 @@ const ZONE_SENSORS = [
   "waiting_for_app",
 ];
 const ENTITY_ID = /^(?!.+__)(?!_)[\da-z_]+(?<!_)\.(?!_)[\da-z_]+(?<!_)$/;
-/** Every entity this console reads: all crop_steering entities, whatever the room descriptors and
- * heartbeats point at (kill switches, pumps, valves, tank and feed sensors), and the controller's
- * sensors for every configured zone, including the ones it has not posted yet. */
+/** Every entity this console reads: all crop_steering entities, whatever the room descriptors,
+ * heartbeats and dosing configurations point at (kill switches, pumps, valves, tank and feed
+ * sensors, dosing pumps and batch hardware), and the controller's sensors for every configured
+ * zone, including the ones it has not posted yet. */
 export function watchedEntities(states: States): string[] {
   const ids = new Set<string>();
   const visit = (value: unknown): void => {
@@ -255,6 +258,8 @@ export function watchedEntities(states: States): string[] {
       const excluded = entity.attributes.excluded;
       if (excluded && typeof excluded === "object") visit(Object.keys(excluded));
     }
+    // Each dosing pump's entities and the batch's hardware: Equipment › Dosing shows them live.
+    if (/^sensor\.crop_steering_.*dosing_config$/.test(id)) visit(entity.attributes);
     if (!/^sensor\.crop_steering_.*engine_config$/.test(id)) continue;
     visit(entity.attributes);
     const { prefix, num_zones } = entity.attributes;

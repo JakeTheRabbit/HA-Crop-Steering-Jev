@@ -5,7 +5,14 @@ import type { OperatorAction } from "./operator-types";
 import { OperatorDemo } from "./operator-demo";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Change, Controller, EntityState, States, WriteResult } from "./types";
-import { applyChanges, asStates, findSession, HaClient, haSessionToken } from "./client";
+import {
+  applyChanges,
+  asStates,
+  findSession,
+  HaClient,
+  haSessionToken,
+  type HassSession,
+} from "./client";
 import {
   buildRoom,
   descriptor,
@@ -40,6 +47,10 @@ import { historySamples, type WaterRecord, type WaterRecordRequest } from "./wat
 
 type Listener = () => void;
 const SESSION_KEY = "crop-steering-connection-tab";
+/** Whether Home Assistant's signed-in user is an administrator; null when this page cannot tell
+ * (a standalone tab with a token). */
+const adminOf = (session?: HassSession) =>
+  typeof session?.user?.is_admin === "boolean" ? session.user.is_admin : null;
 export class ControllerStore {
   private listeners = new Set<Listener>();
   private client: HaClient | null = null;
@@ -61,6 +72,7 @@ export class ControllerStore {
   private error: string | null = null;
   private updated: number | null = null;
   private writing = false;
+  private admin: boolean | null = null;
   readonly demo: boolean;
   private snapshot!: Controller;
   private operatorDemo?: OperatorDemo;
@@ -68,6 +80,7 @@ export class ControllerStore {
   private historyAborters = new Set<AbortController>();
   constructor(demo = typeof window !== "undefined" && isDemoLocation(window.location)) {
     this.demo = demo;
+    this.admin = demo ? true : null;
     this.states = demo ? demoClock(createDemo()) : {};
     this.connection = demo ? "demo" : "connecting";
     if (demo)
@@ -111,6 +124,7 @@ export class ControllerStore {
     const room = rooms.find((r) => r.id === this.roomId) || emptyRoom;
     this.snapshot = {
       demo: this.demo,
+      admin: this.admin,
       connection: this.connection,
       error: this.error,
       lastUpdated: this.updated,
@@ -143,6 +157,7 @@ export class ControllerStore {
       const base =
         saved.base || (typeof window !== "undefined" ? window.location.origin : "http://localhost");
       const session = saved.token ? undefined : findSession(base);
+      this.admin = adminOf(session);
       const inheritedToken =
         typeof window !== "undefined" && base === window.location.origin ? haSessionToken() : "";
       try {
@@ -326,6 +341,7 @@ export class ControllerStore {
     if (this.demo) return;
     const session = token.trim() ? undefined : findSession(base);
     const client = new HaClient(base, token.trim(), session);
+    this.admin = adminOf(session);
     this.historyAborters.forEach((abort) => abort.abort());
     this.historyAborters.clear();
     this.generation++;
@@ -448,14 +464,24 @@ export class ControllerStore {
     const generation = this.generation;
     const roomId = this.roomId;
     const scoped =
-      action.startsWith("strategy_") || action.startsWith("runs_") || action.startsWith("stock_");
+      action.startsWith("strategy_") ||
+      action.startsWith("runs_") ||
+      action.startsWith("stock_") ||
+      action.startsWith("dosing_");
     const payload = scoped ? { ...data, room_id: roomId } : data;
     if (scoped && !roomId) throw new Error("Select an available room.");
     // What's new's record changes nothing a refresh would show, and must neither wait on nor hold
     // up a change being applied.
     const mutation =
       !action.startsWith("whats_new_") &&
-      !["strategy_get", "strategy_preview", "setup_read", "runs_get", "stock_get"].includes(action);
+      ![
+        "strategy_get",
+        "strategy_preview",
+        "setup_read",
+        "runs_get",
+        "stock_get",
+        "dosing_get",
+      ].includes(action);
     if (mutation && this.writing) throw new Error("Another change is still being applied.");
     if (mutation) this.writing = true;
     try {

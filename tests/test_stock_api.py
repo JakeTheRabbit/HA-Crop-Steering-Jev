@@ -161,6 +161,82 @@ def test_a_corrupt_store_is_kept_and_every_change_refused():
     }
 
 
+def _link(hass, **tanks):
+    """The room's dosing setup, linking stock tanks to pumps (docs/DOSING.md, Stock tanks)."""
+    pumps = [{"id": pump, "stock_tank": tank} for tank, pump in tanks.items()]
+    hass.data[DOMAIN].setdefault("_dosing", {})["entry"] = types.SimpleNamespace(
+        data={"pumps": pumps}, error=None
+    )
+
+
+def test_what_a_dose_drew_is_counted_once_and_warns_when_low(dispatcher):
+    hass, store = rig()
+    mutate(store, "stock_save", tanks=[{**BLOOM, "level_l": 10.02}])
+    draw = {"key": ":bloom:2026-09-28T01:00:00+00:00", "source": "dose"}
+    answer = asyncio.run(store.draw({**draw, "draws": {"bloom": 25, "cal": 5}}))
+    assert (answer["counted"], answer["duplicate"], answer["skipped"]) == (
+        True,
+        False,
+        ["cal"],
+    )
+    assert answer["revision"] == 2 and answer["tanks"][0]["level_l"] == 9.995
+    assert answer["history"][0]["key"] == draw["key"]
+    assert hass._issues["stock_low"]["translation_placeholders"]["count"] == "1"
+    assert dispatcher.sent[-1] == "crop_steering_stock_changed_entry"
+    # Sent again (the controller did not hear back): nothing moves.
+    again = asyncio.run(store.draw({**draw, "draws": {"bloom": 25}}))
+    assert (again["counted"], again["duplicate"], again["revision"]) == (False, True, 2)
+    assert again["tanks"][0]["level_l"] == 9.995
+    assert store._store.value["draw_keys"] == [draw["key"]]
+    # A restart keeps the keys it has counted.
+    _, reloaded = rig(value=store._store.value)
+    repeat = asyncio.run(reloaded.draw({**draw, "draws": {"bloom": 25}}))
+    assert repeat["duplicate"] and repeat["tanks"][0]["level_l"] == 9.995
+
+
+def test_a_fill_skips_the_tanks_a_dosing_pump_draws():
+    hass, store = rig()
+    cal = {"name": "Cal", "capacity_l": 5, "dose_ml": 250}
+    mutate(store, "stock_save", tanks=[BLOOM, cal])
+    _link(hass, bloom="bloom_pump")
+    assert store.linked() == {"bloom": "bloom_pump"}
+    asyncio.run(store._fill("2026-09-24 19:16:08"))
+    asyncio.run(store._fill("2026-09-25 19:02:00"))  # a batch Crop Steering stamped
+    assert [t["level_l"] for t in store.data["tanks"]] == [50, 4.75]
+    assert store.data["history"][0]["draw_ml"] == {"cal": 250.0}
+
+
+def test_a_batch_recorded_by_hand_skips_the_tanks_a_dosing_pump_draws():
+    """A batch the controller made draws its linked tanks dose by dose (stock_draw); recorded by
+    hand as well, it must not take them a second time. The answer says which it skipped.
+    """
+    hass, store = rig(fill="")
+    cal = {"name": "Cal", "capacity_l": 5, "dose_ml": 250}
+    mutate(store, "stock_save", tanks=[BLOOM, cal])
+    _link(hass, bloom="bloom_pump")
+    response = mutate(store, "stock_record_batch")
+    assert [t["level_l"] for t in response["tanks"]] == [50, 4.75]
+    assert response["skipped"] == ["bloom"]
+    assert response["history"][0] == {
+        "at": response["history"][0]["at"],
+        "source": "manual",
+        "draw_ml": {"cal": 250.0},
+    }
+    # Unlinked again (the pump was removed from the dosing setup): it is drawn as before.
+    _link(hass)
+    response = mutate(store, "stock_record_batch")
+    assert [t["level_l"] for t in response["tanks"]] == [48.2, 4.5]
+    assert response["skipped"] == []
+    assert "skipped" not in mutate(store, "stock_refill", id="bloom")
+
+
+def test_a_corrupt_store_refuses_a_draw_too():
+    _, store = rig(value={"revision": "seven", "tanks": []})
+    with pytest.raises(ValueError, match="not been overwritten"):
+        asyncio.run(store.draw({"key": "k", "draws": {"bloom": 5}, "source": "dose"}))
+    assert store._store.saves == 0
+
+
 def test_a_failed_save_changes_nothing():
     _, store = rig()
     mutate(store, "stock_save", tanks=[{**BLOOM, "level_l": 20}])
