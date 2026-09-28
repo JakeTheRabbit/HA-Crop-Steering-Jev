@@ -264,6 +264,7 @@ _CANCELLED_SHOT_CLEANUP = (
 
 # Switch read-back after a close: see Controller._confirm_switches.
 CONFIRM_FIRST_READ_S, CONFIRM_POLL_S, CONFIRM_TIMEOUT_S = 1.0, 0.5, 6.0
+CONFIRM_RETRY_S = 10.0  # a second read-back, after OFF is sent again to what still reads on
 
 # The shortest shot the controller runs, in seconds (a shot sized shorter is lengthened to this).
 MIN_SHOT_S = 5
@@ -2850,22 +2851,35 @@ class Controller:
         """True only when every switch reads back `want`.
 
         Zigbee/MQTT plugs accept a command at once but report the new state later
-        (a pump's OFF report: usually under 1 s, 1.6 s seen on a live install). A read-back
-        that gives up too early latches a false hardware hold; one that waits too long
-        stalls every room (this loop is synchronous) before a real stuck-open is caught.
+        (a pump's OFF report: usually under 1 s; 1.6 s on 15 Sep and about 10 s on 28 Sep 2026 on a
+        live install). A read-back that gives up too early latches a false hardware hold; one that
+        waits too long stalls every room (this loop is synchronous) before a real stuck-open is caught.
         """
+
+        def settled(window, first):
+            deadline = time.monotonic() + window
+            time.sleep(first)
+            while True:
+                if all(ha_get(ent)[0] == want for ent in entities):
+                    return True
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(CONFIRM_POLL_S)
+
         # First read at 1 s, exactly as before, so a plug that reports promptly costs nothing extra.
-        # A late report is then re-read every 0.5 s up to 6 s in all: nearly four times the worst lag
-        # seen, and still short enough that a genuinely stuck-open valve latches the hold within the
-        # same minute's loop. The pump has already been commanded OFF by the time this runs.
-        deadline = time.monotonic() + CONFIRM_TIMEOUT_S
-        time.sleep(CONFIRM_FIRST_READ_S)
-        while True:
-            if all(ha_get(ent)[0] == want for ent in entities):
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(CONFIRM_POLL_S)
+        # A late report is then re-read every 0.5 s up to 6 s. The pump has already been commanded
+        # OFF by the time this runs.
+        if settled(CONFIRM_TIMEOUT_S, CONFIRM_FIRST_READ_S):
+            return True
+        if want != "off":
+            return False
+        # Whatever still does not read OFF is sent OFF again (a plug may have missed the first) and
+        # read back for 10 s more: 16 s in all, still inside the minute's loop for a genuinely
+        # stuck-open valve.
+        for ent in entities:
+            if ha_get(ent)[0] != "off":
+                ha_call("switch", "turn_off", entity_id=ent)
+        return settled(CONFIRM_RETRY_S, CONFIRM_POLL_S)
 
     def _execute_shot(self, room, zone, duration_s, size_pct, *, flow_lps=None, plan_exempt=False):
         if self._hardware_fault_block(room):
