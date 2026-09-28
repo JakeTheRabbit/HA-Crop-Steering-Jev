@@ -9,6 +9,24 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] - 2026-09-28
+
+Pair: **controller 3.4.2**. Class **C3**. One pull request: #18, a pump plug that reports OFF late is sent OFF
+again, not held. Not run on hardware; checked by the controller and lean suites.
+
+### 🌱 In plain English
+
+- **No more false "hardware fault" from a slow pump plug.** On 28 September F2 stopped watering at 11:18
+  because the pump's Zigbee plug took about 10 seconds to report it had switched off, and the controller only
+  waited 6. Now anything that has not reported OFF is told again and given 10 more seconds before the room is
+  held. A valve that is really stuck open is still caught within 16 seconds.
+
+### 🔧 Technical notes
+
+- Controller (#18): `_confirm_switches` re-sends `switch.turn_off` to whatever does not read `off` after the first
+  6 s window and reads back for `CONFIRM_RETRY_S` (10 s) more; every close path (normal close, a shot cut short,
+  error cleanup, an interrupted shot's reconcile) uses it. Two new regression tests reproduce the live fault.
+
 ## [3.4.1] - 2026-09-28
 
 Pair: **controller 3.4.1**. Class **C1**. Two pull requests: #15 (C1), the demo shows Jev's re-water range as the
