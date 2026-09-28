@@ -1,6 +1,6 @@
 # User guide
 
-The menu has five entries. **Today** says whether the room is OK and which zone needs you. **Plan** holds the zones' **Targets** and the grow plan's **Schedule**. **History** holds the **Timeline**, **Water use** and **Compare runs**. **Equipment** holds **Probes**, **Stock tanks**, **Tank & pump** and **Setup**. **Settings & help** holds **Settings** and **Help**. Every zone has its own page, opened from its card on Today. Select the room before editing; zone numbers belong to that room.
+The menu has five entries. **Today** says whether the room is OK and which zone needs you. **Plan** holds the zones' **Targets** and the grow plan's **Schedule**. **History** holds the **Timeline**, **Water use** and **Compare runs**. **Equipment** holds **Probes**, **Stock tanks**, **Tank & pump**, **Dosing** and **Setup**. **Settings & help** holds **Settings** and **Help**. Every zone has its own page, opened from its card on Today. Select the room before editing; zone numbers belong to that room.
 
 Old bookmarks still work and open the page that holds their content now:
 
@@ -31,6 +31,8 @@ New installation? Start with [Install, upgrade and rollback](INSTALL.md). To try
 | Save a library recipe                    | This browser/site/room library; no HA write.                           |
 | Save a run record (Settings › Run records) | Run metadata and its captured reference; no irrigation activation.   |
 | Save configuration (Equipment › Setup)   | HA room/zone setup; wait for controller acknowledgement.               |
+| Dose, make a batch, stop (Equipment › Dosing) | A request the controller carries out; the page switches nothing.  |
+| Save the dosing setup (Equipment › Dosing) | HA's stored dosing setup for the room; the controller reads it.      |
 
 ## Try the demo
 
@@ -42,6 +44,7 @@ The demo is an isolated software demonstration. Its readings, history, example p
 4. Open **Plan › Schedule**. Read the flower by stage, then open **Advanced** to change a week's steering balance, inspect an endpoint profile, or open **Recipes** and preview **Demo • steady schedule** or **Demo • week-by-week changes**. Loading a recipe affects a local draft; the normal review/save remains separate.
 5. Open **History**: filter the **Timeline**, read **Water use**, and open **Compare runs** to line up the demo's current run with the previous one by grow week.
 6. Open **Equipment › Setup** to try entity search, room/zone names and mapping review. Demo actions do not call your HA server.
+7. Open **Equipment › Dosing**: dose a pump, make a batch and stop it. The demo's pumps, valves and float move as real ones would, faster than real time.
 
 A production recipe library starts empty. Demo recipes are interface examples and are stored separately from production libraries. Existing demo libraries, including deliberately empty or corrupt ones, are left unchanged.
 
@@ -179,6 +182,28 @@ An older integration publishes only each zone's combined reading, which then sta
 **Last recorded fill** has the meaning supplied by your existing recording automation: for example, a verified full-float event or an operator's explicit “mark filled” action. A full date/time helper uses its timestamp attribute; a sensor's `last_changed`, an automation's `last_triggered`, a fill-mode enable flag and a dosing interlock are not equivalent to a fill record. The panel does not create a fill-recording automation for you. A percentage source may itself be an estimate; drawing it as a tank does not turn it into a measured level. Tank readings and switch reports do not prove dose completion, water quality suitability or physical delivery.
 
 Unmapped inputs show **Not mapped**; invalid readings show **Unavailable**, **Check units** or **Out of range**. An unknown pump is not shown as off and an unknown tank is not drawn empty. When disconnected, the panel identifies retained readings as last received.
+
+### Dosing
+
+**Equipment › Dosing** runs the room's batch tank: it doses one pump by hand, and it makes a batch (fill the tank, mix it, dose each nutrient in order, mix again). Each room has its own page for its own tank. The page switches nothing itself: every action is reviewed, then sent as a request that the controller carries out within a few seconds. A request the controller could not take within two minutes is dropped, so nothing starts later by surprise. The pumps' own firmware times each dose: Home Assistant sets the amount and presses start, and the controller switches a pump's power off only if it runs past its time.
+
+- **The tank**, in one line: its level, whether the float reads full, EC, pH and temperature (from the room's tank mapping), and what the batch is doing.
+- **A card per pump**: the pump drawn (its rotor turns while it doses), its name and device, its state, its last dose, its calibrated flow in mL/s, and the level of the stock tank of the same name. A bar fills while it doses. Choose a card to dose that pump.
+
+| State          | Meaning                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------- |
+| Idle           | Ready to dose.                                                                           |
+| Dosing         | The controller or the pump itself says it is dosing.                                     |
+| Not calibrated | Its flow reads nothing or 0 mL/s, so the controller will not start it. Calibrate it first. |
+| Unavailable    | Greyed out with a question mark: the controller is not reporting, or one of the pump's entities is missing or unavailable. The card says which. |
+
+- **Dose a pump**: type the mL, up to the pump's largest dose; the page says how long it takes at the pump's flow. **Start** opens the review. The dose goes into the tank as it is, and watering carries on. While it runs, the pump's **status** shows the target, the elapsed time and the mL so far, worked out from the time and the flow.
+- **Make a batch**: the steps, each marked done, now, passed by or to come, beside the recipe with each pump's mL, the total and the time it takes. **Make a batch** opens the review. Watering is held in the room, and in any room whose pump or valves the batch uses, until the batch finishes or is stopped. A pump in the recipe that cannot dose now is named before you start: the batch would stop at its dose, after filling and mixing.
+- **Stop dosing** and **Stop the batch** send one stop: every dosing pump in the room is switched off, and a running batch ends with the fill valve closed, the mixing pump off and watering released. It replaces any request still waiting.
+- **History**: the last doses and batches, what each dosed and how it ended.
+- **Dosing setup** (one tap down): each pump's dose volume, start, dosing state, power switch and calibrated flow; the batch hardware (fill valve and float, mixing pump, valves and power, what to switch off before filling, the timings); and the recipe in dose order, each amount fixed or read from an entity at the start of each batch. A Home Assistant administrator edits it and saves it after a review; anyone else can read it.
+
+A room without pumps says what dosing does, with **Set up dosing**. Dosing, batches and the setup need a Home Assistant administrator login; any login can watch. [Batch-tank dosing](DOSING.md) describes what the integration, the controller and this page each do.
 
 ### Setup
 

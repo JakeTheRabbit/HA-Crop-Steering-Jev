@@ -230,6 +230,7 @@ try {
     ["equipment/probes", "Probes"],
     ["equipment/stock", "Stock tanks"],
     ["equipment/tank", "Tank & pump"],
+    ["equipment/dosing", "Dosing"],
     ["equipment/setup", "Rooms & setup"],
     ["settings", "Settings"],
     ["help", "Help"],
@@ -1070,6 +1071,302 @@ try {
       await expectVisible(card("silica"));
       await axe("stock tanks after edits");
       await noOverflow();
+    },
+  );
+  await check(
+    "dosing: each room's pumps, a dose and a batch through their reviews, and stop; only requests are sent",
+    async () => {
+      // Flower 2's four pumps and Flower 1's six, one of them not calibrated yet.
+      const cards = page.locator("[data-dosing-pump]");
+      await go("equipment/dosing");
+      await expectVisible(cards.first());
+      assert.deepEqual(await cards.locator(".dosing-pump-select").allInnerTexts(), [
+        "Balance",
+        "Bloom",
+        "Core",
+        "Cleanse",
+      ]);
+      assert.match(
+        await page.locator("[data-batch-line]").innerText(),
+        /^No batch running · last batch finished \S/,
+      );
+      await go("equipment/dosing", "f1");
+      await expectVisible(cards.first());
+      assert.equal(await cards.count(), 6, "one card per pump");
+      assert.deepEqual(await pillTones('[data-dosing-pump="fade"] .pill'), [
+        ["Not calibrated", "warn"],
+      ]);
+      // Flower 1's tank is filled by hand: its batch passes the fill by.
+      assert.equal(
+        await page.locator('.dosing-steps [data-step="fill"]').getAttribute("data-state"),
+        "skipped",
+      );
+      await inBothThemes("dosing", async () => {
+        await go("equipment/dosing");
+        await expectVisible(cards.first());
+      });
+      // A dose of Bloom, through its review: its card doses, then the history has it.
+      await go("equipment/dosing");
+      await page.locator('[data-dosing-pump="bloom"] .dosing-pump-select').click();
+      await page.getByLabel("Amount (mL)").fill("60");
+      assert.match(
+        await page.locator("[data-dose-summary]").innerText(),
+        /^Your request: 60 mL of Bloom, about 5\.7 s$/,
+      );
+      await page.getByRole("button", { name: /^Start Bloom/ }).click();
+      const review = page.getByRole("dialog", { name: "Dose Bloom?" });
+      await expectVisible(review);
+      await axe("dosing: the dose's review");
+      await review.getByRole("button", { name: "Start Bloom", exact: true }).click();
+      await review.waitFor({ state: "hidden" });
+      await expectVisible(page.locator('[data-dosing-pump="bloom"][data-state="dosing"]'));
+      await expectVisible(page.locator('[data-dosing-pump="bloom"] [role="progressbar"]'));
+      await page.screenshot({ path: path.join(out, "dashboard-dosing-dose.png"), fullPage: true });
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('tr[data-history-kind="dose"]')
+            ?.textContent.includes("Bloom 60 mL"),
+        null,
+        { timeout: 20_000 },
+      );
+      assert.match(
+        await page.locator('tr[data-history-kind="dose"]').first().innerText(),
+        /Dose Bloom\s+Finished\s+Bloom 60 mL/,
+      );
+      assert.equal(
+        await page.locator('[data-dosing-pump="bloom"]').getAttribute("data-state"),
+        "idle",
+      );
+      // A batch, through its review: its steps walk, and stop ends it where it is.
+      await page.getByRole("button", { name: "Make a batch", exact: true }).click();
+      const batch = page.getByRole("dialog", { name: "Make a batch in Flower 2?" });
+      await expectVisible(batch);
+      await axe("dosing: the batch's review");
+      await batch.getByRole("button", { name: "Make the batch", exact: true }).click();
+      await batch.waitFor({ state: "hidden" });
+      await expectVisible(page.locator('.dosing-steps [data-step="fill"][data-state="running"]'));
+      await page.getByRole("button", { name: "Stop the batch", exact: true }).click();
+      const stop = page.getByRole("dialog", { name: "Stop dosing in Flower 2?" });
+      await expectVisible(stop);
+      await stop.getByRole("button", { name: "Send stop", exact: true }).click();
+      await stop.waitFor({ state: "hidden" });
+      await expectVisible(
+        page.locator("[data-batch-summary]", {
+          hasText: /^Last batch stopped \S.* \(stop requested during [a-z ]+\)$/,
+        }),
+      );
+      assert.equal((await pillTones('tr[data-history-kind="batch"] .pill'))[0][1], "warn");
+      // The setup open for editing, like the page, fits a phone.
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator("details.dosing-setup > summary").click();
+      await page.getByRole("button", { name: "Edit dosing setup", exact: true }).click();
+      await expectVisible(page.getByRole("button", { name: "Review dosing setup" }));
+      await noOverflow();
+      await axe("dosing setup, editing, on a phone");
+      await page.screenshot({ path: path.join(out, "mobile-dosing-setup.png"), fullPage: true });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+
+      // Against Home Assistant: every action is a dosing_request, and nothing else is written.
+      const ha = await browser.newContext({
+        viewport: { width: 1440, height: 1000 },
+        reducedMotion: "reduce",
+      });
+      const posts = [];
+      const fixture = {};
+      const stamp = () => new Date().toISOString();
+      const put = (entity_id, state, attributes = {}) =>
+        (fixture[entity_id] = {
+          entity_id,
+          state: String(state),
+          attributes,
+          last_changed: stamp(),
+          last_updated: stamp(),
+        });
+      const pump = (id, name, flow, dosing = "off") => {
+        put(`number.${id}_volume`, 100, { unit_of_measurement: "mL" });
+        put(`button.${id}_start`, "unknown");
+        put(`binary_sensor.${id}_dosing`, dosing);
+        put(`switch.${id}_power`, "on");
+        put(`number.${id}_flow`, flow, { unit_of_measurement: "mL/s" });
+        return {
+          id,
+          name,
+          volume_entity: `number.${id}_volume`,
+          start_entity: `button.${id}_start`,
+          dosing_entity: `binary_sensor.${id}_dosing`,
+          dosing_prefix: "Dosing",
+          power_entity: `switch.${id}_power`,
+          flow_entity: `number.${id}_flow`,
+          max_ml: 2000,
+          restore_volume: true,
+        };
+      };
+      const idle = {
+        step: "idle",
+        pump: null,
+        started_at: null,
+        step_started_at: null,
+        steps: [],
+        result: null,
+        ended_at: null,
+      };
+      for (const [prefix, name, pumps] of [
+        ["", "Flower 2", [pump("bloom", "Bloom", 10.5), pump("grow", "Grow", 10.9, "unavailable")]],
+        ["f1_", "Flower 1", []],
+      ]) {
+        put(`sensor.crop_steering_${prefix}engine_config`, "ready", {
+          prefix,
+          num_zones: 1,
+          friendly_name: `${name} engine config`,
+          enable_flag: `switch.crop_steering_${prefix}engine_enabled`,
+        });
+        put(`switch.crop_steering_${prefix}engine_enabled`, "on");
+        put(`sensor.crop_steering_${prefix}ai_heartbeat`, "online", { last_beat: stamp() });
+        put(`sensor.crop_steering_${prefix}dosing_config`, 1, {
+          pumps,
+          batch: {
+            fill_valve: null,
+            full_entity: null,
+            full_state: "on",
+            fill_timeout_min: 20,
+            mix_pump: null,
+            mix_valves: [],
+            mix_power_sensor: null,
+            mix_min_w: 0,
+            premix_min: 1,
+            postmix_min: 1,
+            close_entities: [],
+            hold_entity: null,
+            filled_at_entity: null,
+            recipe: pumps.map((item) => ({ pump: item.id, ml: 100, ml_entity: null })),
+          },
+          request: null,
+        });
+        put(`sensor.crop_steering_${prefix}dosing`, "idle", {
+          pumps: Object.fromEntries(
+            pumps.map((item) => [
+              item.id,
+              { state: "idle", flow_ml_s: 10, target_ml: null, started_at: null, last: null },
+            ]),
+          ),
+          batch: idle,
+          handled: null,
+          handled_result: null,
+          history: [],
+        });
+      }
+      await ha.route("**/*", async (route) => {
+        const request = route.request(),
+          url = new URL(request.url());
+        if (url.origin !== base) return route.abort();
+        if (!url.pathname.startsWith("/api/")) return route.continue();
+        const reply = (body, status = 200) =>
+          route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+        if (url.pathname === "/api/states") return reply(Object.values(fixture));
+        if (url.pathname.startsWith("/api/states/")) {
+          const entity = fixture[decodeURIComponent(url.pathname.slice(12))];
+          return entity ? reply(entity) : reply({}, 404);
+        }
+        if (request.method() !== "POST") return reply([]);
+        const body = request.postDataJSON() ?? {};
+        posts.push({ path: url.pathname, body });
+        const prefix = String(body.room_id ?? "").replace(/^room:/, "");
+        const config = fixture[`sensor.crop_steering_${prefix}dosing_config`];
+        const status = fixture[`sensor.crop_steering_${prefix}dosing`];
+        if (url.pathname === "/api/services/crop_steering/dosing_get")
+          return reply({
+            service_response: {
+              schema_version: 1,
+              room_id: body.room_id,
+              config: { revision: Number(config.state), ...config.attributes },
+              candidates: [],
+              error: null,
+            },
+          });
+        if (url.pathname !== "/api/services/crop_steering/dosing_request")
+          return reply({ message: "Not a dosing service" }, 400);
+        const taken = {
+          id: `request${posts.length}`,
+          action: body.action,
+          pump: body.pump ?? null,
+          ml: body.ml ?? null,
+          at: stamp(),
+          by: "Fixture",
+        };
+        config.attributes = { ...config.attributes, request: taken };
+        // The controller takes it at once: a dose is over in an instant, a batch fills until stopped.
+        status.state = body.action === "batch" ? "batch" : "idle";
+        status.attributes = {
+          ...status.attributes,
+          handled: taken.id,
+          handled_result: body.action === "stop" ? "stopped" : "taken",
+          batch:
+            body.action === "batch"
+              ? {
+                  ...idle,
+                  step: "fill",
+                  started_at: stamp(),
+                  steps: [
+                    { step: "hold", state: "done" },
+                    { step: "close", state: "done" },
+                    { step: "fill", state: "running" },
+                  ],
+                }
+              : idle,
+        };
+        return reply({ service_response: { request: taken, error: null } });
+      });
+      const live = await ha.newPage();
+      live.on("pageerror", (error) => pageErrors.push(error.message));
+      await live.goto(`${base}/dashboard.html?room=room:#/equipment/dosing`, {
+        waitUntil: "networkidle",
+      });
+      const bloom = live.locator('[data-dosing-pump="bloom"]');
+      await expectVisible(bloom);
+      // A pump whose dosing sensor is unavailable: greyed out, a question mark on its head.
+      const grow = live.locator('[data-dosing-pump="grow"]');
+      assert.equal(await grow.getAttribute("data-state"), "unavailable");
+      assert.equal(await grow.locator(".pp-unknown").textContent(), "?");
+      await live.getByLabel("Amount (mL)").fill("60");
+      await live.getByRole("button", { name: /^Start Bloom/ }).click();
+      await live
+        .getByRole("dialog")
+        .getByRole("button", { name: "Start Bloom", exact: true })
+        .click();
+      await expectVisible(live.locator('[data-request-stage="taken"]'));
+      // A batch now would stop at Grow's dose: said before it is asked for, not refused.
+      assert.equal(
+        await live.locator("[data-batch-warning]").innerText(),
+        "Grow is unavailable: a batch now would stop at its dose.",
+      );
+      await live.getByRole("button", { name: "Make a batch", exact: true }).click();
+      await live.getByRole("dialog").getByRole("button", { name: "Make the batch" }).click();
+      await live.getByRole("button", { name: "Stop the batch", exact: true }).click();
+      await live.getByRole("dialog").getByRole("button", { name: "Send stop" }).click();
+      await expectVisible(live.locator("[data-request-stage]", { hasText: "request to stop" }));
+      assert.deepEqual(
+        posts.filter((post) => post.path.endsWith("/dosing_request")).map((post) => post.body),
+        [
+          { action: "dose", pump: "bloom", ml: 60, room_id: "room:" },
+          { action: "batch", room_id: "room:" },
+          { action: "stop", room_id: "room:" },
+        ],
+      );
+      // Besides reads (dosing_get, and What's new on opening), those three requests are all it sent:
+      // no pump, valve or number was written.
+      assert.deepEqual(
+        posts
+          .map((post) => post.path)
+          .filter((path) => !/\/crop_steering\/(dosing_get|whats_new_get)$/.test(path)),
+        Array(3).fill("/api/services/crop_steering/dosing_request"),
+        "the page wrote nothing but its dosing requests",
+      );
+      // A room without pumps says what dosing does, and offers to set it up.
+      await live.locator("#desktop-room").selectOption("room:f1_");
+      await expectVisible(live.getByRole("heading", { name: "No dosing pumps in Flower 1" }));
+      await expectVisible(live.getByRole("button", { name: "Set up dosing", exact: true }));
+      await ha.close();
     },
   );
   await check("setup: every mapping says whether it is mapped; the checks are pills", async () => {

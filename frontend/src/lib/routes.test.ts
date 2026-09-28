@@ -98,6 +98,15 @@ describe("the menu", () => {
     expect(sectionOf("zone")).toBe("today");
     expect(sectionOf("help")).toBe("settings");
     expect(sectionOf("equipment/tank")).toBe("equipment");
+    expect(sectionOf("equipment/dosing")).toBe("equipment");
+  });
+  it("opens each room's batch-tank dosing under Equipment", () => {
+    expect(parseRoute("#/equipment/dosing")).toEqual({
+      route: { page: "equipment/dosing" },
+      canonical: true,
+    });
+    expect(routeHash({ page: "equipment/dosing" })).toBe("#/equipment/dosing");
+    expect(canonicalHash("#/equipment/dosing")).toBeNull();
   });
   it("tells two zones apart, and the same page apart from nothing", () => {
     expect(sameRoute({ page: "zone", zone: 1 }, { page: "zone", zone: 2 })).toBe(false);

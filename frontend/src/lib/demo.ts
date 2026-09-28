@@ -253,8 +253,199 @@ export function createDemo(now = Date.now()): States {
     });
     // Flower 2 runs Jev; Flower 1 is a room without it.
     if (!index) demoJev(put, prefix, now);
+    demoDosing(put, prefix, name, now);
   }
   return states;
+}
+/** Each demo room's dosing pumps (id, name, calibrated flow in mL/s, the recipe's mL). Flower 1's
+ * Fade is new and not calibrated yet; the recipe passes it by. */
+const DEMO_PUMPS: Record<string, [string, string, number, number][]> = {
+  "": [
+    ["balance", "Balance", 11.06, 300],
+    ["bloom", "Bloom", 10.52, 1800],
+    ["core", "Core", 10.88, 1080],
+    ["cleanse", "Cleanse", 9.74, 200],
+  ],
+  f1_: [
+    ["grow", "Grow", 10.9, 1080],
+    ["cleanse", "Cleanse", 9.8, 200],
+    ["balance", "Balance", 11.2, 180],
+    ["fade", "Fade", 0, 0],
+    ["core", "Core", 10.6, 0],
+    ["bloom", "Bloom", 10.4, 1800],
+  ],
+};
+/** A demo room's batch-tank dosing (docs/DOSING.md): the pumps' hardware, the integration's
+ * dosing_config sensor and the controller's dosing sensor. Flower 2's batch fills its tank, mixes
+ * it with a pump and a recirculation valve, and doses four pumps; Flower 1's tank is filled by
+ * hand. The last batch ended at each tank's last fill; Flower 2 has had a trim since. */
+function demoDosing(
+  put: (id: string, state: string | number, attributes?: Record<string, unknown>) => void,
+  prefix: string,
+  room: string,
+  now: number,
+) {
+  const at = (hoursAgo: number) => new Date(now - hoursAgo * 3_600_000).toISOString();
+  const filled = prefix ? 5 : 2;
+  const list = DEMO_PUMPS[prefix] ?? [];
+  const pumps = list.map(([id, name, flow, ml]) => {
+    const device = `demo_${prefix}doser_${id}`;
+    put(`number.${device}_volume`, ml, {
+      friendly_name: `${name} dose volume`,
+      min: 0,
+      max: 5000,
+      step: 1,
+      unit_of_measurement: "mL",
+    });
+    put(`button.${device}_start`, at(filled + 0.2), { friendly_name: `${name} start dose` });
+    put(`binary_sensor.${device}_dosing`, "off", {
+      friendly_name: `${name} dosing`,
+      device_class: "running",
+    });
+    put(`switch.${device}_power`, "on", { friendly_name: `${name} pump power` });
+    put(`number.${device}_flow`, flow, {
+      friendly_name: `${name} calibrated flow`,
+      min: 0,
+      max: 50,
+      step: 0.01,
+      unit_of_measurement: "mL/s",
+    });
+    return {
+      id,
+      name,
+      volume_entity: `number.${device}_volume`,
+      start_entity: `button.${device}_start`,
+      dosing_entity: `binary_sensor.${device}_dosing`,
+      dosing_prefix: "Dosing",
+      power_entity: `switch.${device}_power`,
+      flow_entity: `number.${device}_flow`,
+      max_ml: 2000,
+      restore_volume: true,
+    };
+  });
+  const recipe = list.map(([id, , , ml]) => ({ pump: id, ml, ml_entity: null }));
+  const batch = prefix
+    ? {
+        fill_valve: null,
+        full_entity: null,
+        full_state: "on",
+        fill_timeout_min: 20,
+        mix_pump: "switch.demo_f1_mix_pump",
+        mix_valves: [],
+        mix_power_sensor: null,
+        mix_min_w: 0,
+        premix_min: 2,
+        postmix_min: 5,
+        close_entities: [],
+        hold_entity: null,
+        filled_at_entity: null,
+        recipe,
+      }
+    : {
+        fill_valve: "switch.demo_tank_fill_valve",
+        full_entity: "binary_sensor.demo_tank_full",
+        full_state: "on",
+        fill_timeout_min: 20,
+        mix_pump: "switch.demo_mix_pump",
+        mix_valves: ["switch.demo_recirc_valve"],
+        mix_power_sensor: "sensor.demo_mix_pump_power",
+        mix_min_w: 200,
+        premix_min: 2,
+        postmix_min: 5,
+        close_entities: [],
+        hold_entity: null,
+        filled_at_entity: null,
+        recipe,
+      };
+  if (prefix) put("switch.demo_f1_mix_pump", "off", { friendly_name: "Flower 1 mixing pump" });
+  else {
+    put("switch.demo_tank_fill_valve", "off", { friendly_name: "Batch tank fill valve" });
+    put("binary_sensor.demo_tank_full", "off", { friendly_name: "Batch tank full float" });
+    put("switch.demo_mix_pump", "off", { friendly_name: "Mixing pump" });
+    put("switch.demo_recirc_valve", "off", { friendly_name: "Recirculation valve" });
+    put("sensor.demo_mix_pump_power", 0, {
+      friendly_name: "Mixing pump power",
+      unit_of_measurement: "W",
+      device_class: "power",
+    });
+  }
+  put(`sensor.crop_steering_${prefix}dosing_config`, prefix ? 2 : 4, {
+    friendly_name: `${room} dosing configuration`,
+    pumps,
+    batch,
+    request: null,
+    updated_at: at(24 * 6),
+  });
+  // The last batch, and before it the one earlier (Flower 1 stopped one by hand while it mixed).
+  const doses = Object.fromEntries(list.flatMap(([id, , , ml]) => (ml > 0 ? [[id, ml]] : [])));
+  const lastDose = (ml: number, hoursAgo: number) => ({
+    ml,
+    at: at(hoursAgo),
+    result: "finished",
+  });
+  const history = [
+    ...(prefix
+      ? []
+      : [
+          {
+            kind: "dose",
+            at: at(0.8),
+            ended_at: at(0.8 - 3 / 3600),
+            result: "finished",
+            doses: { balance: 25 },
+            by: "Demo",
+          },
+        ]),
+    {
+      kind: "batch",
+      at: at(filled + 0.25),
+      ended_at: at(filled),
+      result: "finished",
+      doses,
+      by: "Demo",
+    },
+    {
+      kind: "batch",
+      at: at(filled + 24.25),
+      ended_at: at(filled + 24.05),
+      result: prefix ? "stopped: stop requested during mix after dosing" : "finished",
+      doses,
+      by: "Demo",
+    },
+  ];
+  put(`sensor.crop_steering_${prefix}dosing`, "idle", {
+    friendly_name: `${room} dosing`,
+    pumps: Object.fromEntries(
+      list.map(([id, , flow, ml], order) => [
+        id,
+        {
+          state: "idle",
+          flow_ml_s: flow,
+          target_ml: null,
+          started_at: null,
+          expected_s: null,
+          last:
+            !prefix && id === "balance"
+              ? lastDose(25, 0.8)
+              : ml > 0
+                ? lastDose(ml, filled + 0.15 - order * 0.01)
+                : null,
+        },
+      ]),
+    ),
+    batch: {
+      step: "idle",
+      pump: null,
+      started_at: at(filled + 0.25),
+      step_started_at: null,
+      steps: [],
+      result: "finished",
+      ended_at: at(filled),
+    },
+    handled: null,
+    handled_result: null,
+    history,
+  });
 }
 /** Flower 2's probes, front and back of each zone's row, and the combined sensor's attributes as
  * the integration's fuse_probes publishes them (calculations.py): every probe used, except zone 3's

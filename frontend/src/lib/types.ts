@@ -137,6 +137,9 @@ export interface Series {
 }
 export interface Controller {
   demo: boolean;
+  /** Whether the signed-in Home Assistant user is an administrator: null when this page cannot tell
+   * (a standalone tab), and Home Assistant refuses what they may not do. */
+  admin: boolean | null;
   connection: "connecting" | "live" | "demo" | "offline";
   error: string | null;
   lastUpdated: number | null;
