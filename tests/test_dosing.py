@@ -1,7 +1,8 @@
 """Batch-tank dosing, the pure rules (docs/DOSING.md, Validation): each entity in its allowed domain
 and present, pump ids unique, a recipe that doses only pumps that exist and each at most once, a
-fill valve only with its full entity, and no switch that is both a pump's power and batch hardware.
-Plus the request checks and when a request still counts as waiting for the controller."""
+fill valve only with its full entity, a mix pump minimum power only with its power sensor, and no
+switch that is both a pump's power and batch hardware. Plus the request checks and when a request
+still counts as waiting for the controller."""
 
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -236,6 +237,19 @@ def test_a_fill_valve_needs_its_full_entity():
     # No fill valve: the batch starts with the tank already filled.
     _, cleaned = clean(batch=batch(fill_valve=None, full_entity=None))
     assert cleaned["fill_valve"] is None
+
+
+def test_a_mix_pump_minimum_power_needs_the_sensor_that_reads_it():
+    """Without the sensor the controller could not check the power, and would mix unchecked."""
+    with pytest.raises(dosing.DosingError, match="needs the mix pump power sensor"):
+        clean(batch=batch(mix_power_sensor=None))
+    # No minimum, no sensor needed; a sensor with no minimum is kept for the page.
+    _, cleaned = clean(batch=batch(mix_power_sensor=None, mix_min_w=0))
+    assert (cleaned["mix_power_sensor"], cleaned["mix_min_w"]) == (None, 0)
+    assert (
+        clean(batch=batch(mix_min_w=0))[1]["mix_power_sensor"]
+        == BATCH["mix_power_sensor"]
+    )
 
 
 def test_a_pumps_power_switch_is_never_batch_hardware():

@@ -51,6 +51,7 @@ pump name or recipe is assumed.
     "mix_valves": ["switch.x"],        // 0..4 switch.*, opened before the mix pump starts
     "mix_power_sensor": "sensor.x",    // sensor.* (W) | null
     "mix_min_w": 200,                  // 0 = no power check; else the mix pump must draw this within 20 s
+                                       // (needs mix_power_sensor)
     "premix_min": 2,                   // 0..30
     "postmix_min": 5,                  // 0..60
     "close_entities": ["switch.x"],    // 0..16 switch.*, switched off before filling (another room's feed path)
@@ -68,7 +69,8 @@ pump name or recipe is assumed.
 
 Validation (`dosing.py`, pure): every entity exists and is in its allowed domain; pump ids unique;
 recipe pumps exist; a pump appears in the recipe at most once; `full_entity` set whenever
-`fill_valve` is; no entity is both a dosing pump's `power_entity` and batch hardware; a `mix_pump`,
+`fill_valve` is; `mix_power_sensor` set whenever `mix_min_w` is above 0 (else the power could not be
+checked); no entity is both a dosing pump's `power_entity` and batch hardware; a `mix_pump`,
 `mix_valves` or `close_entities` switch may be a room's irrigation pump or main line (the batch
 holds that room's watering); a pump's `stock_tank` is one of the room's stock tanks, and a stock
 tank is linked to at most one pump. A room with no pumps is valid and does nothing. "Exists" is checked
@@ -81,9 +83,13 @@ back yet.
 |---|---|---|---|
 | `crop_steering.dosing_get` | any user | `room_id` | `{schema_version: 1, room_id, config, candidates[], can_edit, error}` |
 | `crop_steering.dosing_save` | admin | `room_id, expected_revision, pumps, batch` | the same as `dosing_get`, or `error` |
-| `crop_steering.dosing_request` | admin | `room_id, action ("dose" \| "batch" \| "stop"), pump?, ml?` | `{request, error}` |
+| `crop_steering.dosing_request` | admin; a `stop`: any signed-in user | `room_id, action ("dose" \| "batch" \| "stop"), pump?, ml?` | `{request, error}` |
 
 - `room_id` is `"room:<prefix>"`, as for the stock services.
+- Who: as for every service that changes something, "admin" means a signed-in administrator, and a
+  call with no user (an automation) runs as before. A `stop` only switches things off, so whoever
+  may look at the room may ask for one: any signed-in user, administrator or not. A user id Home
+  Assistant does not know is refused either way.
 - `candidates` lists entities of every domain the configuration can use (`number`, `input_number`,
   `button`, `input_button`, `script`, `binary_sensor`, `sensor`, `switch`, `input_boolean`,
   `input_datetime`): `{entity_id, name, domain, state, unit, device_class}`.
@@ -99,7 +105,9 @@ back yet.
   `batch` returns `error: "busy"` while one is pending, and a `dose` is refused when the pump is
   unknown or `ml` is not in 0 < ml ≤ `max_ml` (`error` then says which). A request does not move
   the revision.
-- `dosing_save` returns `error: "busy"` too (the same word) while a request is pending,
+- `dosing_save` returns `error: "busy"` too (the same word) while a request is pending or while
+  `sensor.crop_steering_<prefix>dosing` reads `dosing` or `batch` (a dose or a batch runs from the
+  setup it started with, which must not change under it),
   `error: "revision"` when `expected_revision` is stale, and an `error` naming the field when the
   setup breaks a rule under Validation; a refused save answers with the stored setup, unchanged. A
   pump saved without an `id` gets one made from its name.
@@ -251,7 +259,10 @@ and its level then follows what that pump has actually dosed:
   means it is never counted twice.
 - The stock store's fill-based batch draw (a newer time on the room's tank last-fill entity takes
   each tank's per-batch dose) skips the tanks linked to a pump: their doses draw them, so a batch
-  that stamps `filled_at_entity` never counts them twice.
+  that stamps `filled_at_entity` never counts them twice. A batch recorded by hand
+  (`crop_steering.stock_record_batch`) skips them the same way, so a batch the controller made and
+  someone also records by hand is never counted twice on them either; its answer lists the linked
+  tanks it skipped (`skipped`).
 - `sensor.crop_steering_<prefix>stock_low` gives each entry of its `tanks` attribute an `id`, and a
   `pump`: the id of the pump linked to it, or null.
 

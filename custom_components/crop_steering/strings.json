@@ -867,7 +867,7 @@
     },
     "dosing_save": {
       "name": "Save dosing setup",
-      "description": "Replace this room's dosing pumps, batch hardware and recipe. Refused while a request is waiting for the controller app, or when the expected revision is stale. Switches nothing. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.",
+      "description": "Replace this room's dosing pumps, batch hardware and recipe. Refused while a request is waiting for the controller app or it reports a dose or a batch running, and when the expected revision is stale. Switches nothing. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.",
       "fields": {
         "room_id": {
           "name": "Room ID",
@@ -889,7 +889,7 @@
     },
     "dosing_request": {
       "name": "Request a dose or batch",
-      "description": "Ask the controller app to dose one pump into the batch tank, make a batch, or stop. A stop replaces any request still waiting; a dose or a batch is refused while another is waiting. The controller acts within seconds, and never on a request older than two minutes. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.",
+      "description": "Ask the controller app to dose one pump into the batch tank, make a batch, or stop. A stop replaces any request still waiting; a dose or a batch is refused while another is waiting. The controller acts within seconds, and never on a dose or a batch asked for more than two minutes before. A dose or a batch needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; a stop is open to every signed-in user; automations are unaffected.",
       "fields": {
         "room_id": {
           "name": "Room ID",

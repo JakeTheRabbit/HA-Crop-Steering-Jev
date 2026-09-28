@@ -142,21 +142,54 @@ async def _staff(hass):
     return MockUser(name="Staff phone", groups=[users]).add_to_hass(hass)
 
 
-async def test_an_ordinary_user_can_read_dosing_but_never_save_or_request(hass):
+async def test_an_ordinary_user_can_read_and_stop_dosing_but_never_save_or_dose(
+    hass, hass_admin_user
+):
     await _install(hass)
+    _devices(hass)
+    await _call(
+        hass, hass_admin_user, "dosing_save", expected_revision=0, pumps=[PUMP], batch={}
+    )
     staff = await _staff(hass)
     assert not staff.is_admin
     doc = await _call(hass, staff, "dosing_get")
-    assert doc["config"]["revision"] == 0 and doc["can_edit"] is False  # read-only for them
+    assert doc["config"]["revision"] == 1 and doc["can_edit"] is False  # read-only for them
     for name, data in (
-        ("dosing_save", {"expected_revision": 0, "pumps": [], "batch": {}}),
-        ("dosing_request", {"action": "stop"}),
+        ("dosing_save", {"expected_revision": 1, "pumps": [], "batch": {}}),
+        ("dosing_request", {"action": "dose", "pump": "balance", "ml": 5}),
+        ("dosing_request", {"action": "batch"}),
     ):
         with pytest.raises(HomeAssistantError, match=REFUSED):
             await _call(hass, staff, name, **data)
     await hass.async_block_till_done()
     state = hass.states.get(SENSOR)
-    assert (state.state, state.attributes["request"]) == ("0", None)
+    assert (state.state, state.attributes["request"]) == ("1", None)
+    # A stop only switches things off: they may ask for one.
+    stop = await _call(hass, staff, "dosing_request", action="stop")
+    assert stop["error"] is None and stop["request"]["by"] == "Staff phone"
+    await hass.async_block_till_done()
+    assert hass.states.get(SENSOR).attributes["request"] == stop["request"]
+
+
+async def test_the_setup_is_never_saved_under_a_dose_or_batch_the_controller_reports(
+    hass, hass_admin_user
+):
+    await _install(hass)
+    _devices(hass)
+    await _call(
+        hass, hass_admin_user, "dosing_save", expected_revision=0, pumps=[PUMP], batch={}
+    )
+    for state in ("dosing", "batch"):
+        hass.states.async_set("sensor.crop_steering_dosing", state, {"handled": None})
+        busy = await _call(
+            hass, hass_admin_user, "dosing_save", expected_revision=1, pumps=[], batch={}
+        )
+        assert busy["error"] == "busy" and busy["config"]["revision"] == 1
+    hass.states.async_set("sensor.crop_steering_dosing", "idle", {"handled": None})
+    saved = await _call(
+        hass, hass_admin_user, "dosing_save", expected_revision=1, pumps=[], batch={}
+    )
+    assert saved["error"] is None and saved["config"]["revision"] == 2
 
 
 async def test_a_saved_setup_and_its_request_survive_a_reload(hass, hass_admin_user):

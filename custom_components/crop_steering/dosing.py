@@ -241,6 +241,21 @@ def _batch(raw, pumps: dict, exists) -> dict:
     )
     if fill_valve and not full_entity:
         raise DosingError("a fill valve needs the entity that says the tank is full")
+    mix_power_sensor = _entity(
+        raw.get("mix_power_sensor"),
+        ("sensor",),
+        "mix pump power sensor",
+        exists,
+        optional=True,
+    )
+    mix_min_w = _number(
+        raw.get("mix_min_w"), 0, 100000, "mix pump minimum power (W)", 0
+    )
+    if mix_min_w > 0 and not mix_power_sensor:
+        # Without it the controller could not check the power, and would mix unchecked.
+        raise DosingError(
+            "a mix pump minimum power needs the mix pump power sensor that reads it"
+        )
     return {
         "fill_valve": fill_valve,
         "full_entity": full_entity,
@@ -254,16 +269,8 @@ def _batch(raw, pumps: dict, exists) -> dict:
         "mix_valves": _entities(
             raw.get("mix_valves"), ("switch",), "mix valves", MAX_MIX_VALVES, exists
         ),
-        "mix_power_sensor": _entity(
-            raw.get("mix_power_sensor"),
-            ("sensor",),
-            "mix pump power sensor",
-            exists,
-            optional=True,
-        ),
-        "mix_min_w": _number(
-            raw.get("mix_min_w"), 0, 100000, "mix pump minimum power (W)", 0
-        ),
+        "mix_power_sensor": mix_power_sensor,
+        "mix_min_w": mix_min_w,
         "premix_min": _number(raw.get("premix_min"), 0, 30, "premix (min)", 2),
         "postmix_min": _number(raw.get("postmix_min"), 0, 60, "postmix (min)", 5),
         "close_entities": _entities(
