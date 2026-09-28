@@ -13,11 +13,22 @@ import {
 } from "@/components/ui/dialog";
 import { Empty, Heading, number, type Page } from "@/components/dashboard";
 import {
+  dosingConfigId,
+  dosingStatusId,
+  pumpDraw,
+  readConfig,
+  readStatus,
+  recipeRows,
+  stockLeft,
+  type StockDraw,
+} from "@/lib/dosing";
+import {
   batchesLeft,
   draftErrors,
   nextToRunOut,
   stockShare,
   stockTone,
+  type StockBatch,
   type StockDocument,
   type StockTank,
   type StockTankDraft,
@@ -35,6 +46,17 @@ const when = (iso: string | null) =>
         minute: "2-digit",
       })
     : "Never";
+const SOURCES: Record<StockBatch["source"], string> = {
+  fill: "Tank fill",
+  manual: "By hand",
+  dose: "Dose",
+  batch: "Batch",
+};
+/** A tank's dosing pump, and what it draws each batch or dose. */
+interface Link {
+  pump: string;
+  draw: StockDraw | null;
+}
 const blank = (): StockTankDraft => ({
   name: "",
   capacity_l: 20,
@@ -79,12 +101,18 @@ function Gauge({ tank }: { tank: StockTank }) {
 function TankCard({
   tank,
   dose,
+  link,
+  draws,
   busy,
   onRefill,
   onLevel,
 }: {
   tank: StockTank;
   dose: number | undefined;
+  /** The dosing pump that draws it, or null: then each batch takes its dose. */
+  link: Link | null;
+  /** Its recent draws by what its pump dosed, newest first. */
+  draws: StockBatch[];
   busy: boolean;
   onRefill: () => void;
   onLevel: (level: number) => Promise<boolean>;
@@ -92,7 +120,9 @@ function TankCard({
   const [setting, setSetting] = useState(false);
   const [level, setLevel] = useState(String(tank.level_l));
   const tone = stockTone(tank);
-  const left = batchesLeft(tank, dose);
+  // A linked tank lasts as many batches as its pump's recipe amount allows, or doses at its last.
+  const linked = link ? stockLeft(tank.level_l, link.draw) : null;
+  const left = link ? (linked?.count ?? null) : batchesLeft(tank, dose);
   const inputId = useId();
   const value = Number(level);
   const valid = level.trim() !== "" && value >= 0 && value <= tank.capacity_l;
@@ -119,16 +149,28 @@ function TankCard({
               <span className="unit"> of {number(tank.capacity_l, 2)} L</span>
             </dd>
           </div>
+          {link ? (
+            <div data-stock-drawn>
+              <dt>Drawn by</dt>
+              <dd>
+                {link.pump}
+                <span className="unit"> as it doses</span>
+              </dd>
+            </div>
+          ) : (
+            <div>
+              <dt>Per batch</dt>
+              <dd>
+                {number(dose ?? tank.dose_ml, 0)}
+                <span className="unit"> mL</span>
+              </dd>
+              {tank.dose_entity && (
+                <small title="Read at each batch">from {tank.dose_entity}</small>
+              )}
+            </div>
+          )}
           <div>
-            <dt>Per batch</dt>
-            <dd>
-              {number(dose ?? tank.dose_ml, 0)}
-              <span className="unit"> mL</span>
-            </dd>
-            {tank.dose_entity && <small title="Read at each batch">from {tank.dose_entity}</small>}
-          </div>
-          <div>
-            <dt>Batches left</dt>
+            <dt>{linked?.per === "dose" ? "Doses left" : "Batches left"}</dt>
             <dd>{left === null ? "—" : `about ${left}`}</dd>
           </div>
           <div>
@@ -140,6 +182,27 @@ function TankCard({
           </div>
         </dl>
       </div>
+      {link && (
+        <div className="stock-draws" data-stock-draws={tank.id}>
+          <h3>Recent draws</h3>
+          {draws.length ? (
+            <ul>
+              {draws.slice(0, 4).map((entry, index) => (
+                <li key={`${entry.at}-${index}`}>
+                  <span>{when(entry.at)}</span>
+                  <span>{SOURCES[entry.source]}</span>
+                  <span className="stock-draw-ml">
+                    {number(entry.draw_ml[tank.id], 1)}
+                    <span className="unit"> mL</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Nothing drawn yet.</p>
+          )}
+        </div>
+      )}
       {setting ? (
         <form
           className="stock-level-form"
@@ -246,7 +309,8 @@ function Editor({
           <DialogDescription>
             Each batch tank takes its dose from every stock tank. A dose entity, such as a doser's
             dose-volume number, is read at each batch; the fixed dose stands in when it reads
-            nothing.
+            nothing. A tank linked to a dosing pump (in Dosing setup) is drawn by what the pump
+            doses, not by the tank's fills.
           </DialogDescription>
         </DialogHeader>
         <datalist id={`${listId}-entities`}>
@@ -371,6 +435,28 @@ export function StockTanks({
         : [blank()],
     );
   const recordBatch = () => (doc?.fill_entity ? setConfirmBatch(true) : act("stock_record_batch"));
+  // The tanks the room's dosing pumps are linked to, from its dosing setup: each is drawn by what
+  // its pump doses, and lasts as many batches as the pump's recipe amount allows.
+  const { states } = controller;
+  const prefix = controller.room.room.prefix;
+  const dosing = readConfig(states[dosingConfigId(prefix)]);
+  const status = readStatus(states[dosingStatusId(prefix)]);
+  const rows = dosing ? recipeRows(dosing, states) : [];
+  const links = new Map<string, Link>();
+  for (const pump of dosing?.pumps ?? [])
+    if (pump.stock_tank)
+      links.set(pump.stock_tank, {
+        pump: pump.name,
+        draw: pumpDraw(pump.id, rows, status?.pumps[pump.id]?.last ?? null),
+      });
+  // A linked tank runs out by batches only while its pump is in the recipe.
+  const doses = {
+    ...doc?.doses,
+    ...Object.fromEntries(
+      [...links].map(([id, link]) => [id, link.draw?.per === "batch" ? link.draw.ml : 0]),
+    ),
+  };
+  const next = doc ? nextToRunOut(doc.tanks, doses) : null;
   return (
     <>
       <Heading
@@ -398,11 +484,10 @@ export function StockTanks({
           {doc.error}
         </p>
       )}
-      {doc && nextToRunOut(doc.tanks, doc.doses) && (
+      {next && (
         <p className="stock-next" data-stock-next>
-          Next to run out: <strong>{nextToRunOut(doc.tanks, doc.doses)!.tank.name}</strong>, about{" "}
-          {nextToRunOut(doc.tanks, doc.doses)!.batches}{" "}
-          {nextToRunOut(doc.tanks, doc.doses)!.batches === 1 ? "batch" : "batches"} left.
+          Next to run out: <strong>{next.tank.name}</strong>, about {next.batches}{" "}
+          {next.batches === 1 ? "batch" : "batches"} left.
         </p>
       )}
       {doc && (
@@ -410,7 +495,8 @@ export function StockTanks({
           {doc.fill_entity ? (
             <>
               Batches are counted from <code>{doc.fill_entity}</code>: each newer fill time takes
-              one batch's dose from every tank. Last batch {when(doc.last_batch)}.
+              one batch's dose from every tank
+              {links.size ? " not linked to a dosing pump" : ""}. Last batch {when(doc.last_batch)}.
             </>
           ) : (
             <>
@@ -446,6 +532,12 @@ export function StockTanks({
               key={tank.id}
               tank={tank}
               dose={doc.doses[tank.id]}
+              link={links.get(tank.id) ?? null}
+              draws={doc.history.filter(
+                (entry) =>
+                  (entry.source === "dose" || entry.source === "batch") &&
+                  entry.draw_ml[tank.id] !== undefined,
+              )}
               busy={busy}
               onRefill={() => void act("stock_refill", { id: tank.id })}
               onLevel={(level) => act("stock_refill", { id: tank.id, level_l: level })}
@@ -455,29 +547,29 @@ export function StockTanks({
       )}
       {doc && !!doc.history.length && (
         <details className="stock-history-more">
-          <summary>Recent batches ({doc.history.length})</summary>
+          <summary>Recent draws ({doc.history.length})</summary>
           <section className="panel stock-history">
             <div className="panel-heading">
-              <h2>Recent batches</h2>
+              <h2>Recent draws</h2>
             </div>
-            <div className="table-scroll" tabIndex={0} aria-label="Recent batches">
+            <div className="table-scroll" tabIndex={0} aria-label="Recent draws">
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>When</th>
-                    <th>Counted from</th>
+                    <th>From</th>
                     {doc.tanks.map((tank) => (
                       <th key={tank.id}>{tank.name}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {doc.history.slice(0, 10).map((batch) => (
-                    <tr key={batch.at + batch.source}>
+                  {doc.history.slice(0, 10).map((batch, index) => (
+                    <tr key={`${batch.at}-${index}`}>
                       <td>{when(batch.at)}</td>
                       <td>
                         <span className="pill" data-tone="unknown">
-                          {batch.source === "fill" ? "Tank fill" : "By hand"}
+                          {SOURCES[batch.source] ?? batch.source}
                         </span>
                       </td>
                       {doc.tanks.map((tank) => (

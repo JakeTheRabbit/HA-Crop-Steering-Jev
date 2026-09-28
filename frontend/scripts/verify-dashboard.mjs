@@ -1032,35 +1032,44 @@ try {
     async () => {
       await go("equipment/stock");
       const card = (id) => page.locator(`[data-stock-tank="${id}"]`);
-      await expectVisible(card("cal_mag"));
+      await expectVisible(card("bloom"));
       assert.equal(await page.locator("[data-stock-tank]").count(), 4);
       assert.equal(
         await page.locator("[data-stock-next]").innerText(),
-        "Next to run out: Cal-Mag, about 12 batches left.",
+        "Next to run out: Bloom, about 3 batches left.",
       );
       await page.screenshot({ path: img("stock-tanks.png") });
-      // Cal-Mag starts within half again of its low mark: amber, "Getting low".
-      assert.equal(await card("cal_mag").locator(".pill").textContent(), "Getting low");
-      await card("cal_mag").getByRole("button", { name: "Refilled" }).click();
-      await expectVisible(card("cal_mag").getByText("OK", { exact: true }));
-      assert.match(await card("cal_mag").locator("dd").first().textContent(), /^10 of 10 L$/);
+      // Each tank is linked to its dosing pump: drawn by what the pump doses, its draws listed.
+      assert.equal(
+        await card("bloom").locator("[data-stock-drawn]").innerText(),
+        "Drawn by\nBloom as it doses",
+      );
+      assert.match(
+        await card("balance").locator("[data-stock-draws] li").first().innerText(),
+        /Dose\s+25 mL$/,
+      );
+      // Bloom starts within half again of its low mark: amber, "Getting low".
+      assert.equal(await card("bloom").locator(".pill").textContent(), "Getting low");
+      await card("bloom").getByRole("button", { name: "Refilled" }).click();
+      await expectVisible(card("bloom").getByText("OK", { exact: true }));
+      assert.match(await card("bloom").locator("dd").first().textContent(), /^20 of 20 L$/);
 
-      await card("ph_down").getByRole("button", { name: "Set level" }).click();
-      await card("ph_down").getByLabel("Level read off the tank (L)").fill("0.8");
-      await card("ph_down").getByRole("button", { name: "Save level" }).click();
-      await expectVisible(card("ph_down").getByText("Low", { exact: true }));
+      await card("cleanse").getByRole("button", { name: "Set level" }).click();
+      await card("cleanse").getByLabel("Level read off the tank (L)").fill("0.8");
+      await card("cleanse").getByRole("button", { name: "Save level" }).click();
+      await expectVisible(card("cleanse").getByText("Low", { exact: true }));
 
       await page.getByRole("button", { name: "Record a batch" }).click();
       const confirm = page.getByRole("dialog");
       if (await confirm.count())
         await confirm.getByRole("button", { name: "Record the batch" }).click();
-      // Recent batches start collapsed.
+      // Recent draws start collapsed.
       const history = page.locator("details.stock-history-more");
       await expectVisible(history.locator("summary"));
       assert.equal(await history.getAttribute("open"), null);
       await history.locator("summary").click();
-      await expectVisible(page.getByRole("heading", { name: "Recent batches" }));
-      assert.match(await card("cal_mag").locator("dd").first().textContent(), /^9\.75 of 10 L$/);
+      await expectVisible(history.getByRole("heading", { name: "Recent draws" }));
+      assert.match(await card("bloom").locator("dd").first().textContent(), /^18\.2 of 20 L$/);
 
       await page.getByRole("button", { name: "Edit stock tanks" }).click();
       const editor = page.getByRole("dialog");
@@ -1069,6 +1078,9 @@ try {
       await names.last().fill("Silica");
       await editor.getByRole("button", { name: "Save stock tanks" }).click();
       await expectVisible(card("silica"));
+      // No pump draws Silica: each batch takes its dose.
+      assert.equal(await card("silica").locator("[data-stock-drawn]").count(), 0);
+      await expectVisible(card("silica").getByText("Per batch"));
       await axe("stock tanks after edits");
       await noOverflow();
     },
@@ -1078,6 +1090,8 @@ try {
     async () => {
       // Flower 2's four pumps and Flower 1's six, one of them not calibrated yet.
       const cards = page.locator("[data-dosing-pump]");
+      const strip = page.locator("[data-stock-strip]");
+      const stockOf = (id) => page.locator(`[data-dosing-pump="${id}"] [data-pump-stock]`);
       await go("equipment/dosing");
       await expectVisible(cards.first());
       assert.deepEqual(await cards.locator(".dosing-pump-select").allInnerTexts(), [
@@ -1096,6 +1110,19 @@ try {
       assert.deepEqual(await pillTones('[data-dosing-pump="fade"] .pill'), [
         ["Not calibrated", "warn"],
       ]);
+      assert.deepEqual(await strip.locator("[data-stock-gauge] strong").allInnerTexts(), [
+        "Grow",
+        "Cleanse",
+        "Balance",
+        "Fade",
+        "Core",
+        "Bloom",
+      ]);
+      // Core, passed by in the recipe and dosed by hand: its tank lasts doses at its last one.
+      assert.equal(
+        await stockOf("core").locator(".dosing-stock-left").innerText(),
+        "about 287 doses left",
+      );
       // Flower 1's tank is filled by hand: its batch passes the fill by.
       assert.equal(
         await page.locator('.dosing-steps [data-step="fill"]').getAttribute("data-state"),
@@ -1105,8 +1132,27 @@ try {
         await go("equipment/dosing");
         await expectVisible(cards.first());
       });
-      // A dose of Bloom, through its review: its card doses, then the history has it.
+      // A fresh Flower 2: each card shows the stock tank its pump is linked to, Bloom's drawn to
+      // scale with its litres and the batches its recipe amount leaves, and the stock strip every
+      // linked tank in pump order.
       await go("equipment/dosing");
+      await expectVisible(cards.first());
+      assert.equal(await stockOf("bloom").getAttribute("data-pump-stock"), "bloom");
+      assert.equal(
+        await stockOf("bloom").locator(".dosing-stock-litres").innerText(),
+        "5.4 L of 20 L",
+      );
+      assert.equal(
+        await stockOf("bloom").locator(".dosing-stock-left").innerText(),
+        "about 3 batches left",
+      );
+      assert.deepEqual(await strip.locator("[data-stock-gauge] strong").allInnerTexts(), [
+        "Balance",
+        "Bloom",
+        "Core",
+        "Cleanse",
+      ]);
+      // A dose of Bloom, through its review: its card doses, then the history has it.
       await page.locator('[data-dosing-pump="bloom"] .dosing-pump-select').click();
       await page.getByLabel("Amount (mL)").fill("60");
       assert.match(
@@ -1137,6 +1183,14 @@ try {
       assert.equal(
         await page.locator('[data-dosing-pump="bloom"]').getAttribute("data-state"),
         "idle",
+      );
+      // What it dosed came off Bloom's stock tank: 5.4 L less 60 mL, on its card and in the strip.
+      await expectVisible(
+        stockOf("bloom").locator(".dosing-stock-litres", { hasText: "5.3 L of 20 L" }),
+      );
+      assert.equal(
+        await strip.locator('[data-stock-gauge="bloom"] .dosing-stock-litres').innerText(),
+        "5.3 L of 20 L",
       );
       // A batch, through its review: its steps walk, and stop ends it where it is.
       await page.getByRole("button", { name: "Make a batch", exact: true }).click();
@@ -1324,6 +1378,9 @@ try {
       });
       const bloom = live.locator('[data-dosing-pump="bloom"]');
       await expectVisible(bloom);
+      // No pump is linked to a stock tank here: the cards say so, and there is no stock strip.
+      assert.equal(await bloom.locator("[data-pump-stock]").innerText(), "No stock tank linked");
+      assert.equal(await live.locator("[data-stock-strip]").count(), 0);
       // A pump whose dosing sensor is unavailable: greyed out, a question mark on its head.
       const grow = live.locator('[data-dosing-pump="grow"]');
       assert.equal(await grow.getAttribute("data-state"), "unavailable");
@@ -1367,6 +1424,53 @@ try {
       await expectVisible(live.getByRole("heading", { name: "No dosing pumps in Flower 1" }));
       await expectVisible(live.getByRole("button", { name: "Set up dosing", exact: true }));
       await ha.close();
+    },
+  );
+  await check(
+    "dosing: each room's stock strip, light and dark, on a phone, and its way to Stock tanks",
+    async () => {
+      const strip = page.locator("[data-stock-strip]");
+      const gauges = strip.locator("[data-stock-gauge]");
+      for (const [room, count] of [
+        ["f2", 4],
+        ["f1", 6],
+      ]) {
+        await go("equipment/dosing", room);
+        await expectVisible(strip);
+        assert.equal(await gauges.count(), count, `${room}: a gauge per linked tank`);
+        // Each labelled with its level, its litres and what it has left, its low mark drawn.
+        for (const text of await gauges.allInnerTexts())
+          assert.match(
+            text,
+            /\n\d+%\n[\d.]+ L of [\d.]+ L(\n(about \d+|less than one) (batch|batches|dose|doses) left)?/,
+          );
+        assert.equal(await gauges.locator(".sb-low").count(), count);
+      }
+      await inBothThemes("dosing, Flower 1", async () => {
+        await go("equipment/dosing", "f1");
+        await expectVisible(strip);
+      });
+      await go("equipment/dosing");
+      await expectVisible(strip);
+      await page.screenshot({ path: path.join(out, "dashboard-dosing-light.png"), fullPage: true });
+      await page.evaluate(() => localStorage.setItem("irrigation-theme", "dark"));
+      await page.reload({ waitUntil: "networkidle" });
+      await expectVisible(strip);
+      await page.screenshot({ path: path.join(out, "dashboard-dosing-dark.png"), fullPage: true });
+      await page.evaluate(() => localStorage.setItem("irrigation-theme", "light"));
+      // A phone: both rooms fit, the strip two tanks to a row.
+      await page.setViewportSize({ width: 390, height: 844 });
+      for (const room of ["f1", "f2"]) {
+        await go("equipment/dosing", room);
+        await expectVisible(strip);
+        await noOverflow();
+      }
+      await axe("dosing on a phone");
+      await page.screenshot({ path: path.join(out, "mobile-dosing.png"), fullPage: true });
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await strip.getByRole("button", { name: /^Stock tanks/ }).click();
+      await expectVisible(page.getByRole("heading", { name: "Stock tanks", exact: true }));
+      assert.match(page.url(), /#\/equipment\/stock$/);
     },
   );
   await check("setup: every mapping says whether it is mapped; the checks are pills", async () => {

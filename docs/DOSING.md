@@ -271,16 +271,24 @@ For the selected room:
 
 - **The tank**: level, full, EC, pH and temperature from the room's tank mapping, and the batch
   state in one line.
+- **Stock**: every stock tank a pump is linked to (`stock_tank`), in pump order: its level, its
+  litres, about how many batches or doses it has left, its low mark drawn, and a way to
+  Equipment › Stock tanks.
 - **Pumps**: a card per pump with a peristaltic-pump drawing (the rotor turns while it doses;
   still under reduced motion), its name, a status pill (Idle, Dosing, Unavailable, Not calibrated),
-  its flow in mL/s, its last dose (mL, when, result), its stock tank's level when a stock tank has
-  the same name, and a progress bar during a dose (elapsed against expected).
+  its flow in mL/s, its last dose (mL, when, result), and a progress bar during a dose (elapsed
+  against expected). Its stock tank, found by the pump's `stock_tank` id in
+  `sensor.crop_steering_<prefix>stock_low` (never by name), is drawn as a bottle to scale with its
+  level, "x.x L of y L" and about how many batches it has left at the pump's recipe amount (or
+  doses at its last dose, when the recipe passes the pump by); amber at or under the tank's low
+  mark, red at or under half of it. A pump without one says "No stock tank linked".
 - **Dose a pump**: the pump, the mL (up to its `max_ml`), the expected seconds, a review, then the
   request; while it runs, the target, the elapsed time, the estimated mL so far, and **Stop**.
 - **Make a batch**: the steps with their state, the recipe (mL per pump, the total, the expected
   time), **Make a batch** through a review, and **Stop** while it runs.
 - **History**: the last doses and batches.
-- **Dosing setup**: the pumps and the batch hardware, from `dosing_get` candidates, saved with
+- **Dosing setup**: the pumps and the batch hardware, from `dosing_get` candidates, and each
+  pump's stock tank from `stock_get` (a tank linked to another pump is not offered), saved with
   `dosing_save`. Admins only; everyone else sees it read-only.
 
 A room without pumps shows what dosing does and **Set up dosing**.

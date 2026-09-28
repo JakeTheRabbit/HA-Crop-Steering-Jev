@@ -2,8 +2,10 @@ import { growDay, type TimelineRequest, type TimelineRow, type TimelineRows } fr
 import type { EntityState, LogEvent, Series, States } from "./types";
 import type { CounterSample, WaterRecordRequest } from "./water-use";
 import { addDays, daysBetween } from "./comparison";
+import { stockSensorId } from "./dosing";
 import { dateForDay, localDate } from "./grow-plan";
 import { numeric } from "./model";
+import { demoStock, stockAttributes, stockLinks } from "./stock-demo";
 
 export function isDemoLocation(location: Pick<Location, "hostname" | "search">): boolean {
   return (
@@ -254,11 +256,18 @@ export function createDemo(now = Date.now()): States {
     // Flower 2 runs Jev; Flower 1 is a room without it.
     if (!index) demoJev(put, prefix, now);
     demoDosing(put, prefix, name, now);
+    // The integration's stock sensor: a tank per pump, each drawn by its pump.
+    const stock = demoStock(`room:${prefix}`, now, states);
+    put(stockSensorId(prefix), stock.low.length, {
+      friendly_name: `${name} stock tanks low`,
+      ...stockAttributes(stock, stockLinks(states, prefix)),
+    });
   }
   return states;
 }
-/** Each demo room's dosing pumps (id, name, calibrated flow in mL/s, the recipe's mL). Flower 1's
- * Fade is new and not calibrated yet; the recipe passes it by. */
+/** Each demo room's dosing pumps (id, name, calibrated flow in mL/s, the recipe's mL), each linked
+ * to the stock tank of its nutrient (stock-demo.ts). Flower 1's Fade is new and not calibrated yet,
+ * and its Core is dosed by hand: the recipe passes both by. */
 const DEMO_PUMPS: Record<string, [string, string, number, number][]> = {
   "": [
     ["balance", "Balance", 11.06, 300],
@@ -321,6 +330,7 @@ function demoDosing(
       flow_entity: `number.${device}_flow`,
       max_ml: 2000,
       restore_volume: true,
+      stock_tank: id,
     };
   });
   const recipe = list.map(([id, , , ml]) => ({ pump: id, ml, ml_entity: null }));
@@ -376,26 +386,26 @@ function demoDosing(
     request: null,
     updated_at: at(24 * 6),
   });
-  // The last batch, and before it the one earlier (Flower 1 stopped one by hand while it mixed).
+  // The last batch, and before it the one earlier (Flower 1 stopped one by hand while it mixed);
+  // since, a dose by hand in each room.
   const doses = Object.fromEntries(list.flatMap(([id, , , ml]) => (ml > 0 ? [[id, ml]] : [])));
   const lastDose = (ml: number, hoursAgo: number) => ({
     ml,
     at: at(hoursAgo),
     result: "finished",
   });
+  const byHand = prefix
+    ? { pump: "core", ml: 40, hours: 3 }
+    : { pump: "balance", ml: 25, hours: 0.8 };
   const history = [
-    ...(prefix
-      ? []
-      : [
-          {
-            kind: "dose",
-            at: at(0.8),
-            ended_at: at(0.8 - 3 / 3600),
-            result: "finished",
-            doses: { balance: 25 },
-            by: "Demo",
-          },
-        ]),
+    {
+      kind: "dose",
+      at: at(byHand.hours),
+      ended_at: at(byHand.hours - 3 / 3600),
+      result: "finished",
+      doses: { [byHand.pump]: byHand.ml },
+      by: "Demo",
+    },
     {
       kind: "batch",
       at: at(filled + 0.25),
@@ -425,8 +435,8 @@ function demoDosing(
           started_at: null,
           expected_s: null,
           last:
-            !prefix && id === "balance"
-              ? lastDose(25, 0.8)
+            id === byHand.pump
+              ? lastDose(byHand.ml, byHand.hours)
               : ml > 0
                 ? lastDose(ml, filled + 0.15 - order * 0.01)
                 : null,
@@ -445,6 +455,7 @@ function demoDosing(
     handled: null,
     handled_result: null,
     history,
+    updated_at: new Date(now - 18_000).toISOString(),
   });
 }
 /** Flower 2's probes, front and back of each zone's row, and the combined sensor's attributes as
@@ -933,7 +944,8 @@ export function demoClock(states: States, now = Date.now()): States {
   }
   return next ?? states;
 }
-/** The demo controller reports in like a running one, so it never reads as stopped. */
+/** The demo controller reports in like a running one, so it never reads as stopped: its heartbeat,
+ * and its dosing report's time, which a real one refreshes at least every 60 s. */
 export function demoBeat(states: States, now = Date.now()): States {
   const stamp = new Date(now).toISOString();
   return Object.fromEntries(
@@ -943,7 +955,13 @@ export function demoBeat(states: States, now = Date.now()): States {
         ? { ...entity, last_updated: stamp, attributes: { ...entity.attributes, last_beat: stamp } }
         : /^sensor\.crop_steering_.*waiting_for_app$/.test(id)
           ? { ...entity, last_updated: stamp, attributes: rebased(entity.attributes, now) }
-          : entity,
+          : /^sensor\.crop_steering_.*dosing$/.test(id)
+            ? {
+                ...entity,
+                last_updated: stamp,
+                attributes: { ...entity.attributes, updated_at: stamp },
+              }
+            : entity,
     ]),
   );
 }

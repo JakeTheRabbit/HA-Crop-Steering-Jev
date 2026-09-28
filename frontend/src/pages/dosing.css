@@ -265,8 +265,77 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.dosing-low {
+/* Its stock tank: the bottle to scale beside the litres left and about how many batches. */
+.dosing-pump-stock {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.dosing-pump-stock .stock-bottle {
+  flex: none;
+  width: 30px;
+  height: 46px;
+}
+.dosing-stock-lines {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dosing-stock-litres {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dosing-stock-left,
+.dosing-stock-name,
+.dosing-stock-none {
+  color: var(--muted-foreground);
+}
+.dosing-stock-state {
+  font-weight: 600;
+}
+[data-level="low"] .dosing-stock-state {
+  color: var(--warning);
+}
+[data-level="very-low"] .dosing-stock-state {
   color: var(--destructive);
+}
+/* The stock strip: every linked tank, in pump order. */
+.dosing-stock-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px 18px;
+  margin: 0;
+  padding: 0 20px 18px;
+  list-style: none;
+}
+/* The names line up along the row; the bottles stand on its foot. */
+.dosing-stock-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.dosing-stock-item .stock-bottle {
+  flex: none;
+  align-self: flex-end;
+  width: 40px;
+  height: 62px;
+}
+.dosing-stock-item strong {
+  font-size: var(--text-sm);
+}
+.dosing-stock-percent {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.2;
 }
 .dosing-reason {
   color: var(--muted-foreground);
@@ -659,6 +728,11 @@
   }
   .dosing-big {
     font-size: 22px;
+  }
+  .dosing-stock-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 0 16px 16px;
   }
   .dosing-tank-batch {
     margin-left: 0;
