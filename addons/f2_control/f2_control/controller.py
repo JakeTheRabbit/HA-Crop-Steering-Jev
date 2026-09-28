@@ -25,11 +25,13 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests
 import auto_setpoints
+import dosing_runner
 import jev_bridge
 import jev_policy
 import setpoint_supervisor
@@ -412,6 +414,11 @@ class Room:
 
 
 class Controller:
+    # Batch-tank dosing (dosing_runner.py, docs/DOSING.md): None until __init__ builds it. A shot starts,
+    # and a batch holds a room, under _shot_lock, so a shot is either seen running or never starts.
+    dosing = None
+    _shot_lock = threading.Lock()
+
     def __init__(self):
         o = load_options()
         # ---- shared (cross-room) config ----
@@ -447,6 +454,21 @@ class Controller:
         # override exists so a test/dev rig can redirect the file BEFORE this constructor's
         # own _load_state()/adoption pass reads and writes it.
         self._state_path = os.environ.get("F2_STATE_PATH") or "/data/state.json"
+        # Dosing runs on its own thread, started by run(). Like Jev, it can never stop the controller
+        # starting, and it only ever acts on an explicit request for a room with dosing set up.
+        try:
+            self.dosing = dosing_runner.DosingRunner(
+                self,
+                get=lambda entity: ha_get(entity),
+                call=lambda domain, service, **data: ha_call(domain, service, **data),
+                publish=lambda entity, state, attributes: ha_set(entity, state, attributes),
+                alert=self._dosing_alert,
+                state_path=os.path.join(os.path.dirname(self._state_path) or ".", "dosing_state.json"),
+                log=log,
+            )
+        except Exception as e:
+            log("dosing: off, it could not start:", e)
+            self.dosing = None
         self._busy = False
         self._shot_room = None  # the room whose shot is in flight (see _execute_shot / _safe_off)
         self._alerted = {}
@@ -1779,7 +1801,8 @@ class Controller:
     def _room_switched_off(self, room):
         """Stand the room down: its standing alerts are about a room that is now deliberately idle."""
         log(f"[{room.slug}] room switched OFF - irrigation and alerts stand down")
-        for key in [k for k in self._alerted if f"_{room.slug}_" in k or k.endswith(f"_{room.slug}")]:
+        # A snapshot: the dosing thread may raise an alert meanwhile (dosing_runner.py).
+        for key in [k for k in list(self._alerted) if f"_{room.slug}_" in k or k.endswith(f"_{room.slug}")]:
             ha_call("persistent_notification", "dismiss", notification_id=f"f2_{key}")
             del self._alerted[key]
 
@@ -1961,6 +1984,9 @@ class Controller:
             return "Room archived in integration setup"
         if not self._room_active(room):
             return "Room off (nothing growing)"
+        making = self._dosing_hold(room)  # every shot, the rescues a plan hold lets through included
+        if making:
+            return making
         planned_hold = strategy_block(getattr(room, "strategy_snapshot", None), zone)
         if planned_hold:
             if getattr(reason, "kind", None) not in PLAN_HOLD_EXEMPT:
@@ -2195,6 +2221,36 @@ class Controller:
                 log("jev triage error", key, e)
         if dom and svc and push:
             ha_call(dom, svc, title=title, message=message)
+
+    def _dosing_alert(self, room, code, title, message):
+        """An alert the dosing runner raised (docs/DOSING.md). Only these codes exist, each written out
+        here so the error-code list sees it; `room` is None for a room no longer set up."""
+        key = f"dosing_{getattr(room, 'slug', 'gone')}_{code[3:]}"
+        if code == "CS-801":
+            self._alert(key, "CS-801", title, message, room=room)
+        elif code == "CS-802":
+            self._alert(key, "CS-802", title, message, room=room)
+        elif code == "CS-803":
+            self._alert(key, "CS-803", title, message, room=room)
+        elif code == "CS-804":
+            self._alert(key, "CS-804", title, message, room=room)
+        elif code == "CS-805":
+            self._alert(key, "CS-805", title, message, room=room)
+        elif code == "CS-806":
+            self._alert(key, "CS-806", title, message, room=room)
+        else:
+            log("dosing alert refused: not in the error-code list", code)
+
+    def _dosing_hold(self, room):
+        """"making a batch" while a batch holds this room's watering, else None."""
+        return self.dosing.holds(room) if self.dosing is not None else None
+
+    def _shot_running(self, slugs):
+        """Whether a shot is in flight in one of these rooms, read under the lock a shot starts under,
+        so a batch that has just held them never misses one starting."""
+        with self._shot_lock:
+            room = getattr(self, "_shot_room", None) if getattr(self, "_busy", False) else None
+        return room is not None and room.slug in slugs
 
     def _jev_alert(self, room, zone, judge, alert):
         """An alert one of Jev's judges raised (docs/JEV.md). Only these codes exist: a judge can never
@@ -2759,8 +2815,14 @@ class Controller:
         # substrate or dripper configuration mid-shot must not rewrite its litres.
         nominal_l = (flow_lps * duration_s if flow_lps is not None
                      else size_pct / 100.0 * self._substrate_l(room, zone))
-        self._busy = True
-        self._shot_room = room  # the room whose shot is in flight right now (see _safe_off)
+        with self._shot_lock:  # a batch holds rooms under this lock (see _shot_running)
+            making = self._dosing_hold(room)
+            if not making:
+                self._busy = True
+                self._shot_room = room  # the room whose shot is in flight right now (see _safe_off)
+        if making:
+            log(f"[{room.slug}] Z{zone} shot held: {making}")
+            return
         hw = room.hw
         valve = hw["valves"].get(zone)
         pump, mainline = hw.get("pump"), hw.get("mainline")
@@ -2968,10 +3030,35 @@ class Controller:
     def _safe_exit(self, *_):
         log("SIGTERM — closing what is in flight, saving state, exiting")
         try:
+            self._exit_dosing()
             self._safe_off()
             self._save_state()
         finally:
             sys.exit(0)
+
+    def _exit_dosing(self):
+        """Stopping: switch off what a dose or batch has running. Its record stays in
+        dosing_state.json, so the next start reads it back OFF and raises CS-803."""
+        try:
+            if self.dosing is not None:
+                self.dosing.exit()
+        except Exception as e:
+            log("dosing: could not switch off on the way out:", e)
+
+    def _start_dosing(self):
+        """Before the first loop: settle what a dose or batch left running before this start
+        (docs/DOSING.md, After a restart), then start dosing's own thread, which tries the recovery
+        again until Home Assistant takes it. Neither can stop the controller starting."""
+        if self.dosing is None:
+            return
+        try:
+            self.dosing.recover()
+        except Exception as e:
+            log("dosing: start-up recovery failed; the dosing thread tries again:", e)
+        try:
+            self.dosing.start()
+        except Exception as e:
+            log("dosing: off, it could not start:", e)
 
     @staticmethod
     def _step_ec_offset(cur, ec_smooth, ec_target_p2, base):
@@ -3927,6 +4014,7 @@ class Controller:
         )
         log("token present:", bool(TOKEN), "| base:", BASE)
         self._log_timezone()
+        self._start_dosing()
         while True:
             try:
                 self.loop_once(datetime.now())

@@ -26,6 +26,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | CS-5xx | **Checks across zones**: Advice from comparing a room's zones. |
 | CS-6xx | **Repairs cards**: Raised by the integration, under Settings → Repairs. |
 | CS-7xx | **Jev**: Jev's judgements about a zone: advice, and a probe it set aside (docs/JEV.md). |
+| CS-8xx | **Dosing**: Batch-tank dosing: a dose or a batch that did not end as it should (docs/DOSING.md). |
 
 ## All codes
 
@@ -71,6 +72,12 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-703](#cs-703) | Overnight low reading looks like a probe fault | Warning | Notification |
 | [CS-704](#cs-704) | Jev set this zone's probe aside | Warning | Notification |
 | [CS-705](#cs-705) | The zone is off the stage's arc | Information | Notification |
+| [CS-801](#cs-801) | A dosing pump ran past its time and was switched off | Critical | Notification |
+| [CS-802](#cs-802) | A dose could not be confirmed | Warning | Notification |
+| [CS-803](#cs-803) | A dose or batch was interrupted by a restart | Warning | Notification |
+| [CS-804](#cs-804) | The batch tank did not fill in time | Warning | Notification |
+| [CS-805](#cs-805) | The mixing pump did not start | Warning | Notification |
+| [CS-806](#cs-806) | A batch was stopped | Warning | Notification |
 
 ## Sensors (CS-1xx)
 
@@ -921,3 +928,131 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 
 - Compare the zone's settings with the stage (docs/JEV.md, the owner's stage arc), and change them if the stage has moved on.
 - Check jev_flower_start points at the right flip date.
+
+## Dosing (CS-8xx)
+
+<a id="cs-801"></a>
+
+### CS-801: A dosing pump ran past its time and was switched off
+
+*Critical · Notification*
+
+**What it means.** A dose was still running at its deadline: 1.25 times the time its volume takes at the pump's calibrated flow, plus 20 seconds. The controller switched the pump's power off, read it back (sending the off again once if it did not read off) and ended the dose as "ran past its time". The tank may hold more nutrient than was asked for.
+
+**Watering meanwhile.** A single dose holds no watering, so watering carries on. In a batch, the batch stops too (CS-806), and the rooms it held water again once its hardware reads off.
+
+**Likely causes**
+
+- The pump's firmware did not stop its motor at the volume it was given.
+- The pump's flow calibration (mL/s) is well above what it really pumps, so the dose was expected sooner.
+- The pump's dosing sensor stayed on dosing although the motor had stopped.
+
+**Suggested fixes**
+
+- Check the batch tank's EC before it is used: it may hold more than was asked for.
+- Check the pump's firmware and dosing sensor, and recalibrate its flow.
+- If the power switch feeds the pump's board, switch it back on once it is fixed: the controller never switches a dosing pump on.
+
+<a id="cs-802"></a>
+
+### CS-802: A dose could not be confirmed
+
+*Warning · Notification*
+
+**What it means.** The controller set the pump's volume and pressed its start, but the pump's dosing sensor never read dosing within the dose's expected time plus 15 seconds, and did not change either (a dose too short to be caught between two reads still counts when its state changed). Whether the pump dosed is not known.
+
+**Watering meanwhile.** A single dose holds no watering, so watering carries on. In a batch, the batch stops too (CS-806), and the rooms it held water again once its hardware reads off.
+
+**Likely causes**
+
+- The pump is offline, or its start button or script did nothing.
+- The dosing sensor shows dosing in a way the setup does not recognise: a text sensor whose dosing state does not start with the dosing prefix, for instance.
+- The pump's firmware refused the volume it was given.
+
+**Suggested fixes**
+
+- Check the pump is online and what its dosing sensor shows during a dose, and set the dosing prefix to match.
+- Check the batch tank's EC before dosing again: the dose may or may not have gone in.
+
+<a id="cs-803"></a>
+
+### CS-803: A dose or batch was interrupted by a restart
+
+*Warning · Notification*
+
+**What it means.** The controller app stopped (an update, a restart, a crash or a power cut) while a dose or a batch was running. At its next start it switched off every dosing pump's power, the fill valve, the mix pump and the mix valves of that room, and turned the hold off. It never resumes a dose or a batch.
+
+**Watering meanwhile.** Carries on as normal; the dosing hardware was switched off.
+
+**Likely causes**
+
+- The controller app was updated, restarted or stopped during a dose or a batch.
+- Home Assistant or the host restarted.
+
+**Suggested fixes**
+
+- Check the batch tank: what was dosed before the stop is in it, and the dosing history lists it. Dose the rest by hand or make a fresh batch.
+- Update or restart the controller app between batches.
+
+<a id="cs-804"></a>
+
+### CS-804: The batch tank did not fill in time
+
+*Warning · Notification*
+
+**What it means.** A batch opened the fill valve, and the tank's full entity did not read full within the fill timeout. The controller closed the fill valve and read it back, and the batch stops (CS-806).
+
+**Watering meanwhile.** The rooms the batch held water again; the fill valve was closed.
+
+**Likely causes**
+
+- The water supply is off or slow, or the fill valve did not open.
+- The full sensor is stuck or offline, or reports a state other than the one set as full.
+- The fill timeout is shorter than a fill takes.
+
+**Suggested fixes**
+
+- Check the water supply, the fill valve, and what the full sensor reads when the tank is full.
+- Raise the fill timeout in the dosing setup if a fill takes longer.
+
+<a id="cs-805"></a>
+
+### CS-805: The mixing pump did not start
+
+*Warning · Notification*
+
+**What it means.** A batch opened the mix valves and switched the mix pump on, but the pump's power sensor did not read the minimum power within 20 seconds. The batch stops (CS-806).
+
+**Watering meanwhile.** The rooms the batch held water again, once its hardware reads off.
+
+**Likely causes**
+
+- The mix pump did not start, or its plug did not switch.
+- The power sensor is offline or slow to report.
+- The minimum power is set above what the pump draws.
+
+**Suggested fixes**
+
+- Check the mix pump, its plug, and what the power sensor reads while it runs.
+- Set the minimum power below what the pump draws, or to 0 to skip the check.
+
+<a id="cs-806"></a>
+
+### CS-806: A batch was stopped
+
+*Warning · Notification*
+
+**What it means.** A batch ended before it finished: someone stopped it, a step failed (CS-801, CS-802, CS-804 and CS-805 come first and say which), a shot in a room it holds was still running after 10 minutes, a switch did not read off, or it ran past its watchdog (the fill timeout, premix, postmix and every dose's deadline, plus 10 minutes). The notification names the step, the reason and what was dosed. Every dosing pump's power, the fill valve, the mix pump and the mix valves were switched off and the hold released; the tank's fill time is not stamped.
+
+**Watering meanwhile.** The rooms the batch held water again once its hardware reads off; until then they stay held.
+
+**Likely causes**
+
+- Someone stopped the batch.
+- A fill, mix or dose that failed.
+- A switch of the batch, or of a room it holds, that did not read off.
+
+**Suggested fixes**
+
+- Check the batch tank before making another batch: the notification lists what was dosed before it stopped.
+- Fix the cause it names, then make the batch again.
