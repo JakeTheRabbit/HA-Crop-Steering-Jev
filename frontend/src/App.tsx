@@ -374,7 +374,12 @@ export default function App() {
               />
             )}
             {page === "equipment/dosing" && (
-              <Dosing key={pageKey} controller={controller} onDirtyChange={setWorkspaceDirty} />
+              <Dosing
+                key={pageKey}
+                controller={controller}
+                navigate={navigate}
+                onDirtyChange={setWorkspaceDirty}
+              />
             )}
             {page === "equipment/setup" && (
               <Setup key={pageKey} controller={controller} onDirtyChange={setWorkspaceDirty} />

@@ -19,8 +19,15 @@ import {
 } from "./dosing";
 import { numeric } from "./model";
 import type { OperatorAction } from "./operator-types";
+import type { StockDocument } from "./stock";
 import type { EntityState, States } from "./types";
 import { createUuid } from "./uuid";
+
+/** The integration's stock services, as the demo's controller calls them. */
+export type StockCall = (
+  action: "stock_get" | "stock_draw",
+  data: Record<string, unknown>,
+) => StockDocument;
 
 /** The demo's controller takes a request this long after it is sent (a real one reads every 2 s). */
 const TAKE_MS = 600;
@@ -56,10 +63,16 @@ interface Dose {
   volume: string | null;
   at: string;
   by: string;
+  /** What its stock draw is counted under, and whether it is a dose by hand or a batch's. */
+  key: string;
+  source: "dose" | "batch";
 }
 interface Batch {
+  /** The request's id: each dose's stock draw is counted under it. */
+  request: string;
   step: number;
   ms: number;
+  /** The recipe's doses, read when the batch was taken. */
   queue: { pump: DosingPump; ml: number }[];
   dose: Dose | null;
   doses: Record<string, number>;
@@ -80,6 +93,8 @@ interface Tx {
   /** A new state for an entity the demo has; nothing for one it does not. */
   set: (id: string | null, state: string | number) => void;
   put: (entity: EntityState) => void;
+  /** Runs once this change is published: a call to another service sees it. */
+  later: (run: () => void) => void;
   now: number;
   stamp: string;
 }
@@ -95,13 +110,15 @@ const idle = (flow: number | null): PumpRuntime => ({
 
 /** The integration's dosing services and the controller's dosing thread, in memory, for the demo:
  * a dose runs for its mL over the pump's flow and finishes, a batch walks its steps, Stop ends
- * either. It moves the demo's own pump, valve and float entities as the real ones would move. */
+ * either. It moves the demo's own pump, valve and float entities as the real ones would move, and
+ * draws what each dose dosed from its pump's stock tank (`stock`: the demo's stock services). */
 export class DosingDemo {
   private rooms = new Map<string, Room>();
   private timer: ReturnType<typeof setInterval> | null = null;
   constructor(
     private getStates: () => States,
     private updateStates: (states: States) => void,
+    private stock?: StockCall,
   ) {}
 
   call(
@@ -140,6 +157,7 @@ export class DosingDemo {
           handled: null,
           handled_result: null,
           history: [],
+          updated_at: null,
         },
         take: null,
         dose: null,
@@ -162,13 +180,22 @@ export class DosingDemo {
           ? { device_class: entity.attributes.device_class }
           : {}),
       }));
-    return structuredClone({ schema_version: 1, room_id: roomId, config, candidates, error });
+    // The demo's user is an administrator.
+    return structuredClone({
+      schema_version: 1,
+      room_id: roomId,
+      config,
+      candidates,
+      can_edit: true,
+      error,
+    });
   }
   /** One change to the demo's states, published once. */
   private transact(run: (tx: Tx) => void) {
     const states = { ...this.getStates() };
     const now = Date.now(),
       stamp = new Date(now).toISOString();
+    const later: (() => void)[] = [];
     run({
       now,
       stamp,
@@ -185,8 +212,10 @@ export class DosingDemo {
           last_updated: stamp,
         };
       },
+      later: (task) => later.push(task),
     });
     this.updateStates(states);
+    for (const task of later) task();
   }
 
   private save(
@@ -207,12 +236,17 @@ export class DosingDemo {
       updated_at: new Date().toISOString(),
     })!;
     const states = this.getStates();
+    // A pump may be linked only to one of the room's stock tanks.
+    const tanks = this.stock?.("stock_get", { room_id: roomId }).tanks.map((tank) => tank.id);
     const errors =
       Array.isArray(data.pumps) && saved.pumps.length === data.pumps.length
-        ? setupErrors({
-            pumps: saved.pumps.map((pump) => ({ ...pump, key: pump.id })),
-            batch: saved.batch,
-          })
+        ? setupErrors(
+            {
+              pumps: saved.pumps.map((pump) => ({ ...pump, key: pump.id })),
+              batch: saved.batch,
+            },
+            tanks ?? null,
+          )
         : [
             "Each pump needs an id of lowercase letters, digits and underscores, unlike the others.",
           ];
@@ -336,6 +370,7 @@ export class DosingDemo {
       : Object.values(status.pumps).some((pump) => pump.state === "dosing")
         ? "dosing"
         : "idle";
+    status.updated_at = tx.stamp;
     tx.put({
       entity_id: id,
       state: status.state,
@@ -346,6 +381,7 @@ export class DosingDemo {
         handled: status.handled,
         handled_result: status.handled_result,
         history: structuredClone(status.history),
+        updated_at: status.updated_at,
       },
       last_changed: old?.state === status.state ? old.last_changed : tx.stamp,
       last_updated: tx.stamp,
@@ -378,16 +414,34 @@ export class DosingDemo {
         return refuse(`${pump.name} is not calibrated`);
       if (!(request.ml! > 0 && request.ml! <= pump.max_ml))
         return refuse(`${request.ml} mL is more than ${pump.name} doses`);
-      room.dose = this.startDose(tx, room, pump, request.ml!, DOSE_S, request.by ?? "Demo");
+      room.dose = this.startDose(
+        tx,
+        room,
+        pump,
+        request.ml!,
+        DOSE_S,
+        request.by ?? "Demo",
+        request.id,
+        "dose",
+      );
       status.handled_result = "dosing";
       return;
     }
     if (config.batch.hold_entity && tx.get(config.batch.hold_entity)?.state === "on")
       return refuse("the batch flag is already on");
+    // As the controller does: every amount is read before anything moves, and an amount entity
+    // that reads nothing refuses the batch rather than falling back to the fixed amount.
+    const rows = recipeRows(config, this.getStates());
+    const unread = rows.find((row) => row.unreadable);
+    if (unread) return refuse(`the recipe amount for ${unread.name} can't be read`);
     room.batch = {
+      request: request.id,
       step: -1,
       ms: 0,
-      queue: [],
+      queue: rows.flatMap((row) => {
+        const pump = config.pumps.find((item) => item.id === row.pump);
+        return pump && !row.skipped ? [{ pump, ml: row.ml }] : [];
+      }),
       dose: null,
       doses: {},
       level: null,
@@ -414,6 +468,8 @@ export class DosingDemo {
     ml: number,
     longest: number,
     by: string,
+    key: string,
+    source: Dose["source"],
   ): Dose {
     const flow = numeric(tx.get(pump.flow_entity)) ?? 1;
     const expected = ml / flow;
@@ -441,6 +497,8 @@ export class DosingDemo {
       volume: pump.restore_volume ? volume : null,
       at: tx.stamp,
       by,
+      key,
+      source,
     };
   }
   /** One tick of a dose; true when it has finished. */
@@ -456,6 +514,8 @@ export class DosingDemo {
     ).toISOString();
     return false;
   }
+  /** A dose ends: finished (its mL) or stopped (the time it ran at its flow). What it dosed is drawn
+   * from its pump's stock tank under the dose's key, once the change is published. */
   private endDose(tx: Tx, room: Room, dose: Dose, result: string, ml: number) {
     const { pump } = dose;
     tx.set(pump.dosing_entity, pump.dosing_entity.startsWith("binary_sensor.") ? "off" : "Idle");
@@ -468,6 +528,16 @@ export class DosingDemo {
       expected_s: null,
       last: { ml: round(ml), at: tx.stamp, result },
     };
+    const tank = pump.stock_tank;
+    if (tank && ml > 0)
+      tx.later(() =>
+        this.stock?.("stock_draw", {
+          room_id: `room:${room.prefix}`,
+          key: dose.key,
+          draws: { [tank]: round(ml) },
+          source: dose.source,
+        }),
+      );
   }
   private remember(
     room: Room,
@@ -526,13 +596,7 @@ export class DosingDemo {
     }
     if (step === "premix" && settings.premix_min <= 0) return pass("0 min");
     if (step === "postmix" && settings.postmix_min <= 0) return pass("0 min");
-    if (step === "dose") {
-      batch.queue = recipeRows(config, this.getStates()).flatMap((row) => {
-        const pump = config.pumps.find((item) => item.id === row.pump);
-        return pump && !row.skipped ? [{ pump, ml: row.ml }] : [];
-      });
-      if (!batch.queue.length) return pass("nothing to dose");
-    }
+    if (step === "dose" && !batch.queue.length) return pass("nothing to dose");
     if (step === "hold") tx.set(settings.hold_entity, "on");
     if (step === "close") for (const id of settings.close_entities) tx.set(id, "off");
     if (step === "finish") {
@@ -567,7 +631,16 @@ export class DosingDemo {
           this.stopHardware(tx, room, settings);
           return this.endBatch(tx, room, `stopped: ${line.pump.name} is not calibrated`);
         }
-        batch.dose = this.startDose(tx, room, line.pump, line.ml, BATCH_DOSE_S, batch.by);
+        batch.dose = this.startDose(
+          tx,
+          room,
+          line.pump,
+          line.ml,
+          BATCH_DOSE_S,
+          batch.by,
+          `${batch.request}:${line.pump.id}`,
+          "batch",
+        );
         room.status.batch.pump = line.pump.id;
       }
       return;

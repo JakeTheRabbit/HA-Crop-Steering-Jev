@@ -15,8 +15,11 @@ export interface StockTank {
 }
 export interface StockBatch {
   at: string;
-  source: "fill" | "manual";
+  /** fill: counted from the tank's last fill; manual: recorded by hand; dose and batch: what a
+   * linked dosing pump dosed, drawn by the controller (stock_draw) under its `key`. */
+  source: "fill" | "manual" | "dose" | "batch";
   draw_ml: Record<string, number>;
+  key?: string;
 }
 export interface StockDocument {
   schema_version: 1;

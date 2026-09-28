@@ -1,7 +1,8 @@
 import type { PillTone } from "@/components/mini-visuals";
-import { readHeartbeat } from "./controller-health";
+import { parseControllerTime, readHeartbeat } from "./controller-health";
 import { numeric } from "./model";
 import type { SetupCandidate } from "./operator-types";
+import { batchesLeft } from "./stock";
 import type { EntityState, States } from "./types";
 
 /** Batch-tank dosing (docs/DOSING.md): a room's dosing configuration as the integration publishes
@@ -24,6 +25,9 @@ export interface DosingPump {
   flow_entity: string;
   max_ml: number;
   restore_volume: boolean;
+  /** The id of the room's stock tank this pump doses from, or null: the controller draws each
+   * dose off it (stock_draw). */
+  stock_tank: string | null;
 }
 export interface RecipeLine {
   pump: string;
@@ -69,6 +73,8 @@ export interface DosingDocument {
   room_id: string;
   config: DosingConfig | null;
   candidates: SetupCandidate[];
+  /** The user is an administrator; absent from an integration from before it. */
+  can_edit?: boolean | null;
   error: string | null;
 }
 /** What `dosing_request` answers. */
@@ -132,6 +138,9 @@ export interface DosingStatus {
   handled: string | null;
   handled_result: string | null;
   history: HistoryEntry[];
+  /** The controller's last publish, refreshed at least every 60 s; null from a controller from
+   * before it. */
+  updated_at: string | null;
 }
 
 export const dosingConfigId = (prefix: string) => `sensor.crop_steering_${prefix}dosing_config`;
@@ -174,6 +183,7 @@ function parsePump(value: unknown): DosingPump | null {
     flow_entity: entityId(raw.flow_entity) ?? "",
     max_ml: count(raw.max_ml) ?? 0,
     restore_volume: raw.restore_volume !== false,
+    stock_tank: text(raw.stock_tank)?.trim() ?? null,
   };
 }
 function parseBatch(value: unknown): DosingBatch {
@@ -307,9 +317,13 @@ export function readStatus(entity: EntityState | undefined): DosingStatus | null
     handled: text(raw.handled),
     handled_result: text(raw.handled_result),
     history: history.slice(0, 20),
+    updated_at: text(raw.updated_at),
   };
 }
 
+/** The controller refreshes its dosing report at least every 60 s: three refreshes missed, it has
+ * stopped reporting. */
+export const STATUS_STALE_MS = 180_000;
 /** Whether the controller can act on a dosing request in this room now, and if not, why. */
 export interface Reach {
   live: boolean;
@@ -321,11 +335,19 @@ export function controllerReach(
   status: DosingStatus | null,
   now: number,
 ): Reach {
-  const beat = readHeartbeat(states[`sensor.crop_steering_${prefix}ai_heartbeat`], now);
-  if (beat.health === "missing" || beat.health === "unreadable")
-    return { live: false, reason: "The controller is not running." };
-  if (beat.health === "stale")
-    return { live: false, reason: "The controller has stopped reporting." };
+  // The dosing report's own time says whether it is current; a controller from before it has only
+  // its heartbeat to go by.
+  const updated = parseControllerTime(status?.updated_at);
+  if (updated !== null) {
+    if (now - updated > STATUS_STALE_MS)
+      return { live: false, reason: "The controller has stopped reporting." };
+  } else {
+    const beat = readHeartbeat(states[`sensor.crop_steering_${prefix}ai_heartbeat`], now);
+    if (beat.health === "missing" || beat.health === "unreadable")
+      return { live: false, reason: "The controller is not running." };
+    if (beat.health === "stale")
+      return { live: false, reason: "The controller has stopped reporting." };
+  }
   if (!status)
     return {
       live: false,
@@ -455,24 +477,99 @@ export function hardwareLabel(pump: DosingPump): string {
   return prefix.length >= 3 ? prefix : pump.start_entity || ids[0];
 }
 
-/** A stock tank's level, from the integration's stock sensor, for the pump of the same name. */
-export interface StockLevel {
+/** A stock tank as the integration's stock sensor lists it. */
+export interface StockTankReading {
+  id: string;
+  name: string;
   level_l: number;
-  percent: number | null;
-  low: boolean;
+  capacity_l: number;
+  low_l: number;
 }
-export function stockFor(name: string, states: States, prefix: string): StockLevel | null {
-  const tanks = states[`sensor.crop_steering_${prefix}stock_low`]?.attributes.tanks;
-  const tank = (Array.isArray(tanks) ? tanks : [])
-    .map(record)
-    .find(
-      (item) =>
-        typeof item.name === "string" &&
-        item.name.trim().toLowerCase() === name.trim().toLowerCase(),
-    );
-  const level = tank ? count(tank.level_l) : null;
-  if (!tank || level === null) return null;
-  return { level_l: level, percent: count(tank.percent), low: tank.low === true };
+export const stockSensorId = (prefix: string) => `sensor.crop_steering_${prefix}stock_low`;
+/** The room's stock tanks from `sensor.crop_steering_<prefix>stock_low`; one without an id (an
+ * integration from before dosing) or a usable level and capacity is left out. */
+export function stockTanks(states: States, prefix: string): StockTankReading[] {
+  const tanks = states[stockSensorId(prefix)]?.attributes.tanks;
+  return (Array.isArray(tanks) ? tanks : []).flatMap((item) => {
+    const raw = record(item);
+    const id = text(raw.id),
+      level = count(raw.level_l),
+      capacity = count(raw.capacity_l);
+    return id && level !== null && capacity !== null && capacity > 0
+      ? [
+          {
+            id,
+            name: text(raw.name)?.trim() ?? id,
+            level_l: Math.max(0, level),
+            capacity_l: capacity,
+            low_l: Math.max(0, count(raw.low_l) ?? 0),
+          },
+        ]
+      : [];
+  });
+}
+/** A pump's stock tank: amber at or under its low mark, red at or under half of it. */
+export type StockState = "ok" | "low" | "very-low";
+export function stockState(tank: Pick<StockTankReading, "level_l" | "low_l">): StockState {
+  if (tank.level_l <= tank.low_l / 2) return "very-low";
+  return tank.level_l <= tank.low_l ? "low" : "ok";
+}
+export const STOCK_STATES: Record<StockState, string> = {
+  ok: "",
+  low: "Low",
+  "very-low": "Very low",
+};
+/** What a pump takes from its stock tank each time: its recipe amount, per batch, or (the recipe
+ * passing it by) its last dose. */
+export interface StockDraw {
+  ml: number;
+  per: "batch" | "dose";
+}
+export function pumpDraw(pump: string, rows: RecipeRow[], last: LastDose | null): StockDraw | null {
+  const row = rows.find((item) => item.pump === pump && item.ml > 0 && !item.unreadable);
+  if (row) return { ml: row.ml, per: "batch" };
+  return last && last.ml > 0 ? { ml: last.ml, per: "dose" } : null;
+}
+/** Whole batches, or doses, a tank still covers at its pump's draw. */
+export interface StockLeft {
+  count: number;
+  per: "batch" | "dose";
+}
+export function stockLeft(level_l: number, draw: StockDraw | null): StockLeft | null {
+  if (!draw) return null;
+  const count = batchesLeft({ level_l }, draw.ml);
+  return count === null ? null : { count, per: draw.per };
+}
+/** "about 7 batches left", "about 1 dose left", "less than one batch left". */
+export function leftWords(left: StockLeft | null): string | null {
+  if (!left) return null;
+  const [one, many] = left.per === "batch" ? ["batch", "batches"] : ["dose", "doses"];
+  return left.count
+    ? `about ${left.count} ${left.count === 1 ? one : many} left`
+    : `less than one ${one} left`;
+}
+/** A pump's stock tank, found by the pump's `stock_tank`; `tank` is null while the integration lists
+ * no tank by that id. Null when the pump has none. */
+export interface PumpStock {
+  id: string;
+  tank: StockTankReading | null;
+  state: StockState;
+  left: StockLeft | null;
+}
+export function pumpStock(
+  pump: DosingPump,
+  tanks: StockTankReading[],
+  rows: RecipeRow[],
+  last: LastDose | null,
+): PumpStock | null {
+  if (!pump.stock_tank) return null;
+  const tank = tanks.find((item) => item.id === pump.stock_tank) ?? null;
+  return {
+    id: pump.stock_tank,
+    tank,
+    state: tank ? stockState(tank) : "ok",
+    left: tank ? stockLeft(tank.level_l, pumpDraw(pump.id, rows, last)) : null,
+  };
 }
 
 export interface RecipeRow {
@@ -484,6 +581,9 @@ export interface RecipeRow {
   entity: string | null;
   /** The amount comes from the entity's reading. */
   fromEntity: boolean;
+  /** The amount entity reads nothing: the controller refuses the batch, it never falls back to the
+   * fixed amount. */
+  unreadable: boolean;
   flow: number | null;
   seconds: number | null;
   /** 0 mL: the batch passes this pump by. */
@@ -495,7 +595,8 @@ export function recipeRows(config: DosingConfig, states: States): RecipeRow[] {
   return config.batch.recipe.map((line) => {
     const pump = config.pumps.find((item) => item.id === line.pump);
     const reading = line.ml_entity ? numeric(states[line.ml_entity]) : null;
-    const ml = Math.max(0, reading ?? line.ml);
+    const unreadable = !!line.ml_entity && reading === null;
+    const ml = unreadable ? 0 : Math.max(0, reading ?? line.ml);
     const flow = pump ? numeric(states[pump.flow_entity]) : null;
     return {
       pump: line.pump,
@@ -504,20 +605,21 @@ export function recipeRows(config: DosingConfig, states: States): RecipeRow[] {
       fixed: line.ml,
       entity: line.ml_entity,
       fromEntity: reading !== null,
+      unreadable,
       flow,
       seconds: ml > 0 && flow !== null && flow > 0 ? ml / flow : null,
-      skipped: ml <= 0,
+      skipped: !unreadable && ml <= 0,
       unknown: !pump,
     };
   });
 }
-/** The recipe's total and how long its doses take; `seconds` is null while a dosed pump's flow is
- * unknown. */
+/** The recipe's total and how long its doses take; `ml` is null while an amount entity reads
+ * nothing, and `seconds` while a dosed pump's flow or amount is unknown. */
 export function recipeTotals(rows: RecipeRow[]) {
   const dosed = rows.filter((row) => !row.skipped);
   return {
     pumps: dosed.length,
-    ml: dosed.reduce((sum, row) => sum + row.ml, 0),
+    ml: dosed.some((row) => row.unreadable) ? null : dosed.reduce((sum, row) => sum + row.ml, 0),
     seconds: dosed.every((row) => row.seconds !== null)
       ? dosed.reduce((sum, row) => sum + row.seconds!, 0)
       : null,
@@ -648,6 +750,8 @@ export interface RequestStage {
   request: DosingRequest;
   result: string | null;
 }
+/** As the integration counts it, a request is pending while the controller has not published it as
+ * handled and it is less than 120 s old; one whose time cannot be read is not pending. */
 export function requestStage(
   config: DosingConfig | null,
   status: DosingStatus | null,
@@ -657,15 +761,16 @@ export function requestStage(
   if (!request) return null;
   if (status?.handled === request.id)
     return { stage: "taken", request, result: status.handled_result };
-  const at = Date.parse(request.at ?? "");
-  return {
-    stage: Number.isFinite(at) && now - at > REQUEST_TTL_MS ? "expired" : "waiting",
-    request,
-    result: null,
-  };
+  const age = now - Date.parse(request.at ?? "");
+  return { stage: age < REQUEST_TTL_MS ? "waiting" : "expired", request, result: null };
 }
 /** A dose or batch cannot be sent while another request waits: `dosing_request` refuses it. */
 export const requestWaiting = (stage: RequestStage | null) => stage?.stage === "waiting";
+
+/** Whether this user may dose, make a batch and change the setup: `dosing_get`'s `can_edit`, or
+ * from an integration from before it, whether Home Assistant says the user is an administrator. */
+export const canEdit = (doc: DosingDocument | null, admin: boolean | null) =>
+  typeof doc?.can_edit === "boolean" ? doc.can_edit : admin !== false;
 
 /** A dose's or batch's result in a pill: finished green, stopped amber, a fault red. */
 export function resultTone(result: string): PillTone {
@@ -738,6 +843,7 @@ export const blankPump = (key: string): PumpDraft => ({
   flow_entity: "",
   max_ml: 2000,
   restore_volume: true,
+  stock_tank: null,
 });
 export function setupDraft(config: DosingConfig | null): SetupDraft {
   const batch = config?.batch ?? parseBatch({ premix_min: 2, postmix_min: 5 });
@@ -781,12 +887,15 @@ export function setupPayload(draft: SetupDraft): { pumps: DosingPump[]; batch: D
 }
 const within = (value: number, min: number, max: number) =>
   Number.isFinite(value) && value >= min && value <= max;
-/** The checks the integration makes on a save (dosing.py), so the editor can say so first. */
-export function setupErrors(draft: SetupDraft): string[] {
+/** The checks the integration makes on a save (dosing.py), so the editor can say so first. `tanks`
+ * are the ids of the room's stock tanks; null skips that check. */
+export function setupErrors(draft: SetupDraft, tanks: readonly string[] | null = null): string[] {
   const errors: string[] = [];
   const { pumps, batch } = draft;
   if (pumps.length > MAX_PUMPS) errors.push(`At most ${MAX_PUMPS} dosing pumps per room.`);
   const names = new Set<string>();
+  // Each stock tank's pump: at most one per tank.
+  const drawn = new Map<string, string>();
   for (const [index, pump] of pumps.entries()) {
     const name = pump.name.trim();
     const label = name || `Pump ${index + 1}`;
@@ -800,6 +909,13 @@ export function setupErrors(draft: SetupDraft): string[] {
       errors.push(`${label}: say what its dosing sensor reads while it doses.`);
     if (!within(pump.max_ml, 1, 5000))
       errors.push(`${label}: the largest dose must be between 1 and 5000 mL.`);
+    if (pump.stock_tank) {
+      if (tanks && !tanks.includes(pump.stock_tank))
+        errors.push(`${label}: its stock tank is not one of this room's.`);
+      const other = drawn.get(pump.stock_tank);
+      if (other) errors.push(`${other} and ${label} are linked to the same stock tank.`);
+      drawn.set(pump.stock_tank, label);
+    }
   }
   const optional = [
     "fill_valve",
@@ -865,6 +981,7 @@ export const FIELD_LABELS: Record<string, string> = {
   flow_entity: "Calibrated flow",
   max_ml: "Largest dose (mL)",
   restore_volume: "Put the dose volume back",
+  stock_tank: "Stock tank",
   fill_valve: "Fill valve",
   full_entity: "Full float",
   full_state: "Full when the float reads",
@@ -881,10 +998,11 @@ export const FIELD_LABELS: Record<string, string> = {
   ml_entity: "Amount from an entity",
 };
 
-/** A saved setup against the one before it, for the review. */
+/** A saved setup against the one before it, for the review; `tanks` name the stock tanks. */
 export function setupChanges(
   before: DosingConfig | null,
   after: { pumps: DosingPump[]; batch: DosingBatch },
+  tanks: readonly { id: string; name: string }[] = [],
 ): { label: string; before: string; after: string }[] {
   const changes: { label: string; before: string; after: string }[] = [];
   const show = (value: unknown) =>
@@ -902,11 +1020,14 @@ export function setupChanges(
     (before?.pumps ?? []).map((pump) => pump.name),
     after.pumps.map((pump) => pump.name),
   );
+  const tank = (id: string | null) =>
+    id ? (tanks.find((item) => item.id === id)?.name ?? id) : null;
   for (const pump of after.pumps) {
     const was = old.get(pump.id);
     if (!was) continue;
     for (const field of [...PUMP_FIELDS, "dosing_prefix", "max_ml", "restore_volume"] as const)
       add(`${pump.name} · ${FIELD_LABELS[field]}`, was[field], pump[field]);
+    add(`${pump.name} · ${FIELD_LABELS.stock_tank}`, tank(was.stock_tank), tank(pump.stock_tank));
   }
   const name = (pumps: DosingPump[], id: string) =>
     pumps.find((pump) => pump.id === id)?.name ?? id;

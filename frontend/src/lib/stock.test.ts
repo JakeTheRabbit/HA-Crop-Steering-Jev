@@ -8,6 +8,7 @@ import {
   type StockTank,
   type StockTankDraft,
 } from "./stock";
+import { createDemo } from "./demo";
 import { StockDemo } from "./stock-demo";
 
 const draft = (change: Partial<StockTankDraft> = {}): StockTankDraft => ({
@@ -79,13 +80,61 @@ describe("demo stock services", () => {
   const room = "room:";
   const demo = () => new StockDemo(() => ({}));
 
-  it("starts with sample tanks and refuses a stale revision", () => {
+  it("starts with a tank per dosing pump, named after its nutrient, and refuses a stale revision", () => {
     const stock = demo();
     const doc = stock.call("stock_get", { room_id: room });
-    expect(doc.tanks.length).toBeGreaterThan(0);
+    expect(doc.tanks.map((t) => t.name)).toEqual(["Balance", "Bloom", "Core", "Cleanse"]);
+    expect(stock.call("stock_get", { room_id: "room:f1_" }).tanks.map((t) => t.id)).toEqual([
+      "grow",
+      "cleanse",
+      "balance",
+      "fade",
+      "core",
+      "bloom",
+    ]);
     expect(() =>
       stock.call("stock_refill", { room_id: room, expected_revision: 99, id: doc.tanks[0].id }),
     ).toThrow(/changed elsewhere/);
+  });
+
+  it("draws what the controller dosed, once per key, and says so on its sensor", () => {
+    let states = createDemo(new Date(2026, 8, 28, 16).getTime());
+    const stock = new StockDemo(
+      () => states,
+      (next) => (states = next),
+    );
+    const draw = (key: string, draws: Record<string, unknown>, source = "dose") =>
+      stock.call("stock_draw", { room_id: room, key, draws, source });
+    const before = stock.call("stock_get", { room_id: room });
+    // The draws the demo's dosing history made before it began: Balance's hand dose the newest.
+    expect(before.history[0]).toMatchObject({ source: "dose", draw_ml: { balance: 25 } });
+    expect(before.history.filter((entry) => entry.source === "batch")).toHaveLength(8);
+    // No revision needed: the key makes a repeat harmless, and an unknown tank is skipped.
+    let doc = draw("r1", { bloom: 60, nope: 5 });
+    expect(doc.revision).toBe(before.revision + 1);
+    expect(doc.tanks.find((t) => t.id === "bloom")!.level_l).toBe(5.34);
+    expect(doc.history[0]).toMatchObject({ source: "dose", key: "r1", draw_ml: { bloom: 60 } });
+    expect(draw("r1", { bloom: 60 }).revision).toBe(doc.revision);
+    expect(stock.call("stock_get", { room_id: room }).tanks[1].level_l).toBe(5.34);
+    // A batch's dose; never below empty, and the draw says what was really taken.
+    doc = draw("r2:bloom", { bloom: 9000 }, "batch");
+    expect(doc.tanks[1].level_l).toBe(0);
+    expect(doc.history[0]).toMatchObject({ source: "batch", draw_ml: { bloom: 5340 } });
+    // Nothing the room has: nothing counted, so the key stays free.
+    expect(draw("r3", { nope: 5 }).revision).toBe(doc.revision);
+    expect(() => draw("r4", { bloom: -1 })).toThrow(/0 or more/);
+    expect(() => draw("r4", { bloom: 1 }, "fill")).toThrow(/dose or batch/);
+    // The integration's stock sensor follows: Bloom empty and low, each tank with its pump.
+    const sensor = states["sensor.crop_steering_stock_low"];
+    expect(sensor.state).toBe("1");
+    expect((sensor.attributes.tanks as Record<string, unknown>[])[1]).toMatchObject({
+      id: "bloom",
+      pump: "bloom",
+      level_l: 0,
+      percent: 0,
+      low: true,
+      batches_left: 0,
+    });
   });
 
   it("saves, refills, sets a level and records a batch like the integration", () => {

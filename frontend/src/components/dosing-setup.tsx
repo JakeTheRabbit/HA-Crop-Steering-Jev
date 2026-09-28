@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useState } from "react";
 import { ArrowDown, ArrowUp, LoaderCircle, Pencil, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,18 +18,21 @@ import {
   MAX_PUMPS,
   PUMP_FIELDS,
   blankPump,
+  canEdit,
   dosingError,
   newPumpId,
   setupChanges,
   setupDraft,
   setupErrors,
   setupPayload,
+  stockTanks,
   type DosingBatch,
   type DosingConfig,
   type DosingDocument,
   type PumpDraft,
   type SetupDraft,
 } from "@/lib/dosing";
+import type { StockDocument } from "@/lib/stock";
 import type { Controller } from "@/lib/types";
 import { errorText } from "@/lib/utils";
 
@@ -88,16 +91,34 @@ export function DosingSetup({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  // The room's stock tanks, read when editing starts: each pump may be linked to one.
+  const [tanks, setTanks] = useState<{ id: string; name: string }[] | null>(null);
+  const [tanksError, setTanksError] = useState("");
+  const editing = !!draft;
+  useEffect(() => {
+    if (!editing) return;
+    let current = true;
+    setTanksError("");
+    controller
+      .operator<StockDocument>("stock_get")
+      .then((result) => current && setTanks(result.tanks.map(({ id, name }) => ({ id, name }))))
+      .catch((err) => current && setTanksError(errorText(err)));
+    return () => {
+      current = false;
+    };
+  }, [editing, controller.roomId]);
   const base = doc?.config ?? null;
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(setupDraft(base));
   useLayoutEffect(() => {
     onDirtyChange(dirty);
     return () => onDirtyChange(false);
   }, [dirty, onDirtyChange]);
-  const admin = controller.admin !== false;
+  const admin = canEdit(doc, controller.admin);
   const connected = ["live", "demo"].includes(controller.connection);
   const pick = (field: string) =>
     (doc?.candidates ?? []).filter((candidate) => DOMAINS[field]?.includes(candidate.domain));
+  // The tanks the stock sensor lists, to name them before stock_get has been read.
+  const named = tanks ?? stockTanks(controller.states, controller.room.room.prefix);
 
   if (!draft)
     return (
@@ -107,7 +128,11 @@ export function DosingSetup({
             {notice}
           </p>
         )}
-        {config ? <SetupSummary config={config} /> : <p className="muted">No dosing setup yet.</p>}
+        {config ? (
+          <SetupSummary config={config} tanks={named} />
+        ) : (
+          <p className="muted">No dosing setup yet.</p>
+        )}
         {admin ? (
           <Button
             variant="outline"
@@ -128,7 +153,7 @@ export function DosingSetup({
       </div>
     );
 
-  const errors = setupErrors(draft);
+  const errors = setupErrors(draft, tanks?.map((tank) => tank.id) ?? null);
   const payload = setupPayload(draft);
   const taken = new Set(draft.pumps.flatMap((pump) => pump.id ?? []));
   const updatePump = (key: string, change: Partial<PumpDraft>) =>
@@ -198,7 +223,42 @@ export function DosingSetup({
       setBusy(false);
     }
   }
-  const changes = setupChanges(base, payload);
+  const changes = setupChanges(base, payload, named);
+  /** A pump's stock tank: none, or one of the room's; a tank another pump draws is not offered. */
+  const stockPicker = (pump: PumpDraft) => {
+    const others = draft.pumps.filter((item) => item.key !== pump.key);
+    const known = named.some((tank) => tank.id === pump.stock_tank);
+    return (
+      <div className="dosing-field">
+        <Label htmlFor={`${id}-${pump.key}-stock`}>{FIELD_LABELS.stock_tank}</Label>
+        <select
+          id={`${id}-${pump.key}-stock`}
+          value={pump.stock_tank ?? ""}
+          aria-describedby={`${id}-${pump.key}-stock-help`}
+          onChange={(event) => updatePump(pump.key, { stock_tank: event.target.value || null })}
+        >
+          <option value="">None</option>
+          {named.map((tank) => {
+            const by = others.find((item) => item.stock_tank === tank.id);
+            return (
+              <option key={tank.id} value={tank.id} disabled={!!by}>
+                {tank.name}
+                {by ? ` (linked to ${by.name.trim() || "another pump"})` : ""}
+              </option>
+            );
+          })}
+          {pump.stock_tank && !known && (
+            <option value={pump.stock_tank}>{pump.stock_tank} (not found)</option>
+          )}
+        </select>
+        <small id={`${id}-${pump.key}-stock-help`} className="muted">
+          {tanksError
+            ? `The stock tanks could not be read: ${tanksError}`
+            : "What the pump doses is taken off this tank."}
+        </small>
+      </div>
+    );
+  };
   return (
     <div className="dosing-setup-body">
       <fieldset className="dosing-setup-group">
@@ -249,6 +309,7 @@ export function DosingSetup({
                   onChange={(values) => updatePump(pump.key, { [field]: values[0] ?? "" })}
                 />
               ))}
+              {stockPicker(pump)}
               {pump.dosing_entity.startsWith("sensor.") && (
                 <div className="dosing-field">
                   <Label htmlFor={`${id}-${pump.key}-prefix`}>{FIELD_LABELS.dosing_prefix}</Label>
@@ -511,7 +572,13 @@ export function DosingSetup({
 }
 
 /** The setup as it stands, to read. */
-function SetupSummary({ config }: { config: DosingConfig }) {
+function SetupSummary({
+  config,
+  tanks,
+}: {
+  config: DosingConfig;
+  tanks: { id: string; name: string }[];
+}) {
   const batch = config.batch;
   const entity = (id: string | null) => (id ? <code className="dosing-mono">{id}</code> : "none");
   return (
@@ -525,6 +592,7 @@ function SetupSummary({ config }: { config: DosingConfig }) {
                 {PUMP_FIELDS.map((field) => (
                   <th key={field}>{FIELD_LABELS[field]}</th>
                 ))}
+                <th>{FIELD_LABELS.stock_tank}</th>
                 <th className="numeric">Largest dose</th>
               </tr>
             </thead>
@@ -538,6 +606,11 @@ function SetupSummary({ config }: { config: DosingConfig }) {
                   {PUMP_FIELDS.map((field) => (
                     <td key={field}>{entity(pump[field])}</td>
                   ))}
+                  <td>
+                    {pump.stock_tank
+                      ? (tanks.find((tank) => tank.id === pump.stock_tank)?.name ?? pump.stock_tank)
+                      : "none"}
+                  </td>
                   <td className="numeric">{pump.max_ml} mL</td>
                 </tr>
               ))}

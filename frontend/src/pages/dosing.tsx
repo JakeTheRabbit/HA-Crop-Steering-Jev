@@ -20,21 +20,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Empty, Heading, number } from "@/components/dashboard";
+import { Empty, Heading, number, type Page } from "@/components/dashboard";
 import { Pill } from "@/components/mini-visuals";
 import { PeristalticPump } from "@/components/peristaltic-pump";
+import { StockBottle } from "@/components/stock-bottle";
 import { DosingSetup } from "@/components/dosing-setup";
 import {
   PUMP_STATES,
+  STOCK_STATES,
   batchSteps,
   batchTime,
   blankPump,
+  canEdit,
   controllerReach,
   doseDeadline,
   dosingConfigId,
   dosingError,
   dosingStatusId,
   hardwareLabel,
+  leftWords,
+  pumpStock,
   pumpView,
   readConfig,
   readStatus,
@@ -45,15 +50,18 @@ import {
   resultTone,
   resultWords,
   setupDraft,
-  stockFor,
+  stockTanks,
   type DosingAction,
   type DosingConfig,
   type DosingDocument,
+  type DosingPump,
   type DosingRequest,
   type DosingRequestResult,
+  type PumpStock,
   type PumpView,
   type SetupDraft,
   type StepView,
+  type StockTankReading,
 } from "@/lib/dosing";
 import { tankTelemetry, type TankReading } from "@/lib/tank-telemetry";
 import type { Controller } from "@/lib/types";
@@ -62,6 +70,11 @@ import "./dosing.css";
 
 const mL = (value: number) =>
   value.toLocaleString(undefined, { maximumFractionDigits: value < 100 ? 1 : 0 });
+/** A stock tank's level against its capacity: "5.4 L of 20 L". */
+const litres = (tank: StockTankReading) =>
+  `${tank.level_l.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L of ${number(tank.capacity_l, 1)} L`;
+const bottleLabel = (tank: StockTankReading) =>
+  `${tank.name} stock tank: ${litres(tank)}, low mark ${number(tank.low_l, 1)} L`;
 const seconds = (value: number) =>
   value < 100 ? `${number(value, 1)} s` : `${number(value / 60, value < 600 ? 1 : 0)} min`;
 const when = (iso: string | null, now: number) => {
@@ -194,19 +207,62 @@ function RequestDialog({
   );
 }
 
+/** The pump's stock tank on its card: the bottle to scale (`largest`: the room's largest linked
+ * tank's capacity; a bottle of the same shape holding an eighth as much stands half as tall), the
+ * litres left and about how many batches, or doses, that is. */
+function CardStock({
+  pump,
+  stock,
+  largest,
+}: {
+  pump: DosingPump;
+  stock: PumpStock | null;
+  largest: number;
+}) {
+  if (!stock?.tank)
+    return (
+      <p className="dosing-pump-stock dosing-stock-none" data-pump-stock="">
+        {stock ? `Stock tank ${stock.id} not found` : "No stock tank linked"}
+      </p>
+    );
+  const { tank } = stock;
+  return (
+    <div className="dosing-pump-stock" data-pump-stock={tank.id} data-level={stock.state}>
+      <StockBottle
+        tank={tank}
+        state={stock.state}
+        scale={largest > 0 ? Math.cbrt(tank.capacity_l / largest) : 1}
+        label={bottleLabel(tank)}
+      />
+      <p className="dosing-stock-lines">
+        {tank.name.toLowerCase() !== pump.name.toLowerCase() && (
+          <span className="dosing-stock-name">{tank.name}</span>
+        )}
+        <span className="dosing-stock-litres">{litres(tank)}</span>
+        {stock.left && <span className="dosing-stock-left">{leftWords(stock.left)}</span>}
+        {stock.state !== "ok" && (
+          <span className="dosing-stock-state">{STOCK_STATES[stock.state]}</span>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function PumpCard({
   view,
   index,
   selected,
   onSelect,
   stock,
+  largest,
   now,
 }: {
   view: PumpView;
   index: number;
   selected: boolean;
   onSelect: () => void;
-  stock: ReturnType<typeof stockFor>;
+  stock: PumpStock | null;
+  largest: number;
   now: number;
 }) {
   const { pump, progress, last } = view;
@@ -287,18 +343,62 @@ function PumpCard({
           <dt>Flow</dt>
           <dd>{view.flow === null ? "—" : `${number(view.flow, 2)} mL/s`}</dd>
         </div>
-        {stock && (
-          <div data-pump-stock>
-            <dt>Stock</dt>
-            <dd className={stock.low ? "dosing-low" : undefined}>
-              {number(stock.level_l, 2)} L
-              {stock.percent !== null ? ` · ${number(stock.percent, 0)}%` : ""}
-            </dd>
-          </div>
-        )}
       </dl>
+      <CardStock pump={pump} stock={stock} largest={largest} />
       {view.reason && view.state !== "idle" && <p className="dosing-reason">{view.reason}</p>}
     </article>
+  );
+}
+
+/** Every linked stock tank, in pump order, as a labelled bottle with its low mark. */
+function StockStrip({
+  items,
+  navigate,
+  headingId,
+}: {
+  items: { pump: DosingPump; stock: PumpStock; tank: StockTankReading; index: number }[];
+  navigate: (page: Page) => void;
+  headingId: string;
+}) {
+  return (
+    <section className="panel dosing-stock" aria-labelledby={headingId} data-stock-strip>
+      <div className="panel-heading">
+        <div>
+          <h2 id={headingId}>Stock</h2>
+          <p>Each pump’s stock tank, drawn down by what the pump doses</p>
+        </div>
+        <Button variant="ghost" size="sm" onClick={() => navigate("equipment/stock")}>
+          Stock tanks <ArrowRight size={15} aria-hidden="true" />
+        </Button>
+      </div>
+      <ul className="dosing-stock-list">
+        {items.map(({ pump, stock, tank, index }) => (
+          <li
+            key={tank.id}
+            className="dosing-stock-item"
+            data-stock-gauge={tank.id}
+            data-level={stock.state}
+            data-hue={index % 8}
+          >
+            <StockBottle tank={tank} state={stock.state} label={bottleLabel(tank)} />
+            <p className="dosing-stock-lines">
+              <strong>{tank.name}</strong>
+              {tank.name.toLowerCase() !== pump.name.toLowerCase() && (
+                <span className="dosing-stock-name">for {pump.name}</span>
+              )}
+              <span className="dosing-stock-percent dosing-mono">
+                {number(Math.min(100, (tank.level_l / tank.capacity_l) * 100), 0)}%
+              </span>
+              <span className="dosing-stock-litres">{litres(tank)}</span>
+              {stock.left && <span className="dosing-stock-left">{leftWords(stock.left)}</span>}
+              {stock.state !== "ok" && (
+                <span className="dosing-stock-state">{STOCK_STATES[stock.state]}</span>
+              )}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -319,9 +419,11 @@ function StepMark({ state }: { state: StepView["state"] }) {
 
 export function Dosing({
   controller,
+  navigate,
   onDirtyChange,
 }: {
   controller: Controller;
+  navigate: (page: Page) => void;
   onDirtyChange: (dirty: boolean) => void;
 }) {
   const { room, states } = controller;
@@ -372,17 +474,27 @@ export function Dosing({
   useTicker(running || batchRunning);
   const stage = requestStage(config, status, now);
   const waiting = requestWaiting(stage);
-  const may = connected && controller.admin !== false;
+  const admin = canEdit(doc, controller.admin);
+  const may = connected && admin;
   const canAct = may && reach.live && !waiting;
   const view = views.find((item) => item.pump.id === selected) ?? views[0] ?? null;
   const name = (id: string | null) =>
     config?.pumps.find((pump) => pump.id === id)?.name ?? id ?? "a pump";
+  const rows = config ? recipeRows(config, states) : [];
+  // Each pump's stock tank, by its stock_tank: the cards draw theirs to scale against the largest.
+  const tanks = stockTanks(states, prefix);
+  const stocks = views.map((item) => pumpStock(item.pump, tanks, rows, item.last));
+  const linked = views.flatMap((item, index) => {
+    const stock = stocks[index];
+    return stock?.tank ? [{ pump: item.pump, stock, tank: stock.tank, index }] : [];
+  });
+  const largest = Math.max(0, ...linked.map((item) => item.tank.capacity_l));
 
   const loading = !config && !loadError;
   /** Opens the setup; `edit` starts an administrator's draft, with a first pump when there is none. */
   const openSetup = (edit: boolean) => {
     setSetupOpen(true);
-    if (edit && doc && !draft && controller.admin !== false) {
+    if (edit && doc && !draft && admin) {
       const next = setupDraft(doc.config);
       if (!next.pumps.length) next.pumps.push(blankPump("new-first"));
       setDraft(next);
@@ -401,7 +513,7 @@ export function Dosing({
     ? null
     : !connected
       ? "Connect to Home Assistant to dose."
-      : controller.admin === false
+      : !admin
         ? "Only a Home Assistant administrator can dose."
         : !reach.live
           ? reach.reason
@@ -443,14 +555,15 @@ export function Dosing({
   };
 
   // The batch.
-  const rows = config ? recipeRows(config, states) : [];
   const totals = recipeTotals(rows);
   const time = config ? batchTime(config, rows) : { seconds: null, fillMax: 0 };
   const steps = config ? batchSteps(config, status, states) : [];
   const holdOn = !!config?.batch.hold_entity && states[config.batch.hold_entity]?.state === "on";
+  // The controller refuses a batch whose amount entity reads nothing, before anything moves.
+  const unreadable = rows.find((row) => row.unreadable);
   const batchBlock = !connected
     ? "Connect to Home Assistant to make a batch."
-    : controller.admin === false
+    : !admin
       ? "Only a Home Assistant administrator can make a batch."
       : !reach.live
         ? reach.reason
@@ -462,9 +575,11 @@ export function Dosing({
               ? "Another request is waiting for the controller."
               : holdOn
                 ? `${config!.batch.hold_entity} is already on: something else is dosing.`
-                : !totals.pumps
-                  ? "The recipe doses nothing: set it up below."
-                  : null;
+                : unreadable
+                  ? `${unreadable.name}'s amount comes from ${unreadable.entity}, which reads nothing: the controller would refuse the batch.`
+                  : !totals.pumps
+                    ? "The recipe doses nothing: set it up below."
+                    : null;
   const expectedBatch =
     time.seconds === null
       ? "unknown until every dosed pump reads its flow"
@@ -500,7 +615,7 @@ export function Dosing({
             rows
               .filter((row) => !row.skipped)
               .map((row) => `${row.name} ${mL(row.ml)} mL`)
-              .join(", ") + ` (${mL(totals.ml)} mL)`,
+              .join(", ") + ` (${totals.ml === null ? "?" : mL(totals.ml)} mL)`,
         },
         { label: "Expected time", value: expectedBatch },
       ],
@@ -653,7 +768,7 @@ export function Dosing({
           title={`No dosing pumps in ${room.room.name}`}
           detail="Dosing makes a batch of nutrient solution in this room's tank: it fills the tank, mixes it, doses each nutrient in order, mixes again and stamps the fill. It can also dose one pump by hand. It drives dosing pumps whose own firmware times each dose; Home Assistant sets the amount and presses start."
           action={
-            controller.admin !== false ? (
+            admin ? (
               <Button onClick={() => openSetup(true)} disabled={!doc || !connected}>
                 Set up dosing
               </Button>
@@ -665,6 +780,9 @@ export function Dosing({
       )}
       {config && !!views.length && (
         <>
+          {!!linked.length && (
+            <StockStrip items={linked} navigate={navigate} headingId={`${formId}-stock`} />
+          )}
           <section className="dosing-pumps-section" aria-labelledby={`${formId}-pumps`}>
             <h2 id={`${formId}-pumps`} className="sr-only">
               Pumps
@@ -677,7 +795,8 @@ export function Dosing({
                   index={index}
                   selected={item.pump.id === view?.pump.id}
                   onSelect={() => setSelected(item.pump.id)}
-                  stock={stockFor(item.pump.name, states, prefix)}
+                  stock={stocks[index]}
+                  largest={largest}
                   now={now}
                 />
               ))}
@@ -907,15 +1026,18 @@ export function Dosing({
                           <tr key={row.pump} data-recipe-pump={row.pump}>
                             <td>
                               {row.name}
-                              {row.fromEntity && (
-                                <span className="cell-subtext">from {row.entity}</span>
+                              {(row.fromEntity || row.unreadable) && (
+                                <span className="cell-subtext">
+                                  from {row.entity}
+                                  {row.unreadable ? ", which reads nothing" : ""}
+                                </span>
                               )}
                               {row.unknown && (
                                 <span className="cell-subtext">not a pump of this room</span>
                               )}
                             </td>
                             <td className="numeric dosing-mono">
-                              {row.skipped ? "passed by" : mL(row.ml)}
+                              {row.unreadable ? "?" : row.skipped ? "passed by" : mL(row.ml)}
                             </td>
                             <td className="numeric dosing-mono">
                               {row.skipped
@@ -930,7 +1052,9 @@ export function Dosing({
                       <tfoot>
                         <tr>
                           <th scope="row">Total</th>
-                          <td className="numeric dosing-mono">{mL(totals.ml)}</td>
+                          <td className="numeric dosing-mono">
+                            {totals.ml === null ? "?" : mL(totals.ml)}
+                          </td>
                           <td className="numeric dosing-mono">
                             {totals.seconds === null ? "?" : seconds(totals.seconds)}
                           </td>

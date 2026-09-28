@@ -161,7 +161,7 @@ An older integration publishes only each zone's combined reading, which then sta
 
 ### Stock tanks
 
-**Next to run out** leads: the tank with the fewest batches left. Each tank shows its level against its low mark (amber within half again of it, red at it), with **Refilled**, **Set level** and the batches left. **Record a batch** takes the recipe's doses off every tank; recent batches are one tap down. **Edit stock tanks** adds, renames and removes tanks.
+**Next to run out** leads: the tank with the fewest batches left. Each tank shows its level against its low mark (amber within half again of it, red at it), with **Refilled**, **Set level** and the batches left. A tank linked to a dosing pump (in **Equipment › Dosing › Dosing setup**) says **Drawn by** that pump **as it doses**, with its recent draws: the controller takes what each dose actually dosed off it, and the tank's fills no longer count against it; its batches left are at the pump's recipe amount. **Record a batch** takes the recipe's doses off every tank; recent draws are one tap down. **Edit stock tanks** adds, renames and removes tanks.
 
 ### Tank and pump
 
@@ -188,7 +188,8 @@ Unmapped inputs show **Not mapped**; invalid readings show **Unavailable**, **Ch
 **Equipment › Dosing** runs the room's batch tank: it doses one pump by hand, and it makes a batch (fill the tank, mix it, dose each nutrient in order, mix again). Each room has its own page for its own tank. The page switches nothing itself: every action is reviewed, then sent as a request that the controller carries out within a few seconds. A request the controller could not take within two minutes is dropped, so nothing starts later by surprise. The pumps' own firmware times each dose: Home Assistant sets the amount and presses start, and the controller switches a pump's power off only if it runs past its time.
 
 - **The tank**, in one line: its level, whether the float reads full, EC, pH and temperature (from the room's tank mapping), and what the batch is doing.
-- **A card per pump**: the pump drawn (its rotor turns while it doses), its name and device, its state, its last dose, its calibrated flow in mL/s, and the level of the stock tank of the same name. A bar fills while it doses. Choose a card to dose that pump.
+- **Stock**: every stock tank a pump is linked to, in pump order, with its level, its litres and about how many batches it has left, its low mark drawn. **Stock tanks** opens them.
+- **A card per pump**: the pump drawn (its rotor turns while it doses), its name and device, its state, its last dose, its calibrated flow in mL/s, and the stock tank it is linked to: drawn to scale, with its litres and about how many batches that is at its recipe amount (or doses at its last dose, when the recipe passes the pump by). The bottle turns amber, with **Low**, at the tank's low mark and red, with **Very low**, at half of it. A bar fills while it doses. Choose a card to dose that pump.
 
 | State          | Meaning                                                                                  |
 | -------------- | ---------------------------------------------------------------------------------------- |
@@ -198,10 +199,10 @@ Unmapped inputs show **Not mapped**; invalid readings show **Unavailable**, **Ch
 | Unavailable    | Greyed out with a question mark: the controller is not reporting, or one of the pump's entities is missing or unavailable. The card says which. |
 
 - **Dose a pump**: type the mL, up to the pump's largest dose; the page says how long it takes at the pump's flow. **Start** opens the review. The dose goes into the tank as it is, and watering carries on. While it runs, the pump's **status** shows the target, the elapsed time and the mL so far, worked out from the time and the flow.
-- **Make a batch**: the steps, each marked done, now, passed by or to come, beside the recipe with each pump's mL, the total and the time it takes. **Make a batch** opens the review. Watering is held in the room, and in any room whose pump or valves the batch uses, until the batch finishes or is stopped. A pump in the recipe that cannot dose now is named before you start: the batch would stop at its dose, after filling and mixing.
+- **Make a batch**: the steps, each marked done, now, passed by or to come, beside the recipe with each pump's mL, the total and the time it takes. **Make a batch** opens the review. Watering is held in the room, and in any room whose pump or valves the batch uses, until the batch finishes or is stopped. A pump in the recipe that cannot dose now is named before you start: the batch would stop at its dose, after filling and mixing. An amount read from an entity that reads nothing is named too, and no batch is made: the controller would refuse it.
 - **Stop dosing** and **Stop the batch** send one stop: every dosing pump in the room is switched off, and a running batch ends with the fill valve closed, the mixing pump off and watering released. It replaces any request still waiting.
 - **History**: the last doses and batches, what each dosed and how it ended.
-- **Dosing setup** (one tap down): each pump's dose volume, start, dosing state, power switch and calibrated flow; the batch hardware (fill valve and float, mixing pump, valves and power, what to switch off before filling, the timings); and the recipe in dose order, each amount fixed or read from an entity at the start of each batch. A Home Assistant administrator edits it and saves it after a review; anyone else can read it.
+- **Dosing setup** (one tap down): each pump's dose volume, start, dosing state, power switch, calibrated flow and stock tank (one pump to a tank); the batch hardware (fill valve and float, mixing pump, valves and power, what to switch off before filling, the timings); and the recipe in dose order, each amount fixed or read from an entity at the start of each batch. A Home Assistant administrator edits it and saves it after a review; anyone else can read it.
 
 A room without pumps says what dosing does, with **Set up dosing**. Dosing, batches and the setup need a Home Assistant administrator login; any login can watch. [Batch-tank dosing](DOSING.md) describes what the integration, the controller and this page each do.
 

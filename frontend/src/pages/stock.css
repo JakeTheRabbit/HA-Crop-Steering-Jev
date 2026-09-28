@@ -98,6 +98,31 @@
 .stock-actions .muted {
   margin-left: auto;
 }
+/* A linked tank's recent draws, one line each. */
+.stock-draws h3 {
+  margin-bottom: 4px;
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+.stock-draws ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-xs);
+}
+.stock-draws li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+}
+.stock-draw-ml {
+  min-width: 64px;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .stock-level-form {
   display: grid;
   gap: 6px;
