@@ -4,7 +4,8 @@ Response-only services addressed by canonical room id, like the run and strategy
 is open to any signed-in user; changing a tank, recording a refill or a batch needs an
 administrator. A batch is counted when the room's mapped tank last-fill entity moves to a newer
 time, or when the operator records one; a room whose tanks run low gets a Repairs card. A tank
-linked to a dosing pump is drawn by what that pump doses instead (stock_draw, docs/DOSING.md).
+linked to a dosing pump is drawn by what that pump doses instead (stock_draw, docs/DOSING.md), and
+neither way of counting a batch draws it.
 """
 
 from __future__ import annotations
@@ -191,6 +192,7 @@ class StockStore:
                 raise ValueError("Stock tanks changed elsewhere. Reload before saving.")
             now = _now()
             draft = deepcopy(self.data)
+            skipped = None
             if action == "stock_save":
                 draft["tanks"] = stock.clean_tanks(
                     data.get("tanks"), draft["tanks"], now
@@ -198,11 +200,19 @@ class StockStore:
             elif action == "stock_refill":
                 stock.refill(draft, data.get("id"), data.get("level_l"), now)
             elif action == "stock_record_batch":
-                stock.draw(draft, self.doses(), now, "manual")
+                # A tank linked to a dosing pump is drawn by the pump's doses, as for a fill: a batch
+                # the controller made and someone also records by hand never counts twice on it.
+                linked, doses = self.linked(), self.doses()
+                skipped = sorted(tank for tank in doses if tank in linked)
+                doses = {tank: ml for tank, ml in doses.items() if tank not in linked}
+                stock.draw(draft, doses, now, "manual")
             else:
                 raise ValueError("Unsupported stock operation")
             await self._commit(draft)
-            return self.response()
+            response = self.response()
+            if skipped is not None:  # the linked tanks this batch did not draw
+                response["skipped"] = skipped
+            return response
 
     async def draw(self, data):
         """stock_draw: what the controller dosed out of linked tanks, counted once per key. No

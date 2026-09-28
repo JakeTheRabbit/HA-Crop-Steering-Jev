@@ -206,6 +206,30 @@ def test_a_fill_skips_the_tanks_a_dosing_pump_draws():
     assert store.data["history"][0]["draw_ml"] == {"cal": 250.0}
 
 
+def test_a_batch_recorded_by_hand_skips_the_tanks_a_dosing_pump_draws():
+    """A batch the controller made draws its linked tanks dose by dose (stock_draw); recorded by
+    hand as well, it must not take them a second time. The answer says which it skipped.
+    """
+    hass, store = rig(fill="")
+    cal = {"name": "Cal", "capacity_l": 5, "dose_ml": 250}
+    mutate(store, "stock_save", tanks=[BLOOM, cal])
+    _link(hass, bloom="bloom_pump")
+    response = mutate(store, "stock_record_batch")
+    assert [t["level_l"] for t in response["tanks"]] == [50, 4.75]
+    assert response["skipped"] == ["bloom"]
+    assert response["history"][0] == {
+        "at": response["history"][0]["at"],
+        "source": "manual",
+        "draw_ml": {"cal": 250.0},
+    }
+    # Unlinked again (the pump was removed from the dosing setup): it is drawn as before.
+    _link(hass)
+    response = mutate(store, "stock_record_batch")
+    assert [t["level_l"] for t in response["tanks"]] == [48.2, 4.5]
+    assert response["skipped"] == []
+    assert "skipped" not in mutate(store, "stock_refill", id="bloom")
+
+
 def test_a_corrupt_store_refuses_a_draw_too():
     _, store = rig(value={"revision": "seven", "tanks": []})
     with pytest.raises(ValueError, match="not been overwritten"):

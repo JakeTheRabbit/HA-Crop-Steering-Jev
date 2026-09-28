@@ -5,7 +5,8 @@ and it calls these services with that login. Before this, any login (a staff pho
 kiosk) could arm a plan with a future start date, which holds every zone, disarm the live plan,
 replace every room's recipe or put a zone on hold. Automations call with no user and must run
 exactly as before. Setup has always needed a signed-in administrator, automations included, and
-still does.
+still does. Stopping a room's dosing is the one change open to every login: a stop only switches
+things off.
 """
 
 import asyncio
@@ -68,10 +69,13 @@ CHANGES = {
     # What a dose drew from the stock tanks: the controller app calls it, as Home Assistant's
     # administrator Supervisor user; a signed-in non-administrator may not move a level.
     "stock_draw": {"room_id": ROOM, "key": "k", "draws": {}, "source": "dose"},
-    # A dosing request is what makes the controller app run a pump: never for a non-administrator.
+    # A dose or a batch is what makes the controller app run a pump: never for a
+    # non-administrator. A stop only switches things off (STOP, below).
     "dosing_save": {"room_id": ROOM, "expected_revision": 0, "pumps": [], "batch": {}},
-    "dosing_request": {"room_id": ROOM, "action": "stop"},
+    "dosing_request": {"room_id": ROOM, "action": "dose", "pump": "balance", "ml": 5},
 }
+# Anyone who may look at a room may stop its dosing; a user id Home Assistant does not know may not.
+STOP = {"room_id": ROOM, "action": "stop"}
 
 
 class Services(ha_stubs.FakeServices):
@@ -256,6 +260,27 @@ def test_setup_still_refuses_a_call_with_no_signed_in_administrator(rig, name):
     assert rig.effects() == before
     rig.call(name, ADMIN)
     assert rig.effects() != before
+
+
+@pytest.mark.parametrize("user", [STAFF, ADMIN, None])
+def test_any_signed_in_user_or_an_automation_may_stop_dosing(rig, user):
+    before = rig.effects()
+    rig.call("dosing_request", user, STOP)
+    assert rig.effects() != before
+    for action in ("dose", "batch"):  # and nothing more
+        if user == STAFF:
+            with pytest.raises(HomeAssistantError, match="administrator$"):
+                rig.call("dosing_request", user, {**STOP, "action": action})
+
+
+def test_a_user_home_assistant_does_not_know_may_not_stop_dosing(rig):
+    before = rig.effects()
+    with pytest.raises(
+        HomeAssistantError,
+        match=r"^crop_steering\.dosing_request requires a signed-in Home Assistant user$",
+    ):
+        rig.call("dosing_request", GHOST, STOP)
+    assert rig.effects() == before
 
 
 @pytest.mark.parametrize("user", [STAFF, GHOST, None])

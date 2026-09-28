@@ -2,10 +2,10 @@
 the contract.
 
 Response-only services addressed by canonical room id, like the stock services. Reading is open to
-any signed-in user; saving the setup and making a request need an administrator. Nothing here
-switches, presses or sets any hardware: the room's setup and its one request are published as
-sensor.crop_steering_<prefix>dosing_config, and the controller app, which reads that every 2 s,
-does the work and reports it as sensor.crop_steering_<prefix>dosing.
+any signed-in user, and so is a stop; saving the setup and asking for a dose or a batch need an
+administrator. Nothing here switches, presses or sets any hardware: the room's setup and its one
+request are published as sensor.crop_steering_<prefix>dosing_config, and the controller app, which
+reads that every 2 s, does the work and reports it as sensor.crop_steering_<prefix>dosing.
 """
 
 from __future__ import annotations
@@ -87,6 +87,12 @@ class DosingStore:
         handled = (state.attributes or {}).get("handled") if state else None
         return dosing.pending(self.data["request"], handled, _now())
 
+    def running(self) -> bool:
+        """Whether the controller reports a dose or a batch running in this room: its setup is not
+        changed under it."""
+        state = self.hass.states.get(self.status_entity)
+        return state is not None and state.state in ("dosing", "batch")
+
     def candidates(self) -> list[dict]:
         """Every entity of a domain the setup can use, for the dashboard's pickers."""
         out = []
@@ -133,7 +139,7 @@ class DosingStore:
                 return self.response(can_edit=can_edit)
             if data.get("expected_revision") != self.data["revision"]:
                 return self.response("revision", can_edit)
-            if self.pending():
+            if self.pending() or self.running():
                 return self.response("busy", can_edit)
             try:
                 pumps, batch = dosing.clean(
@@ -225,6 +231,16 @@ async def _caller(hass, call):
     return await hass.auth.async_get_user(user_id) if user_id else None
 
 
+async def _require_signed_in(hass, call, action):
+    """A stop only switches things off, so anyone who may look at the room may stop its dosing: any
+    signed-in user, administrator or not, and an automation (no user) as before. A user id Home
+    Assistant does not know is refused, as the administrator check refuses it."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    if getattr(call.context, "user_id", None) and await _caller(hass, call) is None:
+        raise HomeAssistantError(f"{action} requires a signed-in Home Assistant user")
+
+
 async def async_setup_dosing(hass, entry):
     import voluptuous as vol
     from homeassistant.core import SupportsResponse
@@ -235,7 +251,9 @@ async def async_setup_dosing(hass, entry):
     hass.data.setdefault(DOMAIN, {}).setdefault("_dosing", {})[entry.entry_id] = manager
 
     async def handle(call):
-        if call.service != "dosing_get":
+        if call.service == "dosing_request" and call.data.get("action") == "stop":
+            await _require_signed_in(hass, call, f"{DOMAIN}.{call.service}")
+        elif call.service != "dosing_get":
             await async_require_admin(hass, call, f"{DOMAIN}.{call.service}")
         try:
             target = resolve_dosing(hass, call.data["room_id"])

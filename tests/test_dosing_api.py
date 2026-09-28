@@ -198,6 +198,21 @@ def test_a_dose_or_batch_waits_for_the_one_before_it_but_a_stop_always_gets_thro
     assert save(store)["error"] is None
 
 
+def test_the_setup_is_never_changed_under_a_dose_or_batch_the_controller_reports():
+    """A dose or a batch runs from the setup it read when it started: the pump ids, entities and
+    recipe it holds must not change under it, whatever the stored request says."""
+    hass, store = rig()
+    save(store)
+    for state in ("dosing", "batch"):
+        hass.states.set(STATUS, state, {"handled": "some earlier request"})
+        assert save(store)["error"] == "busy"
+    assert store.data["revision"] == 1
+    for state in ("idle", "unavailable"):
+        hass.states.set(STATUS, state, {"handled": None})
+        assert save(store)["error"] is None
+    assert store.data["revision"] == 3
+
+
 def test_a_request_the_controller_will_never_act_on_no_longer_blocks(clock):
     _, store = rig()
     save(store)
@@ -363,6 +378,15 @@ def test_the_services_find_the_room_and_record_who_asked(services):
     handled(services.hass, services.call("dosing_get")["config"]["request"]["id"])
     automation = services.call("dosing_request", user=None, action="stop")
     assert automation["request"]["by"] is None  # an automation has no user
+    # A stop only switches things off: any signed-in user may ask for one, and is named.
+    staff = services.call("dosing_request", user="staff", action="stop")
+    assert (staff["error"], staff["request"]["by"]) == (None, "Staff phone")
+    for action, data in (("dose", {"pump": "balance", "ml": 5}), ("batch", {})):
+        with pytest.raises(HomeAssistantError, match="administrator"):
+            services.call("dosing_request", user="staff", action=action, **data)
+    with pytest.raises(HomeAssistantError, match="signed-in Home Assistant user"):
+        services.call("dosing_request", user="deleted", action="stop")
+    assert services.call("dosing_get")["config"]["request"] == staff["request"]
     with pytest.raises(HomeAssistantError, match="unknown or ambiguous"):
         services.call("dosing_get", room_id="room:f1_")
     with pytest.raises(HomeAssistantError, match="canonical room_id"):

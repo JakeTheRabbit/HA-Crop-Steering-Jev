@@ -343,7 +343,7 @@ stock_refill:
           mode: box
 stock_record_batch:
   name: Record a batch
-  description: Take one batch's dose from every stock tank now. For rooms without a mapped tank last-fill entity; with one, batches are counted from it and recording one here as well counts it twice. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.
+  description: Take one batch's dose from every stock tank now. For rooms without a mapped tank last-fill entity; with one, batches are counted from it and recording one here as well counts it twice. A tank linked to a dosing pump is skipped, because that pump's doses draw it; the answer lists the tanks skipped. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations are unaffected.
   fields:
     room_id:
       required: true
