@@ -34,6 +34,7 @@ import {
   canEdit,
   controllerReach,
   doseDeadline,
+  MAX_DOSE_S,
   dosingConfigId,
   dosingError,
   dosingStatusId,
@@ -527,7 +528,9 @@ export function Dosing({
                   ? view.reason
                   : !validMl
                     ? `Enter more than 0 and at most ${mL(max)} mL.`
-                    : null;
+                    : expected !== null && expected > MAX_DOSE_S
+                      ? `That dose would take ${seconds(expected)}: the controller refuses a dose longer than 20 minutes.`
+                      : null;
   const reviewDose = () => {
     if (!view || !validMl) return;
     setReview({

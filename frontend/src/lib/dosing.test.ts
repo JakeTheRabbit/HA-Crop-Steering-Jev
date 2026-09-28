@@ -256,6 +256,8 @@ describe("a pump's card", () => {
     // Past its expected time: full, and overdue; the controller cuts it at 1.25 × + 20 s.
     expect(doseProgress(running, NOW + 20_000)).toMatchObject({ share: 1, ml: 250, overdue: true });
     expect(doseDeadline(25)).toBe(51.25);
+    // The controller never lets a dose run past 20 minutes and a minute: nor does the page's clock.
+    expect(doseDeadline(5000)).toBe(1260);
     // Expected from the flow when the controller leaves it out; nothing without a target.
     expect(doseProgress({ ...running, expected_s: null }, NOW)!.expected).toBe(25);
     expect(doseProgress({ ...running, target_ml: null }, NOW)).toBeNull();
@@ -532,8 +534,12 @@ describe("requests", () => {
         "ran past its time",
         "not confirmed",
         "too old to act on",
+        "ended early",
+        "finished; input_datetime.tank could not be stamped",
+        "stopped; switch.pump does not read off",
+        "not confirmed; nothing drawn from its stock tank",
       ].map(resultTone),
-    ).toEqual(["on", "warn", "off", "off", "neutral"]);
+    ).toEqual(["on", "warn", "off", "off", "neutral", "off", "warn", "off", "off"]);
   });
 });
 

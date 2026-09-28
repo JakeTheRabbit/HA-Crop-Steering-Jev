@@ -398,7 +398,12 @@ export function doseProgress(runtime: PumpRuntime | null, now: number): DoseProg
   return { target, elapsed, expected, share, ml: target * share, overdue: elapsed > expected };
 }
 /** When the controller switches a pump off that is still dosing: expected × 1.25 + 20 s. */
-export const doseDeadline = (expected: number) => expected * 1.25 + 20;
+/** The controller's limits (DOSING.md): the least flow it trusts, the longest dose it runs, and
+ * the latest it lets one go before cutting the power. */
+export const MIN_FLOW_ML_S = 0.05;
+export const MAX_DOSE_S = 20 * 60;
+export const MAX_DEADLINE_S = MAX_DOSE_S + 60;
+export const doseDeadline = (expected: number) => Math.min(expected * 1.25 + 20, MAX_DEADLINE_S);
 
 export interface PumpView {
   pump: DosingPump;
@@ -449,7 +454,7 @@ export function pumpView(
   }
   if (deviceDosing(pump, states) === null)
     return view("unavailable", `${pump.dosing_entity} reports nothing.`);
-  if (!(flow !== null && flow > 0))
+  if (!(flow !== null && flow >= MIN_FLOW_ML_S))
     return view(
       "uncalibrated",
       flow === null
@@ -608,7 +613,7 @@ export function recipeRows(config: DosingConfig, states: States): RecipeRow[] {
       fromEntity: reading !== null,
       unreadable,
       flow,
-      seconds: ml > 0 && flow !== null && flow > 0 ? ml / flow : null,
+      seconds: ml > 0 && flow !== null && flow >= MIN_FLOW_ML_S ? ml / flow : null,
       skipped: !unreadable && ml <= 0,
       unknown: !pump,
     };
@@ -775,9 +780,11 @@ export const canEdit = (doc: DosingDocument | null, admin: boolean | null) =>
 
 /** A dose's or batch's result in a pill: finished green, stopped amber, a fault red. */
 export function resultTone(result: string): PillTone {
+  // A fault first: hardware that won't read off, a cut, no evidence it ran, an early end.
+  if (/does not read off|ran past|not confirmed|ended early|fail|refused/i.test(result)) return "off";
+  if (/^finished;/i.test(result)) return "warn"; // finished, with a warning after it
   if (/^finished/i.test(result)) return "on";
   if (/^stopped/i.test(result)) return "warn";
-  if (/ran past|not confirmed|fail|refused/i.test(result)) return "off";
   return "neutral";
 }
 export const resultWords = (result: string) =>
