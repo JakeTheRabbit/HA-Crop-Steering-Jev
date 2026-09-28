@@ -9,6 +9,7 @@ they prove is how two threads interleave.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
@@ -254,3 +255,11 @@ def test_the_dosing_thread_talks_to_home_assistant_over_its_own_session():
     thread.start()
     thread.join()
     assert seen[0] is seen[1] and seen[0] is not controller._S
+
+
+def test_the_supervisor_gives_the_app_time_to_stop_cleanly():
+    """docker stop waits `timeout` seconds after SIGTERM before it kills: 10 by default, too little for
+    the shot's safe-off plus dosing's way out (a switch-on in flight, the thread, each off)."""
+    config = (Path(controller.__file__).parents[1] / "config.yaml").read_text(encoding="utf-8")
+    found = re.search(r"^timeout:\s*(\d+)\s*$", config, re.M)
+    assert found and 30 <= int(found.group(1)) <= 300  # the Supervisor accepts 10 to 300
