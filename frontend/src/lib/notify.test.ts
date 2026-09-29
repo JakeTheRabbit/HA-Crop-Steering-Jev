@@ -270,10 +270,9 @@ describe("who may change a row, and what it is called", () => {
       code: "CS-202",
       title: "Plumbing and switches disagree, not watering",
     });
-    // CS-209 is new: Help's list does not have it yet.
     expect(watering.codes.find((item) => item.code === "CS-209")).toEqual({
       code: "CS-209",
-      title: null,
+      title: "No watering for a while",
     });
     expect(kindCoverage(DEMO_KINDS.find((kind) => kind.id === "phases")!).events).toEqual([
       "a zone changing phase",
