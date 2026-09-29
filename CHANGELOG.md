@@ -9,6 +9,47 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-09-30
+
+Pair: **controller 3.6.0**. Class **C3**. One pull request: #22, who gets which phone push (a checkbox per phone
+for each kind of alert, the rooms it covers, the pushes routed by the integration), with three new pushes: no
+watering for a while, a zone changing phase, Jev moving a setting. An adversarial review of the alert path
+found two ways a critical push could be lost and a loop that could stall; all fixed with tests (11 of 11
+mutation-checked). Checked by the lean, controller, real Home Assistant, dashboard and browser suites.
+
+### 🌱 In plain English
+
+- **Choose who gets what.** Settings & help › Notifications lists the site's phones with a checkbox for each kind of
+  alert: emergencies, hardware lockouts, sensors and drift, watering stopped, phase changes, stock tanks, dosing,
+  Jev, setup. Each phone can cover every room or only some, and has a **Send a test** button. Staff can change
+  their own phone's boxes; an administrator can change everyone's.
+- **New things to be told about.** A room that is on, with its lights on and a zone in P1 or P2, that has watered
+  nothing for 3 hours (you pick 1 to 12); a zone moving from one phase to the next; Jev moving a zone's shot size
+  or re-water point.
+- **Nothing is lost.** Until a phone is set up, every push goes where it always did. If the routing can't be
+  reached, a push goes there too. An emergency that no phone's row covers for its room goes to every phone that
+  gets emergencies, or to the phone set in the controller app when none does. Tapping any push opens Crop
+  Steering.
+
+### 🔧 Technical notes
+
+- Integration (#22): `notify_catalog.py` (the nine kinds; code → kinds, unknown codes by severity) and
+  `notify_api.py` (one site-wide store `crop_steering.notify`; services `notify_get`, `notify_save`,
+  `notify_test`, `notify`; `sensor.crop_steering_notify_config`; phones listed from mobile_app registrations with
+  their owner; each phone sent to at once with an 8 s limit; `data.tag`, the panel link and, for emergencies,
+  high-priority keys on mobile_app services only; an emergency no row covers goes to every phone that takes
+  emergencies; Repairs cards CS-601 to CS-608 pushed when raised; a store that can't be read is logged, and
+  a kind a newer version saved is dropped rather than the whole setup).
+- Controller (#22): `_alert` routes through `crop_steering.notify` when a phone is set up and falls back to
+  `notify_service` when the call fails or an emergency reaches nobody (never both); the setup sensor is read by
+  the loop, never waited on by an alert; phase changes and Jev's setpoint moves queued, one push per room and
+  kind, sent after the loop's shots within 10 s; CS-209 idle watchdog (clock rebuilt after a restart); a pump
+  whose turn_on errored (CS-302) and a batch's mix pump that did not start (CS-805) are switched off before
+  their alert.
+- Dashboard (#22): Settings & help › Notifications (grid on a computer, a card per phone on a phone, what each
+  kind covers, add a phone, review before save, rooms nobody gets emergencies for).
+- docs/NOTIFICATIONS.md is the contract.
+
 ## [3.5.0] - 2026-09-28
 
 Pair: **controller 3.5.0**. Class **C3**. One pull request: #19, batch-tank dosing (a page per room's tank, single
