@@ -108,6 +108,17 @@ describe("the menu", () => {
     expect(routeHash({ page: "equipment/dosing" })).toBe("#/equipment/dosing");
     expect(canonicalHash("#/equipment/dosing")).toBeNull();
   });
+  it("opens the site's notifications under Settings & help", () => {
+    expect(parseRoute("#/settings/notifications")).toEqual({
+      route: { page: "settings/notifications" },
+      canonical: true,
+    });
+    expect(sectionOf("settings/notifications")).toBe("settings");
+    expect(routeHash({ page: "settings/notifications" })).toBe("#/settings/notifications");
+    expect(canonicalHash("#/settings/notifications")).toBeNull();
+    // Settings itself stays where it was.
+    expect(parseRoute("#/settings").route.page).toBe("settings");
+  });
   it("tells two zones apart, and the same page apart from nothing", () => {
     expect(sameRoute({ page: "zone", zone: 1 }, { page: "zone", zone: 2 })).toBe(false);
     expect(sameRoute({ page: "zone", zone: 1 }, { page: "zone", zone: 1 })).toBe(true);

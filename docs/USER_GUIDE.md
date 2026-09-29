@@ -1,6 +1,6 @@
 # User guide
 
-The menu has five entries. **Today** says whether the room is OK and which zone needs you. **Plan** holds the zones' **Targets** and the grow plan's **Schedule**. **History** holds the **Timeline**, **Water use** and **Compare runs**. **Equipment** holds **Probes**, **Stock tanks**, **Tank & pump**, **Dosing** and **Setup**. **Settings & help** holds **Settings** and **Help**. Every zone has its own page, opened from its card on Today. Select the room before editing; zone numbers belong to that room.
+The menu has five entries. **Today** says whether the room is OK and which zone needs you. **Plan** holds the zones' **Targets** and the grow plan's **Schedule**. **History** holds the **Timeline**, **Water use** and **Compare runs**. **Equipment** holds **Probes**, **Stock tanks**, **Tank & pump**, **Dosing** and **Setup**. **Settings & help** holds **Settings**, **Notifications** and **Help**. Every zone has its own page, opened from its card on Today. Select the room before editing; zone numbers belong to that room.
 
 Old bookmarks still work and open the page that holds their content now:
 
@@ -33,6 +33,8 @@ New installation? Start with [Install, upgrade and rollback](INSTALL.md). To try
 | Save configuration (Equipment › Setup)   | HA room/zone setup; wait for controller acknowledgement.               |
 | Dose, make a batch, stop (Equipment › Dosing) | A request the controller carries out; the page switches nothing.  |
 | Save the dosing setup (Equipment › Dosing) | HA's stored dosing setup for the room; the controller reads it.      |
+| Save notifications (Settings & help › Notifications) | HA's stored notification setup for the whole site; the next push follows it. |
+| Send a test (Settings & help › Notifications) | One push to that phone; nothing is saved.                     |
 
 ## Try the demo
 
@@ -45,6 +47,7 @@ The demo is an isolated software demonstration. Its readings, history, example p
 5. Open **History**: filter the **Timeline**, read **Water use**, and open **Compare runs** to line up the demo's current run with the previous one by grow week.
 6. Open **Equipment › Setup** to try entity search, room/zone names and mapping review. Demo actions do not call your HA server.
 7. Open **Equipment › Dosing**: dose a pump, make a batch and stop it. The demo's pumps, valves and float move as real ones would, faster than real time.
+8. Open **Settings & help › Notifications**: tick a kind of alert for a phone, save it through the review, and send a test (the demo sends nothing). Add `&notify-user=callum` to the address to open it as Callum, who is not an administrator.
 
 A production recipe library starts empty. Demo recipes are interface examples and are stored separately from production libraries. Existing demo libraries, including deliberately empty or corrupt ones, are left unchanged.
 
@@ -242,6 +245,23 @@ After an update, the first person to open the dashboard sees **What's new**: the
 **Help** lists every error code an alert or Repairs card can end with (such as CS-101), searchable, with what it means, what happens to watering meanwhile, likely causes and fixes; `#/help?code=CS-101` opens one. Its glossary explains VWC, pore EC, dryback, the four phases, steering and runoff.
 
 For an existing timed zone hold, Home Assistant exposes the `crop_steering.set_manual_override` action. The action refuses a signed-in user who is not an administrator (automations can still call it); the switch itself follows Home Assistant's own user permissions. Its timeout defaults to 60 minutes and accepts 1-1440 minutes; specify the intended zone and room slug (omit the room for the legacy default room). Clearing the hold is distinct from enabling zone/room scheduling. Turning its switch on directly creates an indefinite hold. See the action's fields in HA and the [entity reference](ENTITIES.md).
+
+## Settings & help › Notifications
+
+Every alert is still a Home Assistant notification, as before. This page chooses who gets a phone push for what, for the whole site: a row per phone, a checkbox per kind of alert, and a push goes only to the phones whose row ticks its kind. An alert that falls under two ticked kinds reaches that phone once. [Notifications](NOTIFICATIONS.md) describes what the integration, the controller and this page each do.
+
+- **The grid**: each row is a phone, named by whose it is and the device; a notify service that is not one of the site's phones, such as a group, shows its name (`notify.family`). Each column is a kind of alert: Emergencies, Hardware lockouts, Sensors and drift, Watering stopped, Phase changes, Stock tanks, Dosing, Jev, and Setup and settings. Open a column's heading for what it covers: its alert codes with their titles (each opens Help), and the pushes that are not alerts, a zone changing phase and Jev moving a setting.
+- **Rooms**: **All**, or the rooms you choose. Taking the last chosen room out covers every room again.
+- **High priority for emergencies**: critical alerts reach that phone as high-priority, time-sensitive pushes.
+- **Send a test**: one push to that phone, and beside the button whether it went.
+- **Watering stopped**: "Tell me when a room has watered nothing for 3 hours with the lights on", from 1 to 12 hours. The controller then raises CS-209 for the room and pushes it to the phones that tick Watering stopped, again every so many hours while it lasts; the next shot ends it. The clock runs only while a zone is in P1 or P2, not in the morning dryback or overnight.
+- **Add a phone** (administrators): one of the site's phones not listed yet, or any notify service by its name. A new row starts with Emergencies ticked for every room. The bin beside a row removes it.
+
+Changes are a draft until **Review and save**: the review lists what changes for each phone, and nothing is saved before it. If someone else saved meanwhile, the page reads their setup again with your changes kept on top, and asks you to check them and save again. A room no row sends emergencies to is named above the grid: "Nobody gets emergencies for Flower 1".
+
+A Home Assistant administrator changes every row, adds and removes phones and sets the threshold. Anyone else sees every row but ticks only their own phone's, and tests only that phone: "Only an administrator can change other people's phones". On a phone, the grid is a card per phone with the same checkboxes.
+
+With no phone listed, every push goes to the controller app's `notify_service` option, the way it always has, so an installation that never opens this page behaves as before.
 
 ## A daily routine
 
