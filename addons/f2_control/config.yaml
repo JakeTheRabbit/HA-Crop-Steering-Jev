@@ -35,6 +35,8 @@ options:
   instance_name: Crop Steering
   feed_ec_sensor: ""
   feed_ph_sensor: ""
+  sump_power_sensor: ""
+  sump_silent_hours: 3
   hold_entities: []
   substrate_l: 5
   flow_lps: 0.02
@@ -59,6 +61,8 @@ schema:
   instance_name: str?
   feed_ec_sensor: str?
   feed_ph_sensor: str?
+  sump_power_sensor: str?
+  sump_silent_hours: float?
   hold_entities:
     - str
   substrate_l: float

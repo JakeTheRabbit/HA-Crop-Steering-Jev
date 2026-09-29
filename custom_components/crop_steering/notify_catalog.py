@@ -19,7 +19,8 @@ KINDS = (
         "detail": "Every alert whose severity is critical",
         # Every code whose severity is critical in docs/error-codes.json.
         "codes": _codes(
-            "CS-201 CS-202 CS-203 CS-204 CS-207 CS-301 CS-308 CS-402 CS-601 CS-606 CS-801"
+            "CS-201 CS-202 CS-203 CS-204 CS-207 CS-301 CS-308 CS-310 CS-311 CS-402 "
+            "CS-601 CS-606 CS-801"
         ),
         "events": (),
     },
@@ -27,9 +28,10 @@ KINDS = (
         "id": "hardware",
         "name": "Hardware lockouts",
         "detail": "A pump or valve that did not do what it was told, a hardware hold, a shot "
-        "cut, and water that isn't reaching a zone",
+        "cut, water that isn't reaching a zone, a table that isn't draining and a sump pump that stopped",
         "codes": _codes(
-            "CS-301 CS-302 CS-303 CS-304 CS-305 CS-306 CS-307 CS-308 CS-309 CS-701"
+            "CS-301 CS-302 CS-303 CS-304 CS-305 CS-306 CS-307 CS-308 CS-309 CS-310 CS-311 "
+            "CS-701"
         ),
         "events": (),
     },
