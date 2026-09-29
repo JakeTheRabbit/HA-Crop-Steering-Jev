@@ -331,6 +331,22 @@ def _on_since_shot(history, started):
 # daily budget) still applies to them.
 PLAN_HOLD_EXEMPT = frozenset({"p3_emergency", "watchdog", "min_daily", "blind_fallback", "blind_copy_rescue"})
 
+# Who gets which phone push is the integration's, for the whole site (docs/NOTIFICATIONS.md): it publishes how
+# many phones are set up, and the watering-stopped threshold, here. Read at most once a minute.
+NOTIFY_CONFIG = "sensor.crop_steering_notify_config"
+NOTIFY_CONFIG_S = 60.0
+# How long crop_steering.notify may take to push to the phones: what a push to notify_service always could.
+NOTIFY_TIMEOUT_S = 12
+# The most one loop spends sending its phase changes and Jev's moves: they are only news, and the loop is not.
+EVENTS_BUDGET_S = 10.0
+# The codes whose severity is critical in docs/error-codes.json (tests/test_error_codes.py keeps the two equal):
+# their push is urgent, a high-priority one on a phone whose row asks for that.
+CRITICAL_CODES = frozenset({"CS-201", "CS-202", "CS-203", "CS-204", "CS-207", "CS-301", "CS-308", "CS-402",
+                            "CS-601", "CS-606", "CS-801"})
+# CS-209: hours with the lights on, a zone in P1 or P2 and no shot in the room: the integration's idle_hours,
+# kept inside 1 to 12, else 3.
+IDLE_HOURS, IDLE_HOURS_RANGE = 3.0, (1.0, 12.0)
+
 # A room's choice of how Water today reads, select.crop_steering_<prefix>water_today_view. The integration
 # offers ["Zone total", PER_PLANT] (WATER_TODAY_VIEWS in its const.py); the vitals follow it.
 PER_PLANT = "Per plant"
@@ -2251,9 +2267,10 @@ class Controller:
         self._alerted[key] = datetime.now()
         self._alert_codes[key] = code
         dom, _, svc = self.notify_service.partition("/")
+        recipients = self._notify_config()[0]  # phones set up in the integration (docs/NOTIFICATIONS.md)
         push = True
         triage = getattr(getattr(self, "jev", None), "triage", None)
-        if dom and svc and triage is not None:
+        if (recipients or (dom and svc)) and triage is not None:
             try:  # Jev's Alerts judge: whether this alert's repeats keep buzzing a phone (docs/JEV.md)
                 push, why = triage.push(key, code, title, message, datetime.now())
                 jev_bridge.triaged(self, room, zone, key, code, title, push, why)
@@ -2262,9 +2279,206 @@ class Controller:
             except Exception as e:
                 push = True
                 log("jev triage error", key, e)
-        if dom and svc and push:
-            ha_call(dom, svc, title=title, message=message)
+        if push:
+            self._push(key, code, title, message, room, zone, recipients)
         return True
+
+    def _push(self, key, code, title, message, room, zone, recipients):
+        """An alert's phone push (docs/NOTIFICATIONS.md). With phones set up in the integration it goes through
+        crop_steering.notify to the ones whose row ticks its kind of alert, and nothing is pushed here. With none,
+        or when that call fails, it goes to the notify_service option exactly as it always did: never both, and
+        never lost to the router."""
+        if recipients:
+            try:
+                if self._route(key, code, None, room, zone, title, message, code in CRITICAL_CODES):
+                    return
+            except Exception as e:  # whatever goes wrong, the push goes the old way
+                log("notify: crop_steering.notify failed", key, e)
+        dom, _, svc = self.notify_service.partition("/")
+        if dom and svc:
+            ha_call(dom, svc, title=title, message=message)
+        else:
+            log("notify: the push for", key, "went to no phone: none takes it in Crop Steering, and the "
+                "notify_service option is empty")
+
+    def _route(self, key, code, event, room, zone, title, message, urgent=False, timeout=NOTIFY_TIMEOUT_S):
+        """Hand one push to crop_steering.notify, asking for its answer -> True when the integration took it: sent
+        to the phones that ask for it, or to none because none does. False when it could not be asked, refused it
+        (HTTP 4xx or 5xx, no answer in `timeout`), sent it nowhere and said why (nobody set up after all, or every
+        phone it tried failed), or when an emergency (`urgent`) reached no phone at all."""
+        data = {"key": key, "title": title, "message": message}
+        for name, value in (("code", code), ("event", event), ("zone", zone)):
+            if value is not None:
+                data[name] = value
+        if room is not None:
+            data["room"] = room.prefix
+        if urgent:
+            data["urgent"] = True
+        status, answer = ha_service_response("crop_steering", "notify", data, timeout)
+        if status is None or not 200 <= status < 300:
+            log("notify: crop_steering.notify did not take", key, "HTTP", status)
+            return False
+        sent = answer.get("sent_to") if isinstance(answer, dict) else None
+        if isinstance(answer, dict) and answer.get("error") and not sent:
+            log("notify: crop_steering.notify sent", key, "to nobody:", answer["error"])
+            return False
+        if urgent and not sent:  # an emergency must reach a phone: the notify_service option is tried next
+            log("notify: emergency", key, "reached no phone through crop_steering.notify")
+            return False
+        return True
+
+    def _notify_config(self, refresh=False):
+        """(recipients, idle_hours) from the integration's sensor.crop_steering_notify_config: read by each loop at
+        most once a minute (`refresh`), and otherwise the last reading, so an alert never waits on the read. An
+        integration without it (older than notifications) or unable to read its store: (0, 3.0), so every push
+        goes to the notify_service option exactly as before and CS-209 counts 3 hours."""
+        now = time.monotonic()
+        cached = getattr(self, "_notify_cfg", None)
+        if cached is not None and (not refresh or 0 <= now - cached[0] < NOTIFY_CONFIG_S):
+            return cached[1]
+        attrs = ha_get(NOTIFY_CONFIG)[1]
+        attrs = attrs if isinstance(attrs, dict) else {}
+        try:
+            recipients = max(0, int(attrs.get("recipients") or 0))
+        except (TypeError, ValueError):
+            recipients = 0
+        try:
+            idle = float(attrs.get("idle_hours"))
+        except (TypeError, ValueError):
+            idle = IDLE_HOURS
+        idle = min(IDLE_HOURS_RANGE[1], max(IDLE_HOURS_RANGE[0], idle)) if math.isfinite(idle) else IDLE_HOURS
+        self._notify_cfg = (now, (recipients, idle))
+        return recipients, idle
+
+    def _notify_event(self, event, room, zone, *detail):
+        """A phase change ("phase": was, to, why) or a setting Jev moved ("jev_setpoint": words, why): not an
+        alert, so no card, and pushed only through crop_steering.notify, never to the notify_service option
+        (docs/NOTIFICATIONS.md). Queued, and sent once the loop's shots are done (_send_events), so a slow Home
+        Assistant never holds one up."""
+        self.__dict__.setdefault("_events", []).append((event, room, zone, detail))
+
+    def _send_events(self):
+        """The events queued this loop, to the phones that ask for them, when any phone is set up at all: one push
+        per room and kind (lights-off moves every zone at once), within EVENTS_BUDGET_S for the lot. One that
+        fails, or is left when the time is up, is logged and dropped: an event is never worth a retry, nor a push
+        to notify_service."""
+        events = self.__dict__.pop("_events", None) or []
+        if not events or not self._notify_config()[0]:
+            return
+        grouped = {}
+        for event, room, zone, detail in events:
+            grouped.setdefault((event, room.slug), (event, room, []))[2].append((zone, detail))
+        deadline = time.monotonic() + EVENTS_BUDGET_S
+        for event, room, items in grouped.values():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                log("notify: no time left this loop, not sent:", event, room.slug, len(items))
+                continue
+            try:
+                zone = items[0][0] if len(items) == 1 else None
+                title, message = self._event_text(event, room, items)
+                key = f"{event}_{room.slug}" + (f"_z{zone}" if zone is not None else "")
+                self._route(key, None, event, room, zone, title, message, timeout=min(NOTIFY_TIMEOUT_S, left))
+            except Exception as e:
+                log("notify: event not sent", event, room.slug, e)
+
+    def _event_text(self, event, room, items):
+        """A room's events of one kind this loop as one push -> (title, message): one zone's in its own words, or
+        a line for each ("Zone 1: P2 → P3, lights-off -> P3")."""
+        moves = []
+        for zone, detail in items:
+            if event == "phase":
+                was, to, why = detail
+                moves.append((zone, f"{was} → {to}", why))
+            else:
+                words, why = detail
+                moves.append((zone, f"Jev changed {words}", why))
+        if len(moves) == 1:
+            zone, head, why = moves[0]
+            return f"{self._where(room, zone)}: {head}", why or head
+        what = "phase changes" if event == "phase" else "settings Jev changed"
+        name = self._where(room)
+        title = f"{name}: {what}" if name else what[:1].upper() + what[1:]
+        return title, "\n".join(
+            f"{self._zone_title(room, zone)}: {head}" + (f", {why}" if why else "") for zone, head, why in moves
+        )
+
+    # ---------- CS-209: no watering for a while ----------
+    def _watch_idle(self, room, now, lights_on, pub):
+        """CS-209 (docs/NOTIFICATIONS.md): the room is on, its lights are on and a zone is in P1 or P2, and no zone
+        has had a shot for idle_hours. The clock starts when that holds and again at every shot in the room; the
+        card comes at idle_hours and again each idle_hours after while it lasts, and goes at the next shot, or
+        once lights-off or P0 and P3 end it. A room that is off never reaches here (_loop_room)."""
+        if not (lights_on and any(room.state[z].get("phase") in ("P1", "P2") for z in room.zones)):
+            self._idle_reset(room, now)
+            return
+        began = getattr(room, "_idle_began", None)
+        if began is None:
+            began = room._idle_began = self._idle_start(room, now)
+        shots = [room.state[z].get("last_shot") for z in room.zones if not room.state[z].get("last_shot_is_anchor")]
+        start = max([began, *(shot for shot in shots if isinstance(shot, datetime))])
+        if start != getattr(room, "_idle_from", None):  # the clock started, or a shot restarted it
+            room._idle_from, room._idle_raised = start, 0
+            self._idle_dismiss(room)
+        hours = self._notify_config()[1]
+        idle = (now - start).total_seconds() / 3600.0
+        due = int(idle // hours)
+        if due > getattr(room, "_idle_raised", 0) and self._alert(
+            f"idle_{room.slug}",
+            "CS-209",
+            "no watering for a while",
+            f"Nothing in this room has been watered for {idle:.1f} hours while its lights were on and a zone "
+            f"was in P1 or P2. {self._idle_why(room, pub)} This is said again every "
+            f"{'hour' if hours == 1 else f'{hours:g} hours'} while it lasts, and clears itself at the next shot.",
+            room=room,
+            quiet=False,
+        ):
+            room._idle_raised, room._idle_card = due, True
+
+    def _idle_start(self, room, now):
+        """When the room's CS-209 clock began, as far as can be told: after the last loop that saw it not running
+        (lights off, no zone in P1 or P2, the room off), after today's lights-on and after the first zone now in P1
+        or P2 moved there. After a restart that is what the saved state says, so a restart does not reset it; a
+        zone now in P2 ramped in P1 before that, so it is never earlier than the truth."""
+        lights_on = datetime.combine(self._grow_day_start(room, now), datetime.min.time())
+        moved = [room.state[z].get("last_phase_change") for z in room.zones
+                 if room.state[z].get("phase") in ("P1", "P2")]
+        moved = [when for when in moved if isinstance(when, datetime)]
+        times = [lights_on + timedelta(hours=room.lights_on_hour), getattr(room, "_idle_off", None),
+                 min(moved) if moved else None]
+        return min(now, max(t for t in times if t is not None))
+
+    def _idle_reset(self, room, now):
+        """CS-209's clock is not running: it may start only after now, and its card goes."""
+        room._idle_began, room._idle_from, room._idle_off = None, None, now
+        self._idle_dismiss(room)
+
+    def _idle_dismiss(self, room):
+        """Take CS-209's card down when one may be up: after this controller raised it, and once after a start,
+        whatever the last run left."""
+        if getattr(room, "_idle_card", None) is False:
+            return
+        key = f"idle_{room.slug}"
+        if ha_call("persistent_notification", "dismiss", notification_id=f"f2_{key}"):
+            room._idle_card = False
+        self._alerted.pop(key, None)
+        self._alert_codes.pop(key, None)
+
+    def _idle_why(self, room, pub):
+        """Why nothing has been watered, as far as this pass can tell: watering switched off, a hold (_blocked), or
+        nothing called for water."""
+        if not self._on(room.enable_flag, False):
+            return f"Watering is switched off in this room: its engine switch ({room.enable_flag}) is off."
+        holds = []
+        for zone in sorted(room.zones):
+            if room.state[zone].get("phase") in ("P1", "P2"):
+                hold = (pub.get(zone) or {}).get("block") or self._blocked(room, zone)
+                if hold:
+                    holds.append(f"{self._zone_title(room, zone)}: {hold}")
+        if holds:
+            return f"Watering is held. {'; '.join(holds)}."
+        return ("Nothing called for water: no zone in P1 or P2 dried to the point where the engine waters it. If "
+                "the plants are drinking, check the probes and each zone's re-water point.")
 
     def _dosing_alert(self, room, code, title, message, event=None, quiet=False):
         """An alert the dosing runner raised (docs/DOSING.md) -> True once Home Assistant has it (the
@@ -2929,6 +3143,7 @@ class Controller:
             # Pump and mainline are optional (a one-switch tent has neither): each is sequenced when
             # mapped and skipped, with its lead time, when not. The valve is always required.
             if pump and not ha_call("switch", "turn_on", entity_id=pump):
+                ha_call("switch", "turn_off", entity_id=pump)  # it may be on all the same: off before the alert
                 self._alert(
                     f"hw_{room.slug}_z{zone}",
                     "CS-302",
@@ -3382,6 +3597,7 @@ class Controller:
     def loop_once(self, now):
         if self._busy:
             return
+        self._notify_config(refresh=True)  # who gets pushes, read here so an alert never waits on it
         self._watch_dosing()
         self._recover_hardware_faults()
         self._reconcile_inflight()
@@ -3402,6 +3618,7 @@ class Controller:
             all_pub[room.slug] = pub
         self._check_defaulted_setpoints()
         self._maybe_notify(all_pub, now)
+        self._send_events()
 
     def _blind_time_transition(self, room, zone, now, lights_on, lights_just_on):
         """Time-only phase forces for a BLIND zone (dead/missing probe), so it can never
@@ -3414,21 +3631,24 @@ class Controller:
         gds = self._grow_day_start(room, now)
         new_grow_day = self._new_grow_day(room, st, now, lights_on)
         new_phase = None
+        why = None
         if not lights_on and st["phase"] != "P3":
-            new_phase = "P3"
+            new_phase, why = "P3", "lights-off (no moisture reading)"
         elif st["phase"] == "P3" and (lights_just_on or new_grow_day):
-            new_phase = "P0"
+            new_phase, why = "P0", "lights-on (no moisture reading)"
         elif st["phase"] in ("P1", "P2") and new_grow_day:
-            new_phase = "P0"
+            new_phase, why = "P0", "a new grow-day (no moisture reading)"
         if new_phase and new_phase != st["phase"]:
             if new_phase == "P0":
                 st["daily_vol"], st["shots"] = 0.0, 0
                 st["ec_offset"], st["last_ec_steer"] = 0.0, None
                 st["ec_integral"], st["ec_prev_err"] = 0.0, 0.0
                 st["last_daily_reset"] = gds
+            was = st["phase"]
             st["phase"] = new_phase
             st["last_phase_change"] = now
             self._save_state()
+            self._notify_event("phase", room, zone, was, new_phase, why)
 
     def _apply_phase_request(self, room, zone, st, now):
         """Move a zone to the phase the operator picked on its Set Phase select, once. The select is
@@ -3456,6 +3676,7 @@ class Controller:
         self._activity.insert(0, f"{now.strftime('%H:%M')} {tag}Z{zone} phase {was} -> {wanted}, set by hand"[:120])
         log(f"[{room.slug}] Z{zone} phase {was} -> {wanted}: set by hand")
         self._save_state()
+        self._notify_event("phase", room, zone, was, wanted, "set by hand")
 
     def _strategy_preflight(self, room, zone, now):
         if getattr(room, "_strategy_batch_invalid", False):
@@ -3517,6 +3738,7 @@ class Controller:
         """One room's full control pass: snapshot -> decide -> act -> build the publish dict.
         Reads/writes only this room's prefixed entities + its own state."""
         if getattr(room, "setup_active", True) is False:
+            self._idle_reset(room, now)
             return {}
         active, was = self._room_active(room), getattr(room, "_was_room_active", None)
         room._was_room_active = active
@@ -3526,6 +3748,7 @@ class Controller:
                 self._save_state()
             if was is not False:
                 self._room_switched_off(room)
+            self._idle_reset(room, now)  # CS-209 runs only while the room is on
             self._publish_room_off(room, now)
             return {}  # no snapshot, no decision, no blind schedule, no alerts, no vitals line
         if was is False:
@@ -3595,6 +3818,8 @@ class Controller:
                 new_phase, new_thr, fire, size, reason = decide(snap, p)
             shown = snap  # what waiting_for reads: the snapshot, in the phase the zone is now in
             if new_phase != st["phase"]:
+                # decide()'s reason leads with why the phase moved ("lights-off -> P3 | ..."): the push says it.
+                self._notify_event("phase", room, zone, st["phase"], new_phase, str(reason).split(" | ")[0])
                 if new_phase == "P0":
                     st["daily_vol"], st["shots"], st["peak"] = 0.0, 0, snap.vwc
                     st["ec_offset"], st["last_ec_steer"] = 0.0, None
@@ -3819,6 +4044,10 @@ class Controller:
                 jev_bridge.publish(self, room, now, ha_set)
             except Exception as e:
                 log("jev publish error", room.slug, e)
+        try:  # CS-209 only ever tells: it can never stop the room being watered
+            self._watch_idle(room, now, lights_on, pub)
+        except Exception as e:
+            log("idle watch error", room.slug, e)
         room._was_lights_on = lights_on
         return pub
 

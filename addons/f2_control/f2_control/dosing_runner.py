@@ -1022,7 +1022,7 @@ class DosingRunner:
             raise _Ended(f"{', '.join(closed)} did not open")
         self._on(job, pump)
         if self._confirm([pump], "on"):
-            self._mix_alert(job, f"The mix pump ({pump}) was switched on, but does not read on")
+            self._mix_alert(job, pump, f"The mix pump ({pump}) was switched on, but does not read on")
             raise _Ended(f"the mix pump ({pump}) did not read on")
         watts, sensor = float(batch.get("mix_min_w") or 0), batch.get("mix_power_sensor")
         if watts > 0 and sensor:
@@ -1032,7 +1032,7 @@ class DosingRunner:
                 if drawn is not None and drawn >= watts:
                     break
                 if self._mono() - began >= MIX_POWER_S:
-                    self._mix_alert(job, f"The mix pump ({pump}) was switched on, but {sensor} did not "
+                    self._mix_alert(job, pump, f"The mix pump ({pump}) was switched on, but {sensor} did not "
                                     f"read {watts:g} W within {MIX_POWER_S:.0f} seconds (it reads "
                                     f"{self._state(sensor)})")
                     raise _Ended(f"the mix pump did not draw {watts:g} W within {MIX_POWER_S:.0f} s")
@@ -1040,7 +1040,8 @@ class DosingRunner:
                 self._wait(job, READ_S)
         self._done(job)
 
-    def _mix_alert(self, job, what):
+    def _mix_alert(self, job, pump, what):
+        self._send_off(pump)  # before the alert, whose push can take a while; the batch's end reads it back
         self._alert(job.room.slug, "CS-805", "the mixing pump did not start",
                     f"{what}. The batch stops here and the mix pump and valves are switched off. Check "
                     "the pump, its power sensor, and that the mix valves open.", _event(job.started_at))

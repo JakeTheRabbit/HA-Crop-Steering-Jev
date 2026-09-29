@@ -38,6 +38,8 @@ CHANGES = {
     "dosing_save": {"room_id": ROOM, "expected_revision": 0, "pumps": [], "batch": {}},
     # A stop is the one dosing request anyone may make (test_an_ordinary_user_may_stop_dosing).
     "dosing_request": {"room_id": ROOM, "action": "dose", "pump": "balance", "ml": 5},
+    # A push to the phones: the controller app's, as Home Assistant's administrator Supervisor user.
+    "notify": {"key": "k", "title": "t", "message": "m"},
     "save_recipe": {"recipe": {}},
     "apply_recipe": {},
     "set_manual_override": {"zone": 1},
@@ -52,11 +54,18 @@ READS = {
     "runs_get": {"room_id": ROOM},
     "stock_get": {"room_id": ROOM},
     "dosing_get": {"room_id": ROOM},
+    "notify_get": {},
     "whats_new_get": {},
 }
 # Changes nothing but whether the dashboard's What's new window shows again: whoever opens the
 # dashboard first after an update may dismiss it, administrator or not.
 NOTICES = {"whats_new_seen": {"version": "2.0.0"}}
+# Anyone signed in may tick what their own phone gets and test it; the store refuses the rest row by
+# row (tests_ha/test_notify.py).
+PER_USER = {
+    "notify_save": {"expected_revision": 0, "recipients": [{"service": "notify.someone_elses"}]},
+    "notify_test": {"service": "notify.someone_elses"},
+}
 EVENTS = ("crop_steering_manual_override",)
 
 
@@ -83,7 +92,9 @@ async def test_an_ordinary_user_can_look_and_changes_nothing(hass):
     assert not staff.is_admin
     assert hass.data[frontend.DATA_PANELS]["crop-steering"].require_admin is False  # still shown
     # Every service the integration registers is one or the other: nothing new slips through.
-    assert set(hass.services.async_services()[DOMAIN]) == set(CHANGES) | set(READS) | set(NOTICES)
+    assert set(hass.services.async_services()[DOMAIN]) == (
+        set(CHANGES) | set(READS) | set(NOTICES) | set(PER_USER)
+    )
     fired = []
     for event in EVENTS:
         hass.bus.async_listen(event, fired.append)
@@ -94,6 +105,10 @@ async def test_an_ordinary_user_can_look_and_changes_nothing(hass):
             await _call(hass, staff, name, data)
     for name, data in NOTICES.items():
         assert "seen" in await _call(hass, staff, name, data)
+    # Someone else's phone: reached with who they are, and refused by the store.
+    for name, data in PER_USER.items():
+        assert (await _call(hass, staff, name, data))["error"].startswith("not allowed: ")
+    assert hass.states.get("sensor.crop_steering_notify_config").state == "0"
     await hass.async_block_till_done()
     assert hass.states.get(OVERRIDE).state == "off"
     assert dict(hass.states.get(PLAN).attributes) == plan  # not saved, armed or disarmed

@@ -16,6 +16,7 @@ export type Page =
   | "equipment/dosing"
   | "equipment/setup"
   | "settings"
+  | "settings/notifications"
   | "help";
 
 export interface Route {
@@ -38,6 +39,7 @@ export const PAGES: readonly Page[] = [
   "equipment/dosing",
   "equipment/setup",
   "settings",
+  "settings/notifications",
   "help",
 ];
 

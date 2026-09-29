@@ -1,5 +1,6 @@
 import { RunDemo } from "./comparison-demo";
 import { DosingDemo } from "./dosing-demo";
+import { NotifyDemo } from "./notify-demo";
 import { StockDemo } from "./stock-demo";
 import type {
   OperatorAction,
@@ -24,6 +25,7 @@ export class OperatorDemo {
   /** From the start: the tanks drew what the demo's dosing history dosed before it began. */
   private stockDemo: StockDemo;
   private dosingDemo?: DosingDemo;
+  private notifyDemo?: NotifyDemo;
   private plans = new Map<string, StrategyDocument>();
   private rooms: SetupRoom[] | null = null;
   /** The last release What's new showed: the demo's own unless the page asks otherwise. */
@@ -32,6 +34,8 @@ export class OperatorDemo {
     private getStates: () => States,
     private updateStates: (states: States) => void,
     whatsNew: string | null = null,
+    /** Whose phone the notifications demo answers as; null: Ben, an administrator. */
+    private notifyUser: string | null = null,
   ) {
     this.stockDemo = new StockDemo(getStates, updateStates);
     this.whatsNewSeen =
@@ -289,6 +293,10 @@ export class OperatorDemo {
       // A saved setup can link a pump to another tank: the integration rewrites the stock sensor.
       if (action === "dosing_save" && !result.error) this.stockDemo.publish(String(data.room_id));
       return result as T;
+    }
+    if (action.startsWith("notify_")) {
+      this.notifyDemo ||= new NotifyDemo(this.getStates, this.updateStates, this.notifyUser);
+      return this.notifyDemo.call(action, data) as T;
     }
     let result: unknown;
     if (action.startsWith("strategy_")) {

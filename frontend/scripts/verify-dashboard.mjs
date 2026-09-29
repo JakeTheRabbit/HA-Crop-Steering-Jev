@@ -233,6 +233,7 @@ try {
     ["equipment/dosing", "Dosing"],
     ["equipment/setup", "Rooms & setup"],
     ["settings", "Settings"],
+    ["settings/notifications", "Notifications"],
     ["help", "Help"],
   ];
   const sectionOf = (route) =>
@@ -1613,6 +1614,348 @@ try {
     await page.evaluate(() => (location.hash = "#/settings"));
     await choice.getByRole("button", { name: "Zone total", exact: true }).click();
   });
+  await check(
+    "notifications: a checkbox per phone and kind, saved through the review, a test push, others' phones read-only; only notify_save and notify_test are sent",
+    async () => {
+      const table = page.locator("table.notify-table");
+      const rows = table.locator("tbody tr");
+      const box = (name, on = page) => on.getByRole("checkbox", { name, exact: true });
+      const rooms = (name) => page.getByRole("group", { name: `${name}: rooms`, exact: true });
+      const ticked = (service) =>
+        page
+          .locator(`tr[data-notify-row="${service}"] input[data-kind]`)
+          .evaluateAll((boxes) =>
+            boxes.filter((item) => item.checked).map((item) => item.dataset.kind),
+          );
+      const review = page.getByRole("dialog", { name: "Save notifications?" });
+      const saveDraft = () => page.getByRole("button", { name: /^Review and save/ }).click();
+      const discard = () =>
+        page.getByRole("button", { name: "Discard draft", exact: true }).click();
+      await go("settings/notifications");
+      await expectVisible(table);
+      // The demo's saved setup: Ben everything, Callum hardware lockouts, stock tanks and dosing,
+      // Stewart emergencies only; a column per kind, in the order notify_get gives them.
+      assert.equal(await rows.count(), 3);
+      assert.deepEqual(await table.locator("tbody .notify-phone-name").allInnerTexts(), [
+        "Ben",
+        "Callum",
+        "Stewart",
+      ]);
+      assert.deepEqual(await table.locator("thead [data-kind]").allInnerTexts(), [
+        "Emergencies",
+        "Hardware lockouts",
+        "Sensors and drift",
+        "Watering stopped",
+        "Phase changes",
+        "Stock tanks",
+        "Dosing",
+        "Jev",
+        "Setup and settings",
+      ]);
+      assert.equal((await ticked("notify.mobile_app_s23ultra")).length, 9);
+      assert.deepEqual(await ticked("notify.mobile_app_callum_phone"), [
+        "hardware",
+        "stock",
+        "dosing",
+      ]);
+      assert.deepEqual(await ticked("notify.mobile_app_stews_iphone"), ["emergency"]);
+      assert.equal(await page.locator("[data-uncovered]").count(), 0);
+      // A heading says what its kind covers: its codes with Help's titles, its events in words.
+      await table.getByRole("button", { name: "Hardware lockouts", exact: true }).click();
+      const covers = page.getByRole("dialog", { name: "Hardware lockouts" });
+      await expectVisible(covers);
+      assert.match(await covers.innerText(), /CS-301\s+CRITICAL hardware fault, watering stopped/);
+      assert.match(await covers.innerText(), /CS-701\s+Water isn't reaching this zone/);
+      await axe("notifications: what a kind covers");
+      await page.keyboard.press("Escape");
+      await covers.waitFor({ state: "hidden" });
+      await table.getByRole("button", { name: "Phase changes", exact: true }).click();
+      assert.match(
+        await page.getByRole("dialog", { name: "Phase changes" }).innerText(),
+        /A zone changing phase, as a push/,
+      );
+      await page.keyboard.press("Escape");
+      // Callum ticks Phase changes and keeps to Flower 1: a draft, reviewed phone by phone, saved.
+      await box("Callum (Callum Phone): Phase changes").check();
+      await rooms("Callum (Callum Phone)").getByRole("button", { name: "Flower 1" }).click();
+      await expectVisible(page.locator(".draft-bar", { hasText: "Unsaved changes to 1 phone" }));
+      await saveDraft();
+      await expectVisible(review);
+      assert.deepEqual(await review.locator(".review-row").allInnerTexts(), [
+        "Callum (Callum Phone)\nStarts getting: Phase changes\nRooms: All rooms → Flower 1",
+      ]);
+      await axe("notifications: the review");
+      await review.getByRole("button", { name: "Save notifications", exact: true }).click();
+      await review.waitFor({ state: "hidden" });
+      await expectVisible(page.getByText("Saved as revision 4. The next push follows it."));
+      assert.equal(await box("Callum (Callum Phone): Phase changes").isChecked(), true);
+      assert.equal(await page.locator(".draft-bar").count(), 0);
+      // A test push, its answer beside the button.
+      await page
+        .getByRole("button", { name: "Send a test to Stewart (Stews iPhone)", exact: true })
+        .click();
+      await expectVisible(
+        page.locator(
+          'tr[data-notify-row="notify.mobile_app_stews_iphone"] [data-test-result="sent"]',
+        ),
+      );
+      // A room nobody gets emergencies for is named above the grid.
+      await box("Ben (S23Ultra): Emergencies").uncheck();
+      await rooms("Stewart (Stews iPhone)").getByRole("button", { name: "Flower 2" }).click();
+      assert.deepEqual(await page.locator("[data-uncovered] strong").allInnerTexts(), [
+        "Nobody gets emergencies for Flower 1",
+      ]);
+      await box("Stewart (Stews iPhone): Emergencies").uncheck();
+      assert.deepEqual(await page.locator("[data-uncovered] strong").allInnerTexts(), [
+        "Nobody gets emergencies for Flower 2",
+        "Nobody gets emergencies for Flower 1",
+      ]);
+      await discard();
+      assert.equal(await page.locator("[data-uncovered]").count(), 0);
+      // Add a phone from the site's phones not listed yet; it starts with Emergencies ticked.
+      await page.getByRole("button", { name: "Add a phone", exact: true }).click();
+      const add = page.getByRole("dialog", { name: "Add a phone" });
+      await expectVisible(add);
+      assert.deepEqual(await add.locator(".notify-add-choice strong").allInnerTexts(), [
+        "Sean (Sean iPhone)",
+        "Pete (Pete)",
+        "A notify service by its name",
+      ]);
+      await axe("notifications: add a phone");
+      await add.getByRole("button", { name: "Add", exact: true }).click();
+      await add.waitFor({ state: "hidden" });
+      assert.deepEqual(await ticked("notify.mobile_app_sean_iphone"), ["emergency"]);
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.getAttribute("aria-label")),
+        "Sean (Sean iPhone): Emergencies",
+        "focus carries on from the new row's first tick",
+      );
+      await page
+        .getByRole("button", { name: "Remove Stewart (Stews iPhone)", exact: true })
+        .click();
+      assert.equal(await rows.count(), 3);
+      await saveDraft();
+      assert.deepEqual(await review.locator(".review-row > strong").allInnerTexts(), [
+        "Sean (Sean iPhone) · added",
+        "Stewart (Stews iPhone) · removed",
+      ]);
+      await review.getByRole("button", { name: "Back to editing", exact: true }).click();
+      await review.waitFor({ state: "hidden" });
+      await discard();
+      // Both themes, and a phone: a card per phone with the same checkboxes.
+      await inBothThemes("notifications", async () => {
+        await go("settings/notifications");
+        await expectVisible(table);
+      });
+      await go("settings/notifications");
+      await expectVisible(table);
+      await page.screenshot({
+        path: path.join(out, "dashboard-notifications-light.png"),
+        fullPage: true,
+      });
+      await page.evaluate(() => localStorage.setItem("irrigation-theme", "dark"));
+      await page.reload({ waitUntil: "networkidle" });
+      await expectVisible(table);
+      await page.screenshot({
+        path: path.join(out, "dashboard-notifications-dark.png"),
+        fullPage: true,
+      });
+      await page.evaluate(() => localStorage.setItem("irrigation-theme", "light"));
+      await page.reload({ waitUntil: "networkidle" });
+      await page.setViewportSize({ width: 390, height: 844 });
+      const cards = page.locator("[data-notify-card]");
+      await expectVisible(cards.first());
+      assert.equal(await cards.count(), 3);
+      assert.equal(await table.isVisible(), false);
+      assert.equal(await cards.first().locator("input[data-kind]").count(), 9);
+      await noOverflow();
+      await page.screenshot({ path: path.join(out, "mobile-notifications.png"), fullPage: true });
+      await box("Callum (Callum Phone): Jev").check();
+      await expectVisible(page.locator(".draft-bar"));
+      await noOverflow();
+      await axe("notifications on a phone");
+      await discard();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      // Callum, who is not an administrator (the demo as him): his own phone's row, nothing else.
+      await page.goto(`${base}/dashboard.html?demo&notify-user=callum#/settings/notifications`, {
+        waitUntil: "networkidle",
+      });
+      await expectVisible(table);
+      await expectVisible(
+        page.locator("[data-readonly-note]", {
+          hasText: "Only an administrator can change other people's phones.",
+        }),
+      );
+      for (const name of ["Ben (S23Ultra)", "Stewart (Stews iPhone)"]) {
+        assert.equal(await box(`${name}: Emergencies`).isDisabled(), true, `${name} is read-only`);
+        assert.equal(await box(`${name}: High priority for emergencies`).isDisabled(), true);
+        assert.equal(
+          await page.getByRole("button", { name: `Send a test to ${name}` }).isDisabled(),
+          true,
+        );
+      }
+      assert.equal(await page.getByRole("button", { name: "Add a phone" }).count(), 0);
+      assert.equal(await page.getByRole("button", { name: /^Remove / }).count(), 0);
+      assert.equal(
+        await page.getByLabel("Tell me when a room has watered nothing for").isDisabled(),
+        true,
+      );
+      await box("Callum (Callum Phone): Emergencies").check();
+      await saveDraft();
+      await review.getByRole("button", { name: "Save notifications", exact: true }).click();
+      await expectVisible(page.getByText("Saved as revision 4. The next push follows it."));
+      await axe("notifications, not an administrator");
+      await page.screenshot({
+        path: path.join(out, "dashboard-notifications-not-admin.png"),
+        fullPage: true,
+      });
+
+      // Against Home Assistant: read with notify_get, save with notify_save through the review,
+      // test with notify_test, and nothing else.
+      const ha = await browser.newContext({
+        viewport: { width: 1440, height: 1000 },
+        reducedMotion: "reduce",
+      });
+      const posts = [];
+      const stamp = () => new Date().toISOString();
+      const fixture = {};
+      for (const [prefix, name] of [
+        ["", "Flower 2"],
+        ["f1_", "Flower 1"],
+      ]) {
+        const flag = `switch.crop_steering_${prefix}engine_enabled`;
+        for (const [entity_id, state, attributes] of [
+          [
+            `sensor.crop_steering_${prefix}engine_config`,
+            "ready",
+            { prefix, num_zones: 1, friendly_name: `${name} engine config`, enable_flag: flag },
+          ],
+          [flag, "on", {}],
+        ])
+          fixture[entity_id] = {
+            entity_id,
+            state,
+            attributes,
+            last_changed: stamp(),
+            last_updated: stamp(),
+          };
+      }
+      const pixel = {
+        service: "notify.mobile_app_pixel_7",
+        name: "Pixel 7",
+        user_id: "u-callum",
+        kinds: ["stock"],
+        rooms: [],
+        urgent_high_priority: false,
+      };
+      const iphone = {
+        service: "notify.mobile_app_iphone",
+        name: "iPhone",
+        user_id: "u-ben",
+        kinds: ["emergency"],
+        rooms: ["f1_"],
+        urgent_high_priority: true,
+      };
+      let saved = { revision: 7, idle_hours: 3, recipients: [pixel, iphone] };
+      // The first save meets one made elsewhere meanwhile: Ben's phone now covers every room.
+      let elsewhere = true;
+      const answer = () => ({
+        schema_version: 1,
+        config: saved,
+        kinds: [
+          { id: "emergency", name: "Emergencies", detail: "", codes: ["CS-301"], events: [] },
+          { id: "stock", name: "Stock tanks", detail: "", codes: ["CS-608"], events: [] },
+          { id: "phases", name: "Phase changes", detail: "", codes: [], events: ["phase"] },
+        ],
+        phones: [
+          { service: pixel.service, name: "Pixel 7", user_id: "u-callum", user_name: "Callum" },
+          { service: iphone.service, name: "iPhone", user_id: "u-ben", user_name: "Ben" },
+        ],
+        can_edit_all: true,
+        user_id: "u-ben",
+      });
+      await ha.route("**/*", async (route) => {
+        const request = route.request(),
+          url = new URL(request.url());
+        if (url.origin !== base) return route.abort();
+        if (!url.pathname.startsWith("/api/")) return route.continue();
+        const reply = (body, status = 200) =>
+          route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+        if (url.pathname === "/api/states") return reply(Object.values(fixture));
+        if (url.pathname.startsWith("/api/states/")) {
+          const entity = fixture[decodeURIComponent(url.pathname.slice(12))];
+          return entity ? reply(entity) : reply({}, 404);
+        }
+        if (request.method() !== "POST") return reply([]);
+        const body = request.postDataJSON() ?? {};
+        posts.push({ path: url.pathname, body });
+        if (url.pathname === "/api/services/crop_steering/notify_get")
+          return reply({ service_response: answer() });
+        if (url.pathname === "/api/services/crop_steering/notify_test")
+          return reply({ service_response: { sent: true } });
+        if (url.pathname !== "/api/services/crop_steering/notify_save")
+          return reply({ message: "Not a notification service" }, 400);
+        if (elsewhere) {
+          elsewhere = false;
+          saved = { ...saved, revision: 8, recipients: [pixel, { ...iphone, rooms: [] }] };
+          return reply({ service_response: { error: "revision" } });
+        }
+        saved = {
+          revision: saved.revision + 1,
+          idle_hours: body.idle_hours,
+          recipients: body.recipients,
+        };
+        return reply({ service_response: answer() });
+      });
+      const live = await ha.newPage();
+      live.on("pageerror", (error) => pageErrors.push(error.message));
+      await live.goto(`${base}/dashboard.html?room=room:#/settings/notifications`, {
+        waitUntil: "networkidle",
+      });
+      const grid = live.locator("table.notify-table");
+      await expectVisible(grid);
+      assert.deepEqual(await grid.locator("tbody .notify-phone-name").allInnerTexts(), [
+        "Callum",
+        "Ben",
+      ]);
+      await box("Callum (Pixel 7): Phase changes", live).check();
+      await live.getByLabel("Tell me when a room has watered nothing for").fill("4");
+      await live.getByRole("button", { name: /^Review and save/ }).click();
+      const liveReview = live.getByRole("dialog", { name: "Save notifications?" });
+      const liveSave = liveReview.getByRole("button", { name: "Save notifications", exact: true });
+      await liveSave.click();
+      // Saved elsewhere meanwhile: read again with this draft kept on top, and said so.
+      await expectVisible(liveReview.getByText(/^Someone else saved the notifications meanwhile/));
+      await liveSave.click();
+      await liveReview.waitFor({ state: "hidden" });
+      await expectVisible(live.getByText("Saved as revision 9. The next push follows it."));
+      const callum = { ...pixel, kinds: ["stock", "phases"] };
+      assert.deepEqual(
+        posts.filter((post) => post.path.endsWith("/notify_save")).map((post) => post.body),
+        [
+          { expected_revision: 7, recipients: [callum, iphone], idle_hours: 4 },
+          { expected_revision: 8, recipients: [callum, { ...iphone, rooms: [] }], idle_hours: 4 },
+        ],
+      );
+      await live.getByRole("button", { name: "Send a test to Ben (iPhone)", exact: true }).click();
+      await expectVisible(
+        live.locator(`tr[data-notify-row="${iphone.service}"] [data-test-result="sent"]`),
+      );
+      // Besides its reads (notify_get, and What's new on opening), that is all the page sent.
+      assert.deepEqual(
+        posts
+          .map((post) => post.path)
+          .filter((path) => !/\/crop_steering\/(notify_get|whats_new_get)$/.test(path)),
+        [
+          "/api/services/crop_steering/notify_save",
+          "/api/services/crop_steering/notify_save",
+          "/api/services/crop_steering/notify_test",
+        ],
+      );
+      assert.deepEqual(posts.at(-1).body, { service: iphone.service });
+      await ha.close();
+    },
+  );
   await check(
     "what's new: once after an update, on a desktop and a phone, and from Help",
     async () => {

@@ -29,6 +29,7 @@ export const TABS: Partial<Record<Section, { page: Page; label: string }[]>> = {
   ],
   settings: [
     { page: "settings", label: "Settings" },
+    { page: "settings/notifications", label: "Notifications" },
     { page: "help", label: "Help" },
   ],
 };

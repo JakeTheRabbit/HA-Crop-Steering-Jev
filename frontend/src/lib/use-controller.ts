@@ -83,6 +83,8 @@ export class ControllerStore {
     this.admin = demo ? true : null;
     this.states = demo ? demoClock(createDemo()) : {};
     this.connection = demo ? "demo" : "connecting";
+    const search =
+      typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     if (demo)
       this.operatorDemo = new OperatorDemo(
         () => this.states,
@@ -96,14 +98,12 @@ export class ControllerStore {
         },
         // ?whats-new=2.22.0: the demo as an installation updated from 2.22.0, ?whats-new=unknown
         // from one running before What's new existed. Otherwise it has nothing new to show.
-        typeof window !== "undefined"
-          ? new URLSearchParams(window.location.search).get("whats-new")
-          : null,
+        search?.get("whats-new") ?? null,
+        // ?notify-user=callum: Settings & help › Notifications as that phone's owner, who is not an
+        // administrator.
+        search?.get("notify-user") ?? null,
       );
-    const requested =
-      typeof window !== "undefined"
-        ? new URLSearchParams(window.location.search).get("room")
-        : null;
+    const requested = search?.get("room") ?? null;
     const rooms = discoverRooms(this.states);
     this.roomId =
       resolveRequestedRoom(rooms, requested)?.id || (requested === null ? rooms[0]?.id : "") || "";
@@ -463,6 +463,7 @@ export class ControllerStore {
   operator = async <T>(action: OperatorAction, data: Record<string, unknown> = {}): Promise<T> => {
     const generation = this.generation;
     const roomId = this.roomId;
+    // Notifications are the whole site's, never a room's.
     const scoped =
       action.startsWith("strategy_") ||
       action.startsWith("runs_") ||
@@ -470,8 +471,8 @@ export class ControllerStore {
       action.startsWith("dosing_");
     const payload = scoped ? { ...data, room_id: roomId } : data;
     if (scoped && !roomId) throw new Error("Select an available room.");
-    // What's new's record changes nothing a refresh would show, and must neither wait on nor hold
-    // up a change being applied.
+    // What's new's record and a test push change nothing a refresh would show, and must neither
+    // wait on nor hold up a change being applied.
     const mutation =
       !action.startsWith("whats_new_") &&
       ![
@@ -481,6 +482,8 @@ export class ControllerStore {
         "runs_get",
         "stock_get",
         "dosing_get",
+        "notify_get",
+        "notify_test",
       ].includes(action);
     if (mutation && this.writing) throw new Error("Another change is still being applied.");
     if (mutation) this.writing = true;

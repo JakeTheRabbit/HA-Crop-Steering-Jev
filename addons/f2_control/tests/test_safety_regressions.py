@@ -341,6 +341,24 @@ def test_error_cleanup_also_latches_when_hardware_does_not_close(rig, monkeypatc
     assert c._blocked(c.rooms[0], 2) is not None
 
 
+def test_a_pump_whose_switch_on_errored_is_switched_off_before_its_alert(rig, monkeypatch):
+    """CS-302: Home Assistant answered the pump's turn_on with an error, but the pump may be on all the same. It
+    is switched off before the alert, whose phone push can take a while, not only in the cleanup after it."""
+    c, fake, _clock = rig
+    steps = []
+
+    def call(domain, service, **data):
+        steps.append((service, data.get("entity_id") or data.get("notification_id")))
+        if (service, data.get("entity_id")) == ("turn_on", "switch.p"):
+            return False
+        return fake.ha_call(domain, service, **data)
+
+    monkeypatch.setattr(controller, "ha_call", call)
+    c._execute_shot(c.rooms[0], 1, 6, 6)
+    card = steps.index(("create", "f2_hw_default_z1"))
+    assert ("turn_off", "switch.p") in steps[steps.index(("turn_on", "switch.p")):card]
+
+
 def test_absent_room_fault_survives_save_and_blocks_shared_hardware_until_rediscovery(rig):
     c, fake, _clock = rig
     orphan = {

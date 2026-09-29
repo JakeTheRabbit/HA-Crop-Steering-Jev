@@ -19,6 +19,9 @@ export type OperatorAction =
   | "dosing_get"
   | "dosing_save"
   | "dosing_request"
+  | "notify_get"
+  | "notify_save"
+  | "notify_test"
   | "whats_new_get"
   | "whats_new_seen";
 
