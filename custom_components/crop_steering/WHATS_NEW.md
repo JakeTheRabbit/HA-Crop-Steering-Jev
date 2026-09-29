@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.8.0 - 2026-09-30
+
+- A critical alert when a zone's moisture rises with no water going in: its table isn't draining.
+- A critical alert when the sump pump hasn't run for three hours, once its power sensor is set in the controller app.
+- A zone whose table isn't draining gets no daily minimum until it has drained.
+- Bug fixes and improvements.
+
 ## 3.7.0 - 2026-09-30
 
 - A zone's minimum water per plant per day is now spread evenly through the day, instead of all at lights-on.
