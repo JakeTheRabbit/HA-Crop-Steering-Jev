@@ -33,6 +33,8 @@ PHONE_A = "notify.mobile_app_phone_a"  # registered by STAFF's app
 PHONE_B = "notify.mobile_app_phone_b"  # an app whose registration is not known
 GROUP = "notify.all_phones"  # a notify service that is not a phone
 SENSOR = "sensor.crop_steering_notify_config"
+# Tapping a push opens the Crop Steering panel (iOS reads url, Android clickAction).
+LINK = {"url": "/crop-steering", "clickAction": "/crop-steering"}
 
 
 class MemoryStore:
@@ -275,6 +277,16 @@ def test_saving_moves_the_revision_and_a_stale_or_invalid_save_changes_nothing()
     assert save(notifier, recipients=[], idle_hours=1.5)["config"]["idle_hours"] == 1.5
 
 
+def test_a_kind_this_version_does_not_know_is_dropped_not_the_whole_setup():
+    """A row saved by a newer version, before a rollback: its other kinds, and every other row, still count."""
+    hass, notifier = rig(
+        saved(row(PHONE_A, kinds=["stock", "a_newer_kind"]), row(PHONE_B))
+    )
+    assert notifier.error is None
+    assert [r["kinds"] for r in notifier.data["recipients"]] == [["stock"], []]
+    assert hass.states.values[SENSOR][1]["recipients"] == 2
+
+
 def test_a_phone_saved_before_may_be_away_but_one_added_now_must_exist():
     """An app that has not registered again since Home Assistant started never blocks a save."""
     hass, notifier = rig(saved(row(PHONE_B, kinds=["stock"])))
@@ -285,9 +297,16 @@ def test_a_phone_saved_before_may_be_away_but_one_added_now_must_exist():
     assert added["error"] == f"{PHONE_A} is not a notify service in Home Assistant"
 
 
-def test_a_corrupt_store_is_kept_and_every_change_refused():
+def test_a_corrupt_store_is_kept_and_every_change_refused(monkeypatch):
+    logged = []
+    monkeypatch.setattr(
+        notify_api._LOGGER, "error", lambda msg, *args: logged.append(msg % args)
+    )
     hass, notifier = rig({"revision": "seven", "recipients": []})
     assert "not been overwritten" in notifier.error
+    # Said in Home Assistant's log: until it is fixed, pushes go only to the controller app's option.
+    [line] = logged
+    assert "notify_service option" in line and notifier.error in line
     assert (
         hass.states.values[SENSOR][0] == "unavailable"
     )  # the controller: nobody set up
@@ -423,6 +442,30 @@ def test_a_push_goes_to_each_phone_that_ticks_its_kind_and_covers_its_room_once(
     assert send(notifier, code="CS-299", room="")["sent_to"] == []
 
 
+def test_an_emergency_no_row_covers_still_reaches_every_phone_that_takes_emergencies():
+    """The one push that must reach someone. With no row for its room it goes to every phone that takes
+    emergencies for any room; with none at all the answer says so, and the controller app then pushes to its
+    own notify_service option. Anything else nobody ticked stays with nobody."""
+    hass, notifier = rig(
+        saved(
+            row(PHONE_A, kinds=["stock"]),
+            row(PHONE_B, kinds=["emergency"], rooms=["f1_"]),
+        )
+    )
+    assert send(notifier, code="CS-301", room="", urgent=True) == {
+        "sent_to": [PHONE_B],
+        "error": None,
+    }
+    assert send(notifier, code="CS-801", urgent=True)["sent_to"] == [PHONE_B]
+    assert send(notifier, code="CS-705", room="") == {"sent_to": [], "error": None}
+    hass, notifier = rig(saved(row(PHONE_A, kinds=["stock", "dosing"])))
+    assert send(notifier, code="CS-301", room="f1_", urgent=True) == {
+        "sent_to": [],
+        "error": "no phone takes emergencies",
+    }
+    assert hass.services.sent == []
+
+
 def test_every_push_carries_its_key_as_the_tag_and_emergencies_go_high_priority():
     hass, notifier = _routed()
     send(notifier, key="blind_f1_z2", code="CS-301", room="f1_", urgent=True)
@@ -434,18 +477,19 @@ def test_every_push_carries_its_key_as_the_tag_and_emergencies_go_high_priority(
         "message": "M",
         "data": {
             "tag": "x",
+            "url": "/crop-steering",
+            "clickAction": "/crop-steering",
             "priority": "high",
-            "ttl": 0,
             "channel": "Crop Steering urgent",
             "push": {"interruption-level": "time-sensitive"},
         },
     }
     assert hass.services.sent[0][1]["data"]["tag"] == "blind_f1_z2"
-    # Not urgent: the tag alone.
+    # Not urgent: the tag and the link.
     assert payloads[PHONE_A] == {
         "title": "T",
         "message": "M",
-        "data": {"tag": "stock_low"},
+        "data": {"tag": "stock_low", **LINK},
     }
     # `data` goes to mobile_app services only; this one asked for no high priority anyway.
     assert payloads[GROUP] == {"title": "T", "message": "M"}
@@ -488,7 +532,7 @@ def test_a_test_push_goes_to_the_phone_asked_for_by_its_owner_or_an_administrato
     service, payload = hass.services.sent[-1]
     assert service == PHONE_B and payload["title"] == "Crop Steering: a test"
     assert payload["message"] == "This phone gets: Emergencies."
-    assert payload["data"] == {"tag": "crop_steering_test"}
+    assert payload["data"] == {"tag": "crop_steering_test", **LINK}
     assert asyncio.run(notifier.test(PHONE_A, STAFF))["sent"] is True
     assert asyncio.run(notifier.test(GROUP, None))["sent"] is True  # an automation
     assert "gets nothing yet" in hass.services.sent[-1][1]["message"]
@@ -651,7 +695,7 @@ def test_a_repairs_card_goes_to_the_phones_that_tick_its_kind_when_it_is_raised(
         "- Bloom: 2 L of 20 L" in payload["message"]
         and "Code CS-608." in payload["message"]
     )
-    assert payload["data"] == {"tag": "stock_low_f1"}
+    assert payload["data"] == {"tag": "stock_low_f1", **LINK}
     # Still raised: an update (new placeholders, or raised again after a restart) is not a new card.
     _raise(hass, "stock_low_f1", "update")
     _raise(hass, "stock_low_f1", "remove")
@@ -689,6 +733,18 @@ def test_a_card_that_comes_and_goes_is_pushed_at_most_every_half_hour(issues):
     assert _sent(hass) == [PHONE_A, PHONE_A]
     _raise(hass, "zone_no_sensor")  # another card is its own
     assert len(hass.services.sent) == 3
+
+
+def test_a_card_whose_push_reached_no_phone_is_pushed_when_it_comes_back(issues):
+    """The half hour starts only once a phone has the card: a push that failed is not a push."""
+    hass, notifier = rig(saved(row(PHONE_A, kinds=["sensors"])))
+    notifier.listen()
+    hass.services.failing[PHONE_A] = HomeAssistantError("device not connected")
+    _raise(hass, "fused_sensor_unavailable")
+    _raise(hass, "fused_sensor_unavailable", "remove")
+    hass.services.failing.clear()
+    _raise(hass, "fused_sensor_unavailable")
+    assert _sent(hass) == [PHONE_A]
 
 
 def test_a_card_pushes_nothing_while_nobody_is_set_up_and_its_wording_never_loses_it(

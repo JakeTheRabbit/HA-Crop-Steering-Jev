@@ -745,6 +745,19 @@ def test_a_mix_pump_that_does_not_draw_its_power_ends_the_batch(rig):
     assert not any(svc == "set_value" for _d, svc, _data in r.fake.calls)  # nothing dosed
 
 
+def test_a_mix_pump_that_does_not_start_is_switched_off_before_its_alert(rig):
+    """The alert's phone push can take a while: the pump goes off first, and the batch's end reads it back."""
+    r = rig()
+    _full_batch(r)
+    r.watts = 0
+    r.ask("batch")
+    r.runner.poll()
+    steps = [(service, data.get("entity_id") or data.get("title", "")[-7:-1])
+             for _domain, service, data in r.fake.calls if service in ("turn_on", "turn_off", "create")]
+    on, card = steps.index(("turn_on", "switch.tank_mixer")), steps.index(("create", "CS-805"))
+    assert ("turn_off", "switch.tank_mixer") in steps[on:card]
+
+
 def test_a_stop_in_the_middle_of_a_batch_switches_everything_off(rig):
     r = rig()
     _full_batch(r)

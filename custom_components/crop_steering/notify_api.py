@@ -24,6 +24,7 @@ from . import notify_catalog
 from .admin import async_require_admin
 from .const import DOMAIN
 from .room import room_prefix
+from .setup_panel import PANEL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,10 +40,11 @@ SEND_TIMEOUT_S = 8
 # app ignores the other's). Sent to mobile_app services only, as is every push's tag.
 URGENT = {
     "priority": "high",
-    "ttl": 0,
     "channel": "Crop Steering urgent",
     "push": {"interruption-level": "time-sensitive"},
 }
+# Tapping a push opens the Crop Steering panel: iOS reads `url`, Android `clickAction`.
+LINK = {"url": f"/{PANEL}", "clickAction": f"/{PANEL}"}
 ISSUE_EVENT = "repairs_issue_registry_updated"  # issue_registry.EVENT_REPAIRS_ISSUE_REGISTRY_UPDATED
 # A Repairs card cleared and raised again within this long is not pushed again (a probe going on and off
 # line), as the controller app repeats an alert at most every 30 minutes.
@@ -199,11 +201,12 @@ def route(recipients, kinds, room) -> list[dict]:
 
 def push_data(service, key, urgent) -> dict | None:
     """A push's `data`, for a mobile_app service only (another notify service may refuse keys it does not
-    know): the tag, so a repeat replaces the earlier push on the phone, and the high-priority keys.
+    know): the tag, so a repeat replaces the earlier push on the phone, the link that opens the Crop Steering
+    panel when the push is tapped, and the high-priority keys.
     """
     if not service.startswith("notify.mobile_app_"):
         return None
-    return {"tag": key, **(deepcopy(URGENT) if urgent else {})}
+    return {"tag": key, **LINK, **(deepcopy(URGENT) if urgent else {})}
 
 
 def _valid(value) -> dict:
@@ -214,8 +217,21 @@ def _valid(value) -> dict:
     return {
         "revision": value["revision"],
         "idle_hours": clean_idle(value.get("idle_hours", IDLE_HOURS)),
-        "recipients": clean_recipients(value.get("recipients", [])),
+        "recipients": clean_recipients(
+            [_known_kinds(row) for row in value.get("recipients", [])]
+        ),
     }
+
+
+def _known_kinds(row):
+    """A stored row without the kinds this version does not know (saved by a newer one, before a rollback):
+    those are dropped, not the whole setup."""
+    if isinstance(row, dict) and isinstance(row.get("kinds"), list):
+        return {
+            **row,
+            "kinds": [k for k in row["kinds"] if k in notify_catalog.KIND_IDS],
+        }
+    return row
 
 
 class Notifier:
@@ -244,6 +260,11 @@ class Notifier:
             self.error = (
                 "The stored notification setup could not be loaded; it has not been "
                 f"overwritten: {error}"
+            )
+            _LOGGER.error(
+                "Crop Steering notifications: %s. Until it is fixed, alerts are pushed "
+                "only to the controller app's notify_service option.",
+                self.error,
             )
 
     def publish(self):
@@ -397,6 +418,18 @@ class Notifier:
         urgent = bool(data.get("urgent"))
         kinds = notify_catalog.kinds_for(data.get("code"), data.get("event"), urgent)
         rows = route(self.data["recipients"], kinds, data.get("room"))
+        if urgent and not rows:
+            # An emergency must reach someone: with no row covering its room, every phone that takes
+            # emergencies for any room gets it; with none at all the controller pushes to its own option.
+            rows = route(self.data["recipients"], {"emergency"}, None)
+            _LOGGER.warning(
+                "Crop Steering emergency %s: no phone takes emergencies for room %r; sent to %s",
+                data["key"],
+                data.get("room"),
+                ", ".join(row["service"] for row in rows) or "nobody",
+            )
+            if not rows:
+                return {"sent_to": [], "error": "no phone takes emergencies"}
         errors = await asyncio.gather(
             *(
                 self._deliver(
@@ -480,7 +513,6 @@ class Notifier:
         if base is None:
             return
         code = notify_catalog.REPAIRS[base]
-        self._cards[issue_id] = now
         try:
             from homeassistant.helpers import issue_registry as ir
 
@@ -488,7 +520,7 @@ class Notifier:
             placeholders = dict(getattr(issue, "translation_placeholders", None) or {})
             prefix, where = self._room(issue_id[len(base) + 1 :] or None)
             title, message = await self._issue_text(base, placeholders, code)
-            await self.send(
+            answer = await self.send(
                 {
                     "key": issue_id,
                     "code": code,
@@ -500,6 +532,10 @@ class Notifier:
                     "urgent": code in notify_catalog.EMERGENCY,
                 }
             )
+            if answer.get(
+                "sent_to"
+            ):  # the quiet period starts only once a phone has it
+                self._cards[issue_id] = now
         except Exception as error:  # a card's push never breaks the card
             _LOGGER.warning("Repairs card %s not pushed: %s", issue_id, error)
 

@@ -3,7 +3,7 @@ controller reads the REAL sensor.crop_steering_notify_config, and what it asks c
 by the REAL service, whose phones get it with its tag and its priority. The two layers meet only through that
 sensor and that call, and each has tests against its own idea of the other."""
 
-from test_notify import STAFF_PHONE, TABLET, URGENT, _call, _set_up, _staff
+from test_notify import LINK, STAFF_PHONE, TABLET, URGENT, _call, _set_up, _staff
 from test_setup_entry import _install
 
 DOMAIN = "crop_steering"
@@ -15,7 +15,7 @@ def _asked(fake):
 
 
 async def test_the_controllers_pushes_reach_the_phones_through_the_integration(
-    hass, hass_admin_user, controller_for
+    hass, hass_admin_user, controller_for, monkeypatch
 ):
     await _install(hass)
     staff = await _staff(hass)
@@ -32,6 +32,20 @@ async def test_the_controllers_pushes_reach_the_phones_through_the_integration(
     await hass.async_block_till_done()
     c, fake, _clock = controller_for({"notify_service": "notify/mobile_app_old_phone"})
     assert c._notify_config() == (2, 2.0)
+    import controller
+
+    # Over REST the controller is answered what the real service answers when the same request is
+    # replayed below (each asserted there): an emergency that reached no phone would go to the option.
+    answers = {
+        "hw_default_z1": {"sent_to": [TABLET], "error": None},
+        "phase_default_z1": {"sent_to": [STAFF_PHONE], "error": None},
+    }
+
+    def answered(domain, service, data, timeout=12):
+        fake.calls.append((domain, service, dict(data)))
+        return 200, answers[data["key"]]
+
+    monkeypatch.setattr(controller, "ha_service_response", answered)
 
     room = c.rooms[0]
     assert c._alert(
@@ -58,7 +72,7 @@ async def test_the_controllers_pushes_reach_the_phones_through_the_integration(
     )
     assert answer == {"sent_to": [TABLET], "error": None}
     assert received[TABLET][-1]["message"].startswith("The valve did not close.")
-    assert received[TABLET][-1]["data"] == {"tag": "hw_default_z1", **URGENT}
+    assert received[TABLET][-1]["data"] == {"tag": "hw_default_z1", **LINK, **URGENT}
 
     answer = await hass.services.async_call(
         DOMAIN, "notify", phase, blocking=True, return_response=True
@@ -67,7 +81,7 @@ async def test_the_controllers_pushes_reach_the_phones_through_the_integration(
     assert received[STAFF_PHONE][-1] == {
         "title": phase["title"],
         "message": "P1 recovered 42>=40 EC ok 2.5",
-        "data": {"tag": "phase_default_z1"},
+        "data": {"tag": "phase_default_z1", **LINK},
     }
     assert phase["title"].endswith(": P1 → P2")
 

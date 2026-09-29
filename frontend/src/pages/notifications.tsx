@@ -542,7 +542,11 @@ export function Notifications({
               <AlertTriangle size={18} aria-hidden="true" />
               <div>
                 <strong>Nobody gets emergencies for {room.name}</strong>
-                <p>Tick Emergencies for at least one phone that covers {room.name}.</p>
+                <p>
+                  Tick Emergencies for at least one phone that covers {room.name}. Until then its
+                  emergencies go to every phone that gets emergencies, or to the controller app's
+                  notify_service option when none does.
+                </p>
               </div>
             </div>
           ))}
@@ -810,7 +814,9 @@ export function Notifications({
           )}
           {uncovered.length > 0 && (
             <p className="notice-inline">
-              Nobody will get emergencies for {uncovered.map((room) => room.name).join(" or ")}.
+              No phone covers emergencies for {uncovered.map((room) => room.name).join(" or ")}: they
+              will go to every phone that gets emergencies, or to the controller app's notify_service
+              option when none does.
             </p>
           )}
           {saveError && (

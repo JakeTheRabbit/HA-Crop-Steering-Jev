@@ -189,7 +189,8 @@ def test_jev_is_not_asked_when_no_phone_could_get_the_push(router):
     assert c._alert("k", "CS-501", "t", "m", room=c.rooms[0], zone=1)
 
 
-def test_the_integrations_setup_is_read_at_most_once_a_minute(router, monkeypatch):
+def test_the_integrations_setup_is_read_by_the_loop_at_most_once_a_minute_and_never_waited_on_by_an_alert(
+        router, monkeypatch):
     c, fake = _setup()
     router()
     reads = []
@@ -199,13 +200,37 @@ def test_the_integrations_setup_is_read_at_most_once_a_minute(router, monkeypatc
     monkeypatch.setattr(controller.time, "monotonic", lambda: clock["s"])
     for key in ("a", "b", "c"):
         c._alert(key, "CS-102", "t", "m", room=c.rooms[0], zone=1)
-    assert reads.count(CONFIG) == 1
+    assert reads.count(CONFIG) == 1  # the first alert ever has nothing to go on yet
     fake.set_state(CONFIG, "2", {"recipients": 0, "idle_hours": 20})  # nobody set up now
-    clock["s"] += controller.NOTIFY_CONFIG_S
+    clock["s"] += 10 * controller.NOTIFY_CONFIG_S
     c._alert("d", "CS-102", "t", "m", room=c.rooms[0], zone=1)
-    assert reads.count(CONFIG) == 2
-    assert c._notify_config() == (0, 12.0)  # idle_hours kept inside 1 to 12
+    assert reads.count(CONFIG) == 1  # however old the last reading, an alert goes on it
+    assert c._notify_config(refresh=True) == (0, 12.0)  # the loop's read; idle_hours kept inside 1 to 12
+    assert c._notify_config(refresh=True) == (0, 12.0)
+    assert reads.count(CONFIG) == 2  # at most once a minute
+    c._alert("e", "CS-102", "t", "m", room=c.rooms[0], zone=1)
     assert [svc for svc, _d in _option(fake)] == ["mobile_app_old_phone"]
+
+
+def test_an_emergency_that_reached_no_phone_through_the_integration_goes_to_the_option(router):
+    """No row takes emergencies at all, or an answer with nothing to read: a critical code goes to the option.
+    Anything else nobody ticked stays with nobody (above)."""
+    for answer in ({"sent_to": [], "error": None}, None):
+        c, fake = _setup()
+        routed = router(answer=answer)
+        assert c._alert("hw_default_z1", "CS-301", "hardware fault", "m", room=c.rooms[0], zone=1)
+        assert routed.sent[0]["urgent"] is True
+        assert [svc for svc, _d in _option(fake)] == ["mobile_app_old_phone"]
+
+
+def test_a_push_with_nowhere_to_go_says_so_in_the_log(router, monkeypatch):
+    for recipients, answer in ((0, TOOK), (1, {"sent_to": [], "error": "no phone takes emergencies"})):
+        c, fake = _setup(recipients=recipients, notify_service="")
+        router(answer=answer)
+        logged = []
+        monkeypatch.setattr(controller, "log", lambda *a: logged.append(" ".join(map(str, a))))
+        assert c._alert("k", "CS-301", "t", "m", room=c.rooms[0], zone=1)
+        assert any("went to no phone" in line for line in logged)
 
 
 @pytest.mark.parametrize("attrs, expected", [
@@ -237,13 +262,45 @@ def test_a_phase_change_goes_to_the_phones_that_ask_and_never_to_the_option(rout
         "message": "lights-off -> P3",
     }]
     assert _option(fake) == []
-    # By hand, on the zone's Set Phase select (and the lights, still off, take it back to P3).
+    # By hand, on the zone's Set Phase select (and the lights, still off, take it back to P3): one loop's
+    # moves in a room are one push.
     fake.set_state("select.crop_steering_zone_1_set_phase", "P2")
     c.loop_once(datetime(2026, 9, 21, 23, 1))
-    assert [(d["title"], d["message"]) for d in routed.sent[-2:]] == [
-        ("Zone 1: P3 → P2", "set by hand"),
-        ("Zone 1: P2 → P3", "lights-off -> P3"),
+    assert [(d["key"], d.get("zone"), d["title"], d["message"]) for d in routed.sent if d.get("event")][1:] == [(
+        "phase_default", None, "Phase changes", "Zone 1: P3 → P2, set by hand\nZone 1: P2 → P3, lights-off -> P3",
+    )]
+
+
+def test_a_rooms_events_go_as_one_push_per_kind_within_the_loops_time(router, monkeypatch):
+    """Lights-off moves every zone at once: one push for the room, not one per zone. And the lot gets
+    EVENTS_BUDGET_S: a slow Home Assistant never holds the loop up for long."""
+    c, fake = _setup()
+    routed = router()
+    room = c.rooms[0]
+    c._notify_event("phase", room, 1, "P2", "P3", "lights-off -> P3")
+    c._notify_event("phase", room, 2, "P2", "P3", "lights-off -> P3")
+    c._notify_event("jev_setpoint", room, 2, "P2 shot 5% -> 4.5%", "Smaller shots.")
+    c._send_events()
+    assert [(d["key"], d.get("zone"), d["title"], d["message"]) for d in routed.sent] == [
+        ("phase_default", None, "Phase changes", "Zone 1: P2 → P3, lights-off -> P3\nZone 2: P2 → P3, lights-off -> P3"),
+        ("jev_setpoint_default_z2", 2, "Zone 2: Jev changed P2 shot 5% -> 4.5%", "Smaller shots."),
     ]
+    clock = {"s": 0.0}
+    monkeypatch.setattr(controller.time, "monotonic", lambda: clock["s"])
+
+    def slow(domain, service, data, timeout=12):
+        routed.calls.append((domain, service, dict(data), timeout))
+        clock["s"] += 11  # longer than the whole budget
+        return 200, TOOK
+
+    monkeypatch.setattr(controller, "ha_service_response", slow)
+    c._notify_event("phase", room, 1, "P3", "P0", "lights-on")
+    c._notify_event("jev_setpoint", room, 1, "re-water 34 -> 34.5", "Drier.")
+    c._send_events()
+    assert len(routed.calls) == 3  # the first went; the second was out of time, and is dropped
+    assert routed.calls[-1][3] == controller.EVENTS_BUDGET_S  # never given longer than the loop has left
+    c._send_events()
+    assert len(routed.calls) == 3
 
 
 def test_jev_moving_a_zone_on_is_a_phase_change_like_any_other(jev_with, router):  # noqa: F811

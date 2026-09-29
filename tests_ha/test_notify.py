@@ -22,9 +22,10 @@ STORE = "crop_steering.notify"
 REFUSED = "requires an authenticated Home Assistant administrator"
 STAFF_PHONE = "notify.mobile_app_staff_phone"
 TABLET = "notify.mobile_app_office_tablet"
+# Tapping a push opens the Crop Steering panel (iOS reads url, Android clickAction).
+LINK = {"url": "/crop-steering", "clickAction": "/crop-steering"}
 URGENT = {
     "priority": "high",
-    "ttl": 0,
     "channel": "Crop Steering urgent",
     "push": {"interruption-level": "time-sensitive"},
 }
@@ -216,7 +217,7 @@ async def test_a_push_reaches_the_phones_that_ask_for_it_with_its_tag_and_priori
         {
             "title": "Zone 1: CRITICAL hardware fault, watering stopped (CS-301)",
             "message": "The valve did not close.",
-            "data": {"tag": "hw_default_z1", **URGENT},
+            "data": {"tag": "hw_default_z1", **LINK, **URGENT},
         }
     ]
     assert received[STAFF_PHONE] == []
@@ -224,7 +225,7 @@ async def test_a_push_reaches_the_phones_that_ask_for_it_with_its_tag_and_priori
         hass, None, "notify", key="dosing_x", code="CS-807", title="T", message="M"
     )
     assert answer == {"sent_to": [STAFF_PHONE], "error": None}
-    assert received[STAFF_PHONE][-1]["data"] == {"tag": "dosing_x"}
+    assert received[STAFF_PHONE][-1]["data"] == {"tag": "dosing_x", **LINK}
     # A phase change: nobody here ticks phases, so nobody gets it, and that is no failure.
     answer = await _call(
         hass, None, "notify", key="phase_default_z1", event="phase", title="T", message="M"
@@ -348,7 +349,7 @@ async def test_the_low_stock_card_reaches_the_phone_that_ticks_stock_once(
     assert push["message"].endswith(
         "Code CS-608. What it means and what to do: Crop Steering → Help & tools → Error codes."
     )
-    assert push["data"] == {"tag": "stock_low"}
+    assert push["data"] == {"tag": "stock_low", **LINK}
     assert received[TABLET] == []  # not an emergency
 
     # Still raised, with new numbers: the card changes, the phone is not pushed again.
