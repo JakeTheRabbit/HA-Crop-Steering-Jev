@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.6.0 - 2026-09-30
+
+- Choose who gets which alerts: a row of checkboxes for each phone, and the rooms it covers, on Settings & help › Notifications.
+- New pushes to tick: a room that has watered nothing for a few hours with its lights on, a zone changing phase, and Jev moving a setting.
+- Tapping a push opens Crop Steering, and an emergency always reaches a phone, even when nobody ticked it for that room.
+- Bug fixes and improvements.
+
 ## 3.5.0 - 2026-09-28
 
 - Dose a nutrient pump or make a whole batch from the new Dosing page, one per room's tank.

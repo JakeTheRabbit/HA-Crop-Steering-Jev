@@ -1,3 +1,7 @@
+# 3.6.0
+
+Pair with integration 3.6.0. **C3.** Who gets which phone push (#22): once any phone is set up on Settings & help › Notifications, each alert's push goes through the integration's `crop_steering.notify` to the phones whose row ticks its kind; with none, or when that call fails, it goes to `notify_service` exactly as before, and so does an emergency that reached no phone. Phase changes and Jev's moves are sent after the loop's shots, one push per room, within 10 s; a pump whose turn_on errored (CS-302) and a mix pump that did not start (CS-805) are switched off before their alert. New: pushes for a zone changing phase and for Jev moving a setting (through the routing only), and CS-209 when a room with its lights on has watered nothing for the set hours. No change to options or the state file.
+
 # 3.5.0
 
 Pair with integration 3.5.0. **C3.** Batch-tank dosing: the controller runs single doses and batches requested from the new Equipment › Dosing page, holds watering during a batch, draws each dose from its linked stock tank, and recovers after a restart (#19). New file `/data/dosing_state.json`; new app option `timeout: 30` (Supervisor stop timeout); no change to existing options or the state file. Not run on hardware.
