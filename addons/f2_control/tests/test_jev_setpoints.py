@@ -164,7 +164,7 @@ class _Controller:
         self.jev.journal = Journal(None)
         self.jev.setpoints = SetpointMemory(str(tmp_path / "sp.json"))
         self.numbers = numbers or {SHOT: 5.0, THRESHOLD: 30.5}
-        self.auto, self.writes, self.alerts = auto, [], []
+        self.auto, self.writes, self.alerts, self.events = auto, [], [], []
 
     def _jev_read(self, entity):
         if entity.endswith("auto_setpoints"):
@@ -183,6 +183,9 @@ class _Controller:
 
     def _alert(self, key, code, title, message, room=None, zone=None):
         self.alerts.append((key, code, message))
+
+    def _notify_event(self, event, room, zone, *detail):
+        self.events.append((event, zone, detail))
 
 
 def _room():
@@ -213,6 +216,11 @@ def test_a_move_is_written_once_and_is_not_mistaken_for_an_edit(tmp_path):
     d = SetpointsJudge().decide(_verdict("smaller_shots"), ctx)
     jev_bridge.apply_setpoint(c, room, 1, d, ctx, NIGHT)
     assert c.writes == [(1, SHOT, 5.0, 4.5, "Jev")]
+    # The phones that tick Jev hear of it (docs/NOTIFICATIONS.md): a push, no card.
+    [(event, zone, (words, why))] = c.events
+    assert (event, zone, words) == ("jev_setpoint", 1, "P2 shot 5% -> 4.5%")
+    assert why.startswith("Smaller maintenance shots tomorrow") and "smaller_shots (p=" in why
+    assert c.alerts == []
     sp = jev_bridge.setpoint_view(c, room, 1, Z1, NIGHT + timedelta(minutes=1))  # HA still shows 5.0
     assert sp["home"][SHOT] == 5.0 and sp["changed_today"]
     c.numbers[SHOT] = 4.5  # HA reflects the write

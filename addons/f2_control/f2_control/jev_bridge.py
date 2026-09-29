@@ -20,7 +20,7 @@ from jev.judges.night import NightJudge
 from jev.judges.probe import ProbeJudge
 from jev.judges.ramp import RampJudge
 from jev.judges.salt import SaltJudge
-from jev.judges.setpoints import SHOT, THRESHOLD, SetpointsJudge
+from jev.judges.setpoints import CHOICES, SHOT, THRESHOLD, SetpointsJudge
 from jev.judges.setpoints import band as setpoint_band
 from jev.judges.shot import ShotJudge
 from jev.judges.stage import StageJudge
@@ -224,6 +224,9 @@ def apply_setpoint(c, room, zone, d, ctx, now):
                    "at": now.isoformat(timespec="seconds"), "day": (ctx.setpoints or {}).get("day"),
                    "words": v["words"], "choice": v["choice"], "reverted": False}
     mem.save()
+    # For the phones that tick Jev (docs/NOTIFICATIONS.md): no card, a push only.
+    c._notify_event("jev_setpoint", room, zone, v["words"],
+                    f"{CHOICES.get(v['choice'], v['choice'])} Jev's Setpoints judge, {d.why}.")
 
 
 def guard_setpoints(c, room, zone, now):
@@ -263,11 +266,12 @@ def guard_setpoints(c, room, zone, now):
 def advance(c, room, zone, snap, d, now):
     """Move the zone forward one phase as Jev judged, with the bookkeeping the engine does itself."""
     st = room.state[zone]
-    st["phase"] = d.value
+    was, st["phase"] = st["phase"], d.value
     st["last_phase_change"] = now
     if d.value == "P1":
         st["shots"] = 0
     c._save_state()
+    c._notify_event("phase", room, zone, was, d.value, f"Jev's {d.judge} judge: {d.why}")
     return dataclasses.replace(snap, phase=d.value, phase_minutes=0.0,
                                **({"shot_count": 0} if d.value == "P1" else {}))
 

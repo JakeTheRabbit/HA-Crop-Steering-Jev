@@ -47,7 +47,8 @@ docs/error-codes.json is in no kind at all.
 - **CS-209 No watering for a while** (a card and a push): a room that is active, with lights on, has watered
   nothing for `idle_hours` (default 3, set on the page, 1 to 12): no shot fired in any of its zones, whether
   because watering is switched off, a hold, or nothing called for water. Raised once per stretch and again
-  every `idle_hours` while it lasts; cleared by the next shot. A zone in P0 (the morning dry-back) or in
+  every `idle_hours` while it lasts; cleared by the next shot, or once the room leaves the condition
+  (lights off, no zone in P1 or P2, the room switched off). A zone in P0 (the morning dry-back) or in
   P3 does not start the clock; the clock runs only while at least one zone is in P1 or P2.
 
 ## Configuration (integration store `crop_steering.notify`, one for the site)
@@ -133,6 +134,31 @@ controller pushes as with no recipients.
 - Phase changes and Jev's setting changes are sent through `crop_steering.notify` only (never the fallback:
   they are not alerts).
 - CS-209 is raised by the controller like any alert (key `idle_<room>`), with its code written out.
+
+In detail:
+
+- Jev's Alerts judge is asked whenever a phone could get the push: a recipient saved, or the
+  `notify_service` option set (as before). A repeat it holds goes to nobody.
+- The controller reads `sensor.crop_steering_notify_config` at most once a minute, so a change on the page
+  reaches it within a minute. No sensor (an integration from before this) counts as no recipients.
+- `urgent` is set for the codes written out in the controller's `CRITICAL_CODES`, which a test keeps equal
+  to the critical codes of docs/error-codes.json.
+- The call asks for the service's answer and waits up to 12 s, as a push to `notify_service` always could.
+  It counts as failed when Home Assistant can't be reached or does not answer in time, answers 4xx or 5xx,
+  or answers that nothing was sent with an `error`; a push nobody ticked is not a failure.
+- The vitals report (every `notify_min` minutes) is not an alert: it still goes to `notify_service` only.
+- Events are queued during a loop and sent after its shots, so a slow Home Assistant never holds one up; an
+  event that fails is dropped, never retried and never sent to `notify_service`. A phase change is key
+  `phase_<room>_z<zone>`, title "F2 · Zone 2: P1 → P2" and message why: the engine's own reason ("lights-off
+  -> P3"), "set by hand", "Jev's ramp judge: …", or "lights-off (no moisture reading)" for a zone without a
+  probe. Jev's move is key `jev_setpoint_<room>_z<zone>`, title "F2 · Zone 1: Jev changed P2 shot 5% ->
+  4.5%" and message the change in words with Jev's answer and probability.
+- CS-209's clock starts, as far as can be told, after the last loop that saw the room not meeting the
+  condition, after today's lights-on, and after the first zone now in P1 or P2 moved there; a shot in any
+  zone restarts it. After a restart that is what the saved state says, so a restart does not reset it.
+  `idle_hours` is kept inside 1 to 12, and is 3 when the integration publishes none: CS-209 is raised on
+  every install. The message says why when it can: watering switched off (the room's engine switch), a hold
+  (each zone's reason from the controller's gates), or nothing called for water.
 
 ## The page (Settings & help › Notifications)
 

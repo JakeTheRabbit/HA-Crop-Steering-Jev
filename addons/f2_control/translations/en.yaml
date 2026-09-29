@@ -28,9 +28,11 @@ configuration:
   notify_service:
     name: Notification service
     description: >-
-      Where to send vitals and alerts. Use the path form notify/<your_service>,
-      for example notify/mobile_app_my_phone. Find yours in
-      Developer Tools > Actions by typing "notify".
+      Where to send vitals, and alerts whenever no phone is set up under Crop Steering >
+      Settings & help > Notifications (there, each phone chooses what it gets) or an
+      alert can't be passed on there. Use the path form notify/<your_service>, for
+      example notify/mobile_app_my_phone. Find yours in Developer Tools > Actions by
+      typing "notify".
   notify_min:
     name: Minutes between routine notifications
     description: >-

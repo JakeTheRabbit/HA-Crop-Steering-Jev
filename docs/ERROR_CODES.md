@@ -12,7 +12,7 @@ Most notifications are raised again, at most every 30 minutes, for as long as th
 and after 5 minutes when their code changes. A few are said once: CS-301 once per fault
 (dismissing it does not clear the hold), CS-403 once each time the controller app starts and
 CS-405 at start-up. Most stay in Home Assistant until you dismiss them, even after their cause
-has gone; the controller withdraws CS-201, CS-308 and CS-309 itself, and switching a room's
+has gone; the controller withdraws CS-201, CS-209, CS-308 and CS-309 itself, and switching a room's
 *Room Active* off clears its notifications.
 A room whose *Room Active* switch is off (nothing growing) raises no watering notifications; a
 setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still reported.
@@ -44,6 +44,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-206](#cs-206) | Root-zone EC too high, not watering | Warning | Notification |
 | [CS-207](#cs-207) | URGENT, drying out and not being watered | Critical | Notification |
 | [CS-208](#cs-208) | A retired switch is off, so watering was switched off | Warning | Notification |
+| [CS-209](#cs-209) | No watering for a while | Warning | Notification |
 | [CS-301](#cs-301) | CRITICAL hardware fault, watering stopped | Critical | Notification |
 | [CS-302](#cs-302) | Shot cancelled, the pump didn't switch on | Warning | Notification |
 | [CS-303](#cs-303) | Shot cancelled, the main-line valve didn't switch on | Warning | Notification |
@@ -342,6 +343,28 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 
 - Switch the named switch back on in Home Assistant (it is hidden: Settings → Entities, with hidden entities shown), then switch watering on in Crop Steering → Settings → Watering.
 - Change an automation that switches System Enabled or Auto Irrigation Enabled off to switch the room's Watering switch (its engine switch) off instead.
+
+<a id="cs-209"></a>
+
+### CS-209: No watering for a while
+
+*Warning · Notification*
+
+**What it means.** A room that is on, with its lights on and at least one zone in P1 or P2, has had no shot in any of its zones for the number of hours set under Settings & help → Notifications (3 unless changed, 1 to 12). A zone in P0, the morning dry-back, or in P3 does not count: no water is expected then. The notification says why when the controller can tell: watering switched off, a hold with its reason, or no zone calling for water.
+
+**Watering meanwhile.** Nothing changes: this only tells you. It is said again each time the same number of hours passes, and clears itself at the next shot in the room, or once the lights go off or no zone is in P1 or P2.
+
+**Likely causes**
+
+- Watering was switched off in the room (its engine switch) and not switched back on.
+- A hold stops every shot: a batch being made, a hardware hold after a pump or valve fault (CS-301), a zone switched off or under manual override, the source-water gate, a pump or valve that reads neither on nor off. The notification names it.
+- Nothing called for water: every zone in P1 or P2 read wetter than the point where it is watered, for example a probe out of its cube or stuck high, or a re-water point set too low for the plants.
+
+**Suggested fixes**
+
+- Read the reason in the notification. Clear the hold it names, or switch watering back on in Crop Steering → Settings → Watering.
+- If nothing called for water, compare each zone's moisture reading with its re-water point on the zone's page, and check the probes are in their cubes.
+- Change after how many hours this is said, or who gets it, under Crop Steering → Settings & help → Notifications.
 
 ## Pumps and valves (CS-3xx)
 
