@@ -48,6 +48,7 @@ import { Strategy, type Drafts } from "@/pages/strategy";
 import { Timeline } from "@/pages/timeline";
 import { Probes } from "@/pages/probes";
 import { Settings } from "@/pages/settings";
+import { Notifications } from "@/pages/notifications";
 import { Help } from "@/pages/help";
 import { GrowPlanner } from "@/pages/grow-planner";
 import { Setup } from "@/pages/setup";
@@ -390,6 +391,13 @@ export default function App() {
                 theme={theme.preference}
                 setTheme={theme.setPreference}
                 themeSource={theme.source}
+                onDirtyChange={setWorkspaceDirty}
+              />
+            )}
+            {page === "settings/notifications" && (
+              <Notifications
+                key={pageKey}
+                controller={controller}
                 onDirtyChange={setWorkspaceDirty}
               />
             )}
