@@ -54,10 +54,10 @@ def test_the_minimum_daily_floor_fires_where_a_top_up_would_have():
     assert result[2] is True and kind_of(result) == "min_daily"
 
 
-def test_the_minimum_daily_floor_still_fires_in_the_morning_dryback_and_the_ramp():
-    for phase in ("P0", "P1"):
-        result = decide(held(phase=phase, vwc=58, daily_vol=0, minutes_since_shot=30), P(min_daily_volume=10))
-        assert kind_of(result) == "min_daily", phase
+def test_the_minimum_daily_floor_waits_out_the_morning_dryback_and_fires_in_the_ramp():
+    snap = dict(vwc=58, daily_vol=0, minutes_since_shot=30)
+    assert decide(held(phase="P0", **snap), P(min_daily_volume=10))[2] is False
+    assert kind_of(decide(held(phase="P1", **snap), P(min_daily_volume=10))) == "min_daily"
 
 
 def test_the_overnight_emergency_fires():

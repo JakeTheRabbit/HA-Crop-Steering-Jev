@@ -78,14 +78,16 @@ class ZoneParams:
     #                                     of diluting it (the pump-cycling failure mode). Let each shot drain
     #                                     + re-read before the next. VWC top-ups stay ungated (self-limiting).
     min_daily_volume: float = 0.0   # MIN litres/zone/day floor during lights-on (per-plant water safety; 0 = off).
-    #                                 GUARANTEED + FRONT-STACKED + SENSOR-INDEPENDENT: every plant gets this much,
-    #                                 delivered from lights-on as fast as spacing allows, regardless of the VWC
-    #                                 threshold — a lying/dead probe cannot suppress it. Clamped < max_daily_volume.
+    #                                 GUARANTEED + PACED + SENSOR-INDEPENDENT: every plant gets this much, spread
+    #                                 evenly over the day (floor_share), regardless of the VWC threshold — a
+    #                                 lying/dead probe cannot suppress it. Clamped < max_daily_volume.
     p1_min_shots: int = 0           # P1 cannot graduate on "target reached" until this many ramp shots have
     #                                 landed (0 = off). The ramp runs as configured; max shots still bounds it.
     drown_ceiling: float = 90.0     # the ONLY VWC gate on the min-daily floor: a hard anti-drown limit well above
     #                                 field capacity. Below it, the floor fires regardless of the probe; at/above it
     #                                 the floor holds (never flood). 90 ~= unreachable in coco -> truly probe-blind.
+    min_floor_finish_h: float = 3.0  # the min-daily floor is paced to be complete this many hours before lights-off,
+    #                                  when the evening dryback (predictive P3) may start.
 
 
 @dataclass
@@ -115,6 +117,19 @@ class ZoneSnapshot:
     steering_held: bool = False   # the caller holds routine steering (a grow-strategy plan that is held,
     #                               stale or missing): only the water-safety rules fire, the P3 emergency,
     #                               the watchdog and the minimum-daily floor. Phases still move.
+    hours_since_lights_on: float | None = None  # hours since this photoperiod's lights-on; None = unknown, and the
+    #                                             min-daily floor then front-stacks (fires until met, as before).
+
+
+def floor_share(s: ZoneSnapshot, p: ZoneParams) -> float:
+    """PURE. How much of the min-daily floor should be in by now, 0..1: a straight line from nothing at lights-on
+    to all of it min_floor_finish_h before lights-off. 1 without a clock, or once that point has passed."""
+    if s.hours_since_lights_on is None:
+        return 1.0
+    window = s.hours_since_lights_on + s.hours_to_lights_off - p.min_floor_finish_h
+    if window <= 0:
+        return 1.0
+    return min(1.0, max(0.0, s.hours_since_lights_on / window))
 
 
 def ec_adjust(size: float, ec: float | None, target: float) -> float:
@@ -299,17 +314,24 @@ def decide(s: ZoneSnapshot, p: ZoneParams):
     if not fire and watchdog_due:
         fire, size, ir, kind = True, p.p2_shot_size, watchdog_ir, "watchdog"
 
-    # PRIORITY 4 — MINIMUM DAILY VOLUME floor (per-plant water safety, GUARANTEED + FRONT-STACKED +
-    # SENSOR-INDEPENDENT): every enabled zone MUST put through at least min_daily_volume L per photoperiod.
-    # It fires from lights-on as fast as the anti-short-cycle spacing allows (so the minimum lands early /
-    # front-stacked) and REGARDLESS of the VWC threshold — a lying or dead probe cannot starve a plant.
-    # The ONLY VWC gate is the hard anti-drown ceiling (never flood). Feed-water + dosing safety still apply
-    # in the IO shell (we never water with bad feed, even for the floor). 0 = off.
-    if (not fire and p.min_daily_volume > 0 and s.lights_on
-            and s.daily_vol < p.min_daily_volume
+    # PRIORITY 4 — MINIMUM DAILY VOLUME floor (per-plant water safety, GUARANTEED + PACED +
+    # SENSOR-INDEPENDENT): every enabled zone MUST put through at least min_daily_volume L per photoperiod,
+    # REGARDLESS of the VWC threshold — a lying or dead probe (a probe in a wet spot) cannot starve a plant.
+    # Never in P0: the morning dryback comes first, as for the watchdog. Then it is due whenever the zone is
+    # behind floor_share's straight line to the whole minimum min_floor_finish_h before lights-off, so a zone
+    # behind at the end of P0 catches up in P1 and the rest lands spaced out through P2; past that point, or
+    # without a clock, it fires until the minimum is in. Every shot the zone gets counts toward it. The ONLY
+    # VWC gate is the hard anti-drown ceiling (never flood). Feed-water + dosing safety still apply in the IO
+    # shell (we never water with bad feed, even for the floor). 0 = off.
+    floor_due = p.min_daily_volume * floor_share(s, p)
+    if (not fire and p.min_daily_volume > 0 and s.lights_on and phase != "P0"
+            and s.daily_vol < floor_due
             and s.vwc < p.drown_ceiling
             and s.minutes_since_shot >= p.p2_min_interval_min):
-        fire, size, ir, kind = True, p.p2_shot_size, f"MIN-DAILY floor {s.daily_vol:.1f}<{p.min_daily_volume:.1f}L (guaranteed)", "min_daily"
+        fire, size, ir, kind = (
+            True, p.p2_shot_size,
+            f"MIN-DAILY floor {s.daily_vol:.1f}<{floor_due:.1f} of {p.min_daily_volume:.1f}L (guaranteed)", "min_daily",
+        )
 
     # ---- SAFETY: daily cap is a BUDGET, not a wall — exemptions are by kind (CAP_EXEMPT) ----
     # NOTE: the MIN-DAILY floor above can never be blocked by this cap — the floor only fires while
@@ -470,7 +492,7 @@ _PARAM_BOUNDS = {
     "p1_max_shots": (1.0, 40.0), "p1_time_between_min": (1.0, 120.0),
     "p0_max_wait_min": (5.0, 240.0), "p3_emergency_shot": (0.5, 15.0),
     "max_daily_volume": (10.0, 2000.0), "min_daily_volume": (0.0, 500.0),
-    "drown_ceiling": (50.0, 100.0),
+    "drown_ceiling": (50.0, 100.0), "min_floor_finish_h": (0.0, 12.0),
 }
 
 

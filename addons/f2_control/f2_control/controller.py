@@ -1670,6 +1670,8 @@ class Controller:
             lights_just_on=lights_just_on,
             hours_to_lights_on=self._hours_to(now, room.lights_on_hour),
             hours_to_lights_off=self._hours_to(now, room.lights_off_hour),
+            # the min-daily floor's clock: it is paced from lights-on (core.floor_share)
+            hours_since_lights_on=(24.0 - self._hours_to(now, room.lights_on_hour)) % 24.0,
             uptime_min=(now - self._start).total_seconds() / 60.0,
             feed_ec=(feed_ec if feed_ec is not None else 3.0),
             new_grow_day=new_grow_day,
