@@ -19,6 +19,12 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.7.0 - 2026-09-30
+
+- A zone's minimum water per plant per day is now spread evenly through the day, instead of all at lights-on.
+- It waits out the morning dryback, catches up in the ramp, and is all in three hours before lights-off.
+- Bug fixes and improvements.
+
 ## 3.6.0 - 2026-09-30
 
 - Choose who gets which alerts: a row of checkboxes for each phone, and the rooms it covers, on Settings & help › Notifications.

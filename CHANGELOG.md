@@ -9,6 +9,33 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.0] - 2026-09-30
+
+Pair: **controller 3.7.0**. Class **C3**. One pull request: #24, the minimum water per plant per day spread
+evenly over the day instead of all at lights-on. Checked by the engine, controller, lean and real Home Assistant
+suites, with the pacing mutation-checked.
+
+### 🌱 In plain English
+
+- **Every plant gets its minimum, whatever its probe says.** A zone whose probe sits in a wet spot reads wetter
+  than its slab and was barely watered (one zone got 0.41 L a plant in a day). The daily minimum per plant
+  (the zone's "min daily mL per plant" helper) now waters it through the day.
+- **Spread out, not dumped.** It waits for the morning dryback, catches up during the ramp if the zone is
+  behind, and spaces the rest through the day so the whole minimum is in three hours before lights-off, before
+  the evening dryback. Every shot the zone gets counts toward it.
+- Nothing else changes: the drown ceiling and the 10-minute spacing still hold it back, and the daily limit
+  can't block it.
+
+### 🔧 Technical notes
+
+- Engine (#24, both copies): `floor_share` (a straight line from lights-on to `min_floor_finish_h`, 3 h, before
+  lights-off); the floor never fires in P0 and is due only while `daily_vol` is under
+  `min_daily_volume * floor_share`; `ZoneSnapshot.hours_since_lights_on` (None = front-stacked as before);
+  `ZoneParams.min_floor_finish_h` (bounded 0 to 12).
+- Controller (#24): passes `hours_since_lights_on` in the snapshot.
+- Tests: `crop-steering-engine/tests/test_min_daily_pacing.py` (the line, behind/ahead, never in P0, catch-up
+  after the finish, a simulated day with a probe stuck wet: 5 evenly spaced shots, all in by 19:00).
+
 ## [3.6.0] - 2026-09-30
 
 Pair: **controller 3.6.0**. Class **C3**. One pull request: #22, who gets which phone push (a checkbox per phone
