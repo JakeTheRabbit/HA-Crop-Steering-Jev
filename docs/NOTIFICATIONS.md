@@ -73,6 +73,17 @@ A phone is a `notify.mobile_app_*` service. The integration lists them with thei
 Home Assistant user that registered the app (the mobile_app config entry's user), so each row shows whose
 phone it is. Other notify services (a group, Supernotify) can be added as rows by their service name.
 
+A save checks every row: `service` is `notify.<name>`, each service once, at most 20 rows; a phone added
+now must be a notify service Home Assistant has, while one saved before may be away (an app not registered
+again since a restart never blocks a save); `kinds` are ids from the table; `rooms` are room prefixes;
+`urgent_high_priority` is true when left out; `idle_hours` is 1 to 12. A row an administrator saves
+without a `name` or a `user_id` takes them from the phone's mobile_app registration.
+
+`sensor.crop_steering_notify_config` is written by the integration with the first room that loads and
+removed with the last (it is not a registry entity): state the revision, attributes `recipients` (how many
+rows) and `idle_hours`. While the store can't be read it is `unavailable`, with `error`, and the
+controller pushes as with no recipients.
+
 ## Services
 
 | Service | Who | Data | Response |
@@ -83,12 +94,32 @@ phone it is. Other notify services (a group, Supernotify) can be added as rows b
 | `crop_steering.notify` | admin (the controller) | `key, code?, event?, room?, zone?, title, message, urgent?` | `{sent_to[], error}` |
 
 - `notify` works out the push's kinds from `code` (the catalog) or `event`, then sends to every recipient
-  that ticks one of them and whose `rooms` is empty or includes `room`, once per service. `urgent` (the
-  controller sets it for critical codes) adds the high-priority data for a recipient with
-  `urgent_high_priority`: Android `{"priority": "high", "ttl": 0, "channel": "Crop Steering urgent"}`, iOS
-  `{"push": {"interruption-level": "time-sensitive"}}` (`data` is sent to mobile_app services only).
+  that ticks one of them and whose `rooms` is empty or includes `room`, once per service. A push about no
+  room in particular (no `room`: the controller's dosing thread, its clock) goes to every recipient that
+  ticks one of its kinds. `urgent` (the controller sets it for critical codes) adds the high-priority data
+  for a recipient with `urgent_high_priority`: Android
+  `{"priority": "high", "ttl": 0, "channel": "Crop Steering urgent"}`, iOS
+  `{"push": {"interruption-level": "time-sensitive"}}`, both in the same `data` (each app ignores the
+  other's keys; `data` is sent to mobile_app services only).
   Every push carries `data.tag = key`, so a repeat replaces the earlier one on the phone instead of piling up.
-- A failed send to one phone never stops the others; failures are listed in the response and logged.
+- A failed send to one phone never stops the others; failures are listed in the response and logged. A
+  phone that has not answered in 8 s counts as failed.
+- With no recipients saved, or a store that can't be read, `notify` sends nothing and says why in `error`
+  ("no phone is set up for notifications"). A push nobody ticked answers `{sent_to: [], error: null}`: it
+  went to nobody on purpose. The controller falls back only when nothing was sent and `error` says why.
+- Who, in detail: `notify_get` answers anyone, as every read in this integration does (`can_edit_all` is
+  false without a signed-in administrator); a call with no user (an automation) saves and tests as an
+  administrator, as for every service that changes something; a user id Home Assistant does not know may
+  neither save nor test. `notify_get` and `notify_save` answer `error` too (null when all is well).
+- A non-administrator's save is matched to the stored rows by `service`, in any order. For a row that is
+  not theirs, its kinds, rooms and high-priority flag must come back unchanged; for their own, only those
+  three change. They may not change `idle_hours`, which is the site's.
+- `notify_test` sends at normal priority, with `data.tag = "crop_steering_test"`, and says what the phone's
+  row ticks.
+- The integration's own Repairs cards (CS-601 to CS-608) go out through `notify` when a card is created,
+  with key = its issue id, its room, and the card's own title and text; not when a card still raised is
+  updated, or raised again after Home Assistant restarts, and not again within 30 minutes when a card
+  clears and comes back (a probe going on and off line), as the controller repeats an alert.
 
 ## The controller
 
