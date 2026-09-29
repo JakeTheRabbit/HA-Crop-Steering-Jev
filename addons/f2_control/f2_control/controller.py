@@ -341,8 +341,29 @@ NOTIFY_TIMEOUT_S = 12
 EVENTS_BUDGET_S = 10.0
 # The codes whose severity is critical in docs/error-codes.json (tests/test_error_codes.py keeps the two equal):
 # their push is urgent, a high-priority one on a phone whose row asks for that.
-CRITICAL_CODES = frozenset({"CS-201", "CS-202", "CS-203", "CS-204", "CS-207", "CS-301", "CS-308", "CS-402",
-                            "CS-601", "CS-606", "CS-801"})
+CRITICAL_CODES = frozenset({"CS-201", "CS-202", "CS-203", "CS-204", "CS-207", "CS-301", "CS-308", "CS-310",
+                            "CS-311", "CS-402", "CS-601", "CS-606", "CS-801"})
+# CS-310: a zone's moisture rising by BACKUP_RISE_PTS within BACKUP_WINDOW_MIN while no water went in, its valve
+# closed for BACKUP_GRACE_MIN before (the wetting front of a shot keeps rising a while): water coming up from
+# below, a table that isn't draining. Backtested on F2's 22-30 Sep 2026 readings: the two real episodes (Zone 2
+# filling from a stopped sump, 28 Sep 21:19 and 29 Sep 12:09) and nothing else. Cleared after BACKUP_CLEAR_MIN
+# without a rise.
+BACKUP_RISE_PTS, BACKUP_WINDOW_MIN, BACKUP_GRACE_MIN, BACKUP_CLEAR_MIN = 3.0, 60.0, 45.0, 60.0
+# CS-311: the sump pump a room drains to (option sump_power_sensor) drawing no power for SUMP_SILENT_H while the
+# room is on. F2's ran every 1 to 1.5 hours, day and night, 22-28 Sep 2026 (its longest gap 2.37 h) and then not
+# at all for 41.6 h: its tables backed up. Checked every SUMP_CHECK_MIN from Home Assistant's history, as a run
+# lasts about a minute and a loop could miss it; a run is more than SUMP_RUN_W.
+SUMP_SILENT_H, SUMP_CHECK_MIN, SUMP_RUN_W = 3.0, 5.0, 20.0
+
+
+def room_option(value):
+    """An option naming one entity for every room ("*"), or `room=entity` pairs, comma separated."""
+    out = {}
+    for part in str(value or "").split(","):
+        name, sep, entity = part.strip().partition("=")
+        if part.strip():
+            out[name.strip() if sep else "*"] = (entity if sep else name).strip()
+    return out
 # CS-209: hours with the lights on, a zone in P1 or P2 and no shot in the room: the integration's idle_hours,
 # kept inside 1 to 12, else 3.
 IDLE_HOURS, IDLE_HOURS_RANGE = 3.0, (1.0, 12.0)
@@ -485,6 +506,10 @@ class Controller:
         self.hold_entities = [e for e in (o.get("hold_entities") or []) if e]
         self.feed_grace_min = float(o.get("feed_grace_min", 30))
         self.blind_fallback_min = float(o.get("blind_fallback_min", 90))
+        # Optional (CS-311): the power sensor of the sump pump a room's tables drain to, one for every room or
+        # `room=sensor` pairs, and how long it may stand still while the room is on. Unset = not watched.
+        self.sump_sensors = room_option(o.get("sump_power_sensor"))
+        self.sump_silent_h = float(o.get("sump_silent_hours") or SUMP_SILENT_H)
         # Optional: Jev (TypeSafe, via Cloudflare AI) as a guard on auto setpoints. Unset = arithmetic only.
         self._cf = tuple((o.get(k) or "").strip() for k in ("cf_account_id", "cf_api_token", "cf_gateway_id"))
         # The Jev edition: Jev judges the engine's decisions inside a code envelope (docs/JEV.md). None = off.
@@ -2405,6 +2430,92 @@ class Controller:
             f"{self._zone_title(room, zone)}: {head}" + (f", {why}" if why else "") for zone, head, why in moves
         )
 
+    # ---------- CS-310: moisture rising with no water ----------
+    def _watch_backup(self, room, zone, snap, now):
+        """CS-310 (docs/error-codes.json) -> whether the zone is held as backed up. Its moisture rose by
+        BACKUP_RISE_PTS within BACKUP_WINDOW_MIN while its valve, opened by the controller or by hand, stayed shut
+        for that time and the BACKUP_GRACE_MIN before it: water coming up from below, a table that isn't draining.
+        The readings compared start only BACKUP_GRACE_MIN after the zone's last water and after the controller
+        started (a valve opened before a restart is not known). Held until the reading has not risen for
+        BACKUP_CLEAR_MIN, then the card goes."""
+        valve = room.hw["valves"].get(zone)
+        last = room.__dict__.setdefault("_last_water", {})
+        if valve and ha_get(valve)[0] == "on":
+            last[zone] = now
+        shot = room.state[zone].get("last_shot")
+        wet = max((t for t in (last.get(zone), shot if isinstance(shot, datetime) else None) if t), default=None)
+        start = max(now - timedelta(minutes=BACKUP_WINDOW_MIN), self._start + timedelta(minutes=BACKUP_GRACE_MIN))
+        if wet is not None:
+            start = max(start, wet + timedelta(minutes=BACKUP_GRACE_MIN))
+        track = room.__dict__.setdefault("_vwc_track", {}).setdefault(zone, [])
+        track.append((now, snap.vwc))
+        track[:] = [(t, v) for t, v in track if t >= start]
+        recent = sorted(v for t, v in track if t > now - timedelta(minutes=5))
+        low = min((v for _, v in track), default=None)
+        rising = (len(track) >= 3 and (now - track[0][0]).total_seconds() >= 20 * 60
+                  and recent[len(recent) // 2] - low >= BACKUP_RISE_PTS)
+        held = room.__dict__.setdefault("_backed_up", {})
+        key = f"backup_{room.slug}_z{zone}"
+        if rising:
+            held[zone] = now
+            since = f"since {wet:%H:%M}" if wet else "since before the controller started"
+            self._alert(
+                key,
+                "CS-310",
+                "moisture rising with no water: the table is not draining",
+                f"Moisture went from {low:.1f} to {recent[len(recent) // 2]:.1f} % in the last "
+                f"{(now - track[0][0]).total_seconds() / 60:.0f} minutes, but this zone has had no water {since}. "
+                "Water is coming up from below: the table, its drain or the sump is backed up and the slabs are "
+                "sitting in runoff. Check the table, its drains and the sump pump now. The zone's daily minimum is "
+                "held until the reading stops rising.",
+                room=room,
+                zone=zone,
+            )
+        elif zone in held and now - held[zone] >= timedelta(minutes=BACKUP_CLEAR_MIN):
+            del held[zone]
+            ha_call("persistent_notification", "dismiss", notification_id=f"f2_{key}")
+            self._alerted.pop(key, None)
+            self._alert_codes.pop(key, None)
+        return zone in held
+
+    def _watch_sump(self, room, now):
+        """CS-311 (docs/error-codes.json): the sump pump this room's tables drain to (option sump_power_sensor) has
+        drawn no power for sump_silent_h while the room is on. Read from Home Assistant's history every
+        SUMP_CHECK_MIN (a run lasts about a minute); no evidence either way says nothing. The card goes at its next
+        run."""
+        entity = self.sump_sensors.get(room.slug) or self.sump_sensors.get("*")
+        checked = getattr(room, "_sump_checked", None)
+        if not entity or (checked is not None and now - checked < timedelta(minutes=SUMP_CHECK_MIN)):
+            return
+        room._sump_checked = now
+        rows = ha_history(entity, datetime.now(timezone.utc) - timedelta(hours=self.sump_silent_h))
+        if rows is None:
+            return
+        ran = False
+        for state, _changed in rows:
+            try:
+                ran = ran or float(state) > SUMP_RUN_W
+            except (TypeError, ValueError):
+                continue
+        key = f"sump_{room.slug}"
+        if ran:
+            if key in self._alerted:
+                ha_call("persistent_notification", "dismiss", notification_id=f"f2_{key}")
+                self._alerted.pop(key, None)
+                self._alert_codes.pop(key, None)
+            return
+        self._alert(
+            key,
+            "CS-311",
+            "the sump pump has not run",
+            f"The sump pump this room drains to has drawn no power for {self.sump_silent_h:g} hours, though it "
+            "normally runs every hour or two while the room is watered. Runoff has nowhere to go: the sump fills and "
+            "backs up into the tables, and the slabs end up sitting in it (CS-310 follows once a zone's moisture "
+            "rises with no water). Check the sump pump now: its power, its float and that it pumps out, or its "
+            f"plug if the reading is unavailable.\n\nSensor: {entity}",
+            room=room,
+        )
+
     # ---------- CS-209: no watering for a while ----------
     def _watch_idle(self, room, now, lights_on, pub):
         """CS-209 (docs/NOTIFICATIONS.md): the room is on, its lights are on and a zone is in P1 or P2, and no zone
@@ -3797,6 +3908,11 @@ class Controller:
                 continue
             room._blind_since.pop(zone, None)
             snaps[zone] = snap
+            try:  # CS-310: never pour the daily minimum into a table that isn't draining
+                if self._watch_backup(room, zone, snap, now):
+                    p = params[zone] = dataclasses.replace(p, min_daily_volume=0.0)
+            except Exception as e:
+                log("backup watch error", room.slug, zone, e)
             if snap.ec is None:
                 self._alert(
                     f"ec_unknown_{room.slug}_z{zone}",
@@ -4050,6 +4166,10 @@ class Controller:
             self._watch_idle(room, now, lights_on, pub)
         except Exception as e:
             log("idle watch error", room.slug, e)
+        try:  # CS-311 only ever tells, too
+            self._watch_sump(room, now)
+        except Exception as e:
+            log("sump watch error", room.slug, e)
         room._was_lights_on = lights_on
         return pub
 

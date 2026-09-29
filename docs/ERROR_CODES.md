@@ -54,6 +54,8 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-307](#cs-307) | Shot stopped early, something else closed the feed | Warning | Notification |
 | [CS-308](#cs-308) | CRITICAL, an interrupted shot's hardware is still ON | Critical | Notification |
 | [CS-309](#cs-309) | An interrupted shot's hardware may still be ON | Warning | Notification |
+| [CS-310](#cs-310) | Moisture rising with no water: the table is not draining | Critical | Notification |
+| [CS-311](#cs-311) | The sump pump has not run | Critical | Notification |
 | [CS-401](#cs-401) | Setting outside the engine's range | Warning | Notification |
 | [CS-402](#cs-402) | Settings missing, running on built-in values | Critical | Notification |
 | [CS-403](#cs-403) | Lights hours now come from the integration | Information | Notification |
@@ -560,6 +562,54 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 - Bring its device back online.
 - If the switch is excluded from Home Assistant's recorder, include it: its history is how the controller tells a restart from a person.
 - Don't wait for the notification to go away: once the switch and its history read again, the controller closes what it can prove this shot opened and leaves anything else ON.
+
+<a id="cs-310"></a>
+
+### CS-310: Moisture rising with no water: the table is not draining
+
+*Critical · Notification*
+
+**What it means.** A zone's moisture reading rose by 3 points or more within an hour while no water went in: its valve was not open, by the controller or by hand, during the rise or in the 45 minutes before it. Water is reaching the slabs from below: the table or its drain is blocked, or the sump is not pumping, and the slabs are sitting in runoff. The notification says how far the reading rose, over how long, and when the zone last had water.
+
+**Watering meanwhile.** The zone's daily minimum is held while this lasts, so the controller never pours water into a flooded table; a zone reading this wet gets no routine shots anyway. It is said again every 30 minutes while the reading keeps rising, and clears itself once the reading has stopped rising for an hour.
+
+**Likely causes**
+
+- A table's drain or drain line is blocked: substrate, roots or debris in the outlet.
+- The sump pump is not pumping (failed, without power, its float stuck), so the sump fills and backs up into the tables.
+- A shared gutter or drain is backed up and runoff from other tables flows into this one.
+- Less likely: the probe was moved into a wetter spot, or water was put on by hand without the zone's valve (a hose).
+
+**Suggested fixes**
+
+- Go to the room now: look for standing water on the table, and check its drain outlets, the sump and the sump pump.
+- Clear the blockage and make sure the sump pumps out. The reading starts falling once the table drains.
+- Don't water the zone by hand until the table has drained.
+- If nothing is backed up, check the probe hasn't been moved or knocked into a wetter spot.
+
+<a id="cs-311"></a>
+
+### CS-311: The sump pump has not run
+
+*Critical · Notification*
+
+**What it means.** The power reading of the sump pump the room's tables drain to (the controller app's sump_power_sensor option) has shown no run for the hours set in sump_silent_hours (3 unless changed) while the room is on. A sump pump that normally runs every hour or two has stopped: runoff has nowhere to go, the sump fills and backs up into the tables, and the slabs end up sitting in it. The notification names the sensor.
+
+**Watering meanwhile.** Nothing changes: this only tells you. It is said again every 30 minutes while the pump stays still, and clears itself at its next run. Once a zone's moisture starts rising with no water, CS-310 follows and holds that zone's daily minimum.
+
+**Likely causes**
+
+- The sump pump has failed, or its float is stuck.
+- The pump has no power: its plug is switched off or tripped.
+- Nothing reaches the sump: the tables' drains or the line to the sump are blocked.
+- The power plug is offline, so no run can be seen (its reading is unavailable).
+
+**Suggested fixes**
+
+- Check the sump now: its water level, the pump, its float and its power.
+- Clear what stops the water reaching or leaving the sump, and watch the pump run.
+- If the plug is offline, bring it back: until then the pump's runs can't be seen.
+- Set sump_silent_hours longer only if the pump really runs less often than that.
 
 ## Settings (CS-4xx)
 

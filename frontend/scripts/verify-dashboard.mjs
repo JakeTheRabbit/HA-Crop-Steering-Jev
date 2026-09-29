@@ -2046,7 +2046,7 @@ try {
     assert.equal(await found.getAttribute("open"), "", "A code typed in full opens by itself");
     await expectVisible(found.getByText("Likely causes", { exact: true }));
     await expectVisible(found.getByText(/No plant in the cube/));
-    await search.fill("nothing like this");
+    await search.fill("zqxw vjqk"); // words in no code (real words turn up as the catalog grows)
     await expectVisible(page.getByText(/No code matches/));
     await page.goto(`${base}/dashboard.html?demo&room=f2#/help?code=CS-605`, {
       waitUntil: "networkidle",

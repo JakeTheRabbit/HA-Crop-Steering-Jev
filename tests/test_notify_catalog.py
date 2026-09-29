@@ -49,7 +49,11 @@ def test_the_table_is_the_contracts():
         "setup",
     )
     assert catalog.EVENTS == {"phase": "phases", "jev_setpoint": "jev"}
-    assert set(_kind("hardware")) == {f"CS-30{n}" for n in range(1, 10)} | {"CS-701"}
+    assert set(_kind("hardware")) == {f"CS-30{n}" for n in range(1, 10)} | {
+        "CS-310",
+        "CS-311",
+        "CS-701",
+    }
     assert set(_kind("stock")) == {"CS-608", "CS-807"}
     assert set(_kind("dosing")) == {f"CS-80{n}" for n in range(1, 7)}
     assert "CS-404" not in _kind("setup") and "CS-404" in _kind("jev")
