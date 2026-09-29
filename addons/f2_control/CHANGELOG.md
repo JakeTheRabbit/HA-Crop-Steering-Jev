@@ -1,3 +1,7 @@
+# 3.7.0
+
+Pair with integration 3.7.0. **C3.** The minimum-daily floor (`input_number.crop_steering_<prefix>zone_N_min_daily_ml_per_plant` x plant count) is paced (#24): never in P0, then due only while the zone is behind a straight line to the whole minimum 3 hours before lights-off, so a zone behind at the end of P0 catches up in P1 and the rest is spaced through P2; past that point it fires until met. It still waters whatever the probe reads (only the drown ceiling and the 10-minute spacing hold it). The snapshot now carries `hours_since_lights_on`. No change to options or the state file.
+
 # 3.6.0
 
 Pair with integration 3.6.0. **C3.** Who gets which phone push (#22): once any phone is set up on Settings & help › Notifications, each alert's push goes through the integration's `crop_steering.notify` to the phones whose row ticks its kind; with none, or when that call fails, it goes to `notify_service` exactly as before, and so does an emergency that reached no phone. Phase changes and Jev's moves are sent after the loop's shots, one push per room, within 10 s; a pump whose turn_on errored (CS-302) and a mix pump that did not start (CS-805) are switched off before their alert. New: pushes for a zone changing phase and for Jev moving a setting (through the routing only), and CS-209 when a room with its lights on has watered nothing for the set hours. No change to options or the state file.
