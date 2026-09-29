@@ -9,6 +9,32 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-09-30
+
+Pair: **controller 3.8.0**. Class **C3**. One pull request: #26, critical alerts for tables backing up: moisture
+rising with no water (CS-310) and a sump pump standing still (CS-311). Backtested on F2's readings from 22 to 30
+September; checked by the controller, lean, engine, real Home Assistant, dashboard and browser suites, with the
+new rules mutation-checked.
+
+### 🌱 In plain English
+
+- **A table that isn't draining is now an emergency.** When a zone's moisture keeps rising while no water goes
+  in (its valve shut, by the controller and by hand), the slabs are sitting in runoff: the table, its drain or
+  the sump is backed up. Crop Steering says so straight away, as a critical alert, and stops that zone's daily
+  minimum from adding more water until it drains.
+- **A sump pump that stops is an emergency too.** Name the sump pump's power sensor in the controller app
+  (`sump_power_sensor`) and Crop Steering warns when it hasn't run for three hours while the room is on. On
+  28 September F2's sump pump stopped for 41 hours; Zone 2 filled from below the next day.
+
+### 🔧 Technical notes
+
+- Controller (#26): `_watch_backup` (CS-310: a 3-point rise within 60 minutes, the valve shut for that time and
+  45 minutes before, waits 45 minutes after a start; holds `min_daily_volume` while flagged, clears an hour after
+  the rise stops) and `_watch_sump` (CS-311: no reading over 20 W in `ha_history` for `sump_silent_hours`, read
+  every 5 minutes, nothing on no evidence); new options `sump_power_sensor`, `sump_silent_hours`.
+- docs/error-codes.json: CS-310 and CS-311 (critical); both in the notification catalog's emergency and hardware
+  kinds; ERROR_CODES.md regenerated; dashboard bundles rebuilt.
+
 ## [3.7.0] - 2026-09-30
 
 Pair: **controller 3.7.0**. Class **C3**. One pull request: #24, the minimum water per plant per day spread

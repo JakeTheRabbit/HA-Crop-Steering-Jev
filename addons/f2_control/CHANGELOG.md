@@ -1,3 +1,7 @@
+# 3.8.0
+
+Pair with integration 3.8.0. **C3.** Tables backing up (#26): CS-310 (critical) when a zone's moisture rises by 3 points within an hour while its valve (the controller's or a person's) stayed shut for that time and the 45 minutes before; the zone's daily minimum is held until the reading has not risen for an hour. CS-311 (critical) when the sump pump named in the new option `sump_power_sensor` (one sensor or `room=sensor` pairs) shows no run in Home Assistant's history for `sump_silent_hours` (default 3) while the room is on. New options only; no change to the state file.
+
 # 3.7.0
 
 Pair with integration 3.7.0. **C3.** The minimum-daily floor (`input_number.crop_steering_<prefix>zone_N_min_daily_ml_per_plant` x plant count) is paced (#24): never in P0, then due only while the zone is behind a straight line to the whole minimum 3 hours before lights-off, so a zone behind at the end of P0 catches up in P1 and the rest is spaced through P2; past that point it fires until met. It still waters whatever the probe reads (only the drown ceiling and the 10-minute spacing hold it). The snapshot now carries `hours_since_lights_on`. No change to options or the state file.
