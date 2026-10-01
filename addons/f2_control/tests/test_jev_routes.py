@@ -1,9 +1,11 @@
 """Jev's routes and its asker: TypeSafe direct, then Cloudflare's /ai/run, each retried while a failure may pass
 and inside a window, any failure moving on to the next route; the day's budget warning, a question that waited too
 long, and the day's counts (docs/JEV.md, Availability)."""
+import json
+
 import jev_kit as K
 from jev import client
-from jev.client import NO_ANSWERS, NO_REQUESTS, NOT_JSON, Route, Routes, retryable
+from jev.client import NO_ANSWERS, NO_REQUESTS, NOT_JSON, Asker, Route, Routes, retryable
 
 ANSWERS = {"q__v0": K.noul_answer(0.9)}
 
@@ -110,3 +112,52 @@ def test_typesafe_direct_makes_one_try(monkeypatch):
     monkeypatch.setattr(client.time, "sleep", lambda s: posts.append(f"slept {s}"))
     assert client.call_typesafe("typesafe", "key", {}, {})[2] == "HTTP 429: slow down"
     assert posts == [1]
+
+
+def test_the_asker_warns_once_a_day_at_80_percent_of_the_budget():
+    day = {"t": K.NOW.timestamp()}
+    a = Asker("acct", "tok", transport=K.FakeTransport(ANSWERS), threaded=False, daily_budget=5, warn_pct=80,
+              clock=lambda: day["t"])
+    for i in range(3):
+        assert a.submit(f"k{i}", {}, {}) and not a.take_warning()
+    assert a.submit("k3", {}, {}) and a.take_warning()  # the 4th call of 5 is 80 %
+    assert not a.take_warning()
+    assert a.submit("k4", {}, {}) and not a.take_warning() and a.stats["warned"]
+    day["t"] += 86400  # the next day starts again
+    assert a.submit("k5", {}, {}) and a.stats["calls"] == 1 and not a.stats["warned"]
+
+
+def test_a_question_left_too_long_in_the_queue_is_dropped_unasked():
+    now = {"t": K.NOW.timestamp()}
+    t = K.FakeTransport(ANSWERS)
+    a = Asker("acct", "tok", transport=t, threaded=False, clock=lambda: now["t"], max_wait_s=300)
+    a._pending.add("k")
+    a._run(("k", {}, {}, now["t"] - 301))  # asked 301 s ago: the worker was stuck behind failing calls
+    assert t.calls == [] and a.result("k") is None and not a.pending("k")
+    assert a.stats["errors"] == 1 and "dropped unasked" in a.stats["last_error"]
+
+
+def test_the_asker_counts_retries_failovers_and_second_looks():
+    ts, cf = Flaky("HTTP 503: busy", "HTTP 401: bad key"), Flaky()
+    send, _clock = _routes(ts, cf)
+    a = Asker("acct", "tok", transport=send, threaded=False, clock=lambda: K.NOW.timestamp())
+    assert a.submit("k1", {}, {})  # TypeSafe: busy, a retry, then a refused key: Cloudflare answers
+    assert a.submit("k2", {}, {})  # TypeSafe answers
+    a.note("reasks")
+    assert (a.stats["retries"], a.stats["failovers"], a.stats["reasks"]) == (1, 1, 1)
+    assert a.stats["route"] == "TypeSafe" and a.daily_budget == 5000
+
+
+def test_an_old_usage_file_loads_and_a_restart_does_not_warn_twice(tmp_path):
+    import jev_bridge
+
+    path = tmp_path / "jev_usage.json"
+    today = K.NOW.date().isoformat()
+    path.write_text(json.dumps({"day": today, "calls": 41, "errors": 0, "input_tokens": 9, "last_error": None}))
+    a = Asker("acct", "tok", transport=K.FakeTransport(ANSWERS), threaded=False, clock=lambda: K.NOW.timestamp())
+    jev_bridge.restore_usage(a, str(path))  # 3.8.0's file: no retries, failovers, reasks or warned
+    assert (a.stats["calls"], a.stats["retries"], a.stats["warned"]) == (41, 0, False)
+    path.write_text(json.dumps({"day": today, "calls": 4100, "warned": True}))
+    b = Asker("acct", "tok", transport=K.FakeTransport(ANSWERS), threaded=False, clock=lambda: K.NOW.timestamp())
+    jev_bridge.restore_usage(b, str(path))
+    assert b.submit("k", {}, {}) and not b.take_warning()  # warned before the restart: not again today

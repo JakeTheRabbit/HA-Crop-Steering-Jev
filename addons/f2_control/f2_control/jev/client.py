@@ -156,19 +156,23 @@ class Answer:
 
 
 class Asker:
-    """Background Jev calls, keyed by the caller. `transport` is `call` in the add-on and a fake in tests;
-    `threaded=False` runs each submission at once (tests, and one-shot scripts)."""
+    """Background Jev calls, keyed by the caller. `transport` is a `Routes` in the add-on and a fake in tests;
+    `threaded=False` runs each submission at once (tests, and one-shot scripts). The day's calls stop at
+    `daily_budget`, and take_warning() is true once a day when they reach `warn_pct` of it. A question that waited
+    more than `max_wait_s` in the queue (behind calls that were failing) is dropped unasked: its evidence is stale."""
 
-    def __init__(self, account, token, gateway=None, daily_budget=2000, transport=call,
-                 threaded=True, clock=time.time, timeout=20.0):
+    def __init__(self, account, token, gateway=None, daily_budget=5000, transport=call,
+                 threaded=True, clock=time.time, timeout=20.0, warn_pct=80, max_wait_s=300.0):
         self.account, self.token, self.gateway = account, token, gateway
         self.daily_budget, self.transport, self.clock, self.timeout = daily_budget, transport, clock, timeout
+        self.warn_pct, self.max_wait_s = warn_pct, max_wait_s
+        self._warn = False
         self._results: dict[str, Answer] = {}
         self._pending: set[str] = set()
         self._seq = 0
         self._lock = threading.Lock()
         self.stats = {"day": None, "calls": 0, "errors": 0, "input_tokens": 0, "last_error": None,
-                      "last_call": None}
+                      "last_call": None, "retries": 0, "failovers": 0, "reasks": 0, "warned": False, "route": None}
         self._queue = None
         if threaded and self.enabled:
             self._queue = queue.Queue()
@@ -181,7 +185,8 @@ class Asker:
     def _roll_day(self):
         day = datetime.fromtimestamp(self.clock()).date().isoformat()
         if self.stats["day"] != day:
-            self.stats.update(day=day, calls=0, errors=0, input_tokens=0)
+            self.stats.update(day=day, calls=0, errors=0, input_tokens=0, retries=0, failovers=0, reasks=0,
+                              warned=False)
 
     def submit(self, key, state, questions):
         """Queue one evaluation. False when Jev is off, the day's budget is spent, or `key` is in flight."""
@@ -193,12 +198,26 @@ class Asker:
                 return False
             self._pending.add(key)
             self.stats["calls"] += 1
-        job = (key, state, questions)
+            if not self.stats["warned"] and self.stats["calls"] * 100 >= self.daily_budget * self.warn_pct:
+                self.stats["warned"] = self._warn = True
+        job = (key, state, questions, self.clock())
         if self._queue is None:
             self._run(job)
         else:
             self._queue.put(job)
         return True
+
+    def note(self, stat):
+        """Count one of today's events (e.g. "reasks") in the stats the Jev sensor shows."""
+        with self._lock:
+            self._roll_day()
+            self.stats[stat] = self.stats.get(stat, 0) + 1
+
+    def take_warning(self):
+        """True once: the first time today's calls reach `warn_pct` of the budget (the controller pushes CS-706)."""
+        with self._lock:
+            warn, self._warn = self._warn, False
+            return warn
 
     def _work(self):
         while True:
@@ -209,17 +228,25 @@ class Asker:
                 self._fail(job[0], f"{type(e).__name__}: {e}")
 
     def _run(self, job):
-        key, state, questions = job
+        key, state, questions, asked = job
+        waited = self.clock() - asked
+        if waited > self.max_wait_s:
+            self._fail(key, f"dropped unasked: it waited {waited:.0f} s in the queue")
+            return
         answers, usage, error = self.transport(self.account, self.token, state, questions,
                                                gateway=self.gateway, timeout=self.timeout)
         if error or answers is None:
             self._fail(key, error or "no answers")
             return
+        usage = usage or {}
         with self._lock:
             self._pending.discard(key)
             self._seq += 1
-            self._results[key] = Answer(answers, self.clock(), usage or {}, self._seq)
-            self.stats["input_tokens"] += int((usage or {}).get("input_tokens") or 0)
+            self._results[key] = Answer(answers, self.clock(), usage, self._seq)
+            self.stats["input_tokens"] += int(usage.get("input_tokens") or 0)
+            self.stats["retries"] += int(usage.get("retries") or 0)
+            self.stats["failovers"] += 1 if usage.get("failover") else 0
+            self.stats["route"] = usage.get("route") or self.stats["route"]
             self.stats["last_call"] = self.clock()
 
     def _fail(self, key, error):

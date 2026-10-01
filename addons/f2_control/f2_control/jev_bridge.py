@@ -356,7 +356,7 @@ def triaged(c, room, zone, key, code, title, push, why):
                  "result": "acted", "reason": str(title)[:120]})
 
 
-USAGE_KEYS = ("day", "calls", "errors", "input_tokens", "last_error")
+USAGE_KEYS = ("day", "calls", "errors", "input_tokens", "last_error", "retries", "failovers", "reasks", "warned")
 
 
 def restore_usage(asker, path):
