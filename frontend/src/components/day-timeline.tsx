@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import { LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { dailyLimit, Empty, number, time as clock } from "@/components/dashboard";
@@ -6,9 +13,11 @@ import { ageText, ageTone, readHeartbeat } from "@/lib/controller-health";
 import {
   athenaDryback,
   bandStatus,
+  CHART_LAYERS,
   dayScales,
   hourTicks,
   overnightDryback,
+  parseChartPrefs,
   phaseColumns,
   placeBadges,
   placeMarkers,
@@ -18,8 +27,12 @@ import {
   steeringOf,
   valueAtTime,
   type Axis,
+  type ChartLayer,
+  type ChartPrefs,
   type Column,
+  type Compare,
   type Dryback,
+  type Readout,
   type Steering,
 } from "@/lib/day-chart";
 import {
@@ -93,15 +106,22 @@ const NO_ESTIMATE: Partial<Record<NextShot["basis"], string>> = {
   "no-reading": "no live VWC reading",
   unknown: "not enough to go on",
 };
-type Compare = "yesterday" | "typical" | "none";
 const LAYERS_KEY = "crop-steering-timeline-layers";
-/** What the chart compares today with, remembered in this browser. */
-function storedCompare(): Compare {
+/** The chart's choices remembered in this browser: what today is compared with, the layers
+ * switched off, and where its readings show. */
+function storedChart(): ChartPrefs {
   try {
-    const saved = JSON.parse(localStorage.getItem(LAYERS_KEY) ?? "null")?.compare;
-    return saved === "typical" || saved === "none" ? saved : "yesterday";
+    return parseChartPrefs(localStorage.getItem(LAYERS_KEY));
   } catch {
-    return "yesterday"; // no storage: the default
+    return parseChartPrefs(null); // no storage: the defaults
+  }
+}
+/** Remembers one of the chart's choices, keeping the others. */
+function rememberChart(choice: Partial<ChartPrefs>) {
+  try {
+    localStorage.setItem(LAYERS_KEY, JSON.stringify({ ...storedChart(), ...choice }));
+  } catch {
+    /* The choice still applies on this page. */
   }
 }
 interface Change extends SetpointChange {
@@ -151,7 +171,7 @@ interface Lane {
   rescue: number | null;
 }
 /** Earlier grow-days as loaded: per zone, each day's trace, yesterday first (null where there is
- * nothing to compare), and the room's setup revision as each day began. */
+ * nothing to draw), and the room's setup revision as each day began. */
 interface Earlier {
   key: string;
   traces: Map<number, (DayTrace | null)[]>;
@@ -255,14 +275,10 @@ export function ZoneDay({ controller, zone }: { controller: Controller; zone: Zo
     const timer = window.setInterval(() => tick((value) => value + 1), 30_000);
     return () => window.clearInterval(timer);
   }, []);
-  const [compare, setCompare] = useState(storedCompare);
+  const [compare, setCompare] = useState(() => storedChart().compare);
   const choose = (next: Compare) => {
     setCompare(next);
-    try {
-      localStorage.setItem(LAYERS_KEY, JSON.stringify({ compare: next }));
-    } catch {
-      /* The choice still applies on this page. */
-    }
+    rememberChart({ compare: next });
   };
   const { room, states } = controller;
   const now = Date.now();
@@ -482,8 +498,10 @@ function buildLane(
     planned,
   );
   const traces = earlier?.traces.get(zone.id) ?? [];
+  // Yesterday is drawn whatever happened; a day the room spent partly switched off is kept out
+  // of the typical day and the dry-down rates.
   const yesterday = traces[0] ?? null;
-  const past = traces.filter((trace): trace is DayTrace => trace !== null);
+  const past = traces.filter((trace): trace is DayTrace => trace !== null && !trace.roomOff);
   const today = smoothRecorded(points).map((point) => ({ ...point, hour: hourOf(point.time) }));
   // The rest of the day from the latest reading, on the zone's own dry-down (today and the three
   // grow-days before), by the rules the plan graph's projected day runs. Nothing is claimed for
@@ -776,6 +794,19 @@ function DayChart({
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [tip, setTip] = useState<Tip | null>(null);
+  // The layers switched off from the key, and where readings show: remembered in this browser.
+  const [hiddenLayers, setHidden] = useState(() => storedChart().hidden);
+  const [readout, setReadout] = useState(() => storedChart().readout);
+  const hidden = new Set(hiddenLayers);
+  const toggle = (layer: ChartLayer) => {
+    const next = CHART_LAYERS.filter((item) => (item === layer) !== hidden.has(item));
+    setHidden(next);
+    rememberChart({ hidden: next });
+  };
+  const place = (next: Readout) => {
+    setReadout(next);
+    rememberChart({ readout: next });
+  };
   useEffect(() => {
     const element = box.current;
     if (!element) return;
@@ -801,25 +832,37 @@ function DayChart({
     <div className="timeline-body">
       <div className="grow-chart" ref={box}>
         {width > 0 && (
-          <Chart lane={lane} day={day} now={now} width={width} compare={compare} onTip={setTip} />
+          <Chart
+            lane={lane}
+            day={day}
+            now={now}
+            width={width}
+            compare={compare}
+            hidden={hidden}
+            cursor={tip?.x ?? null}
+            onTip={setTip}
+          />
         )}
-        <div
-          className="grow-tip"
-          role="status"
-          aria-live="polite"
-          hidden={!tip}
-          data-side={tip && tip.x > width / 2 ? "left" : "right"}
-          style={
-            tip
-              ? tip.x > width / 2
-                ? { right: Math.max(0, width - tip.x + 10), top: Math.max(0, tip.y - 8) }
-                : { left: tip.x + 10, top: Math.max(0, tip.y - 8) }
-              : undefined
-          }
-        >
-          {tip?.text}
-        </div>
+        {readout === "over" && (
+          <div
+            className="grow-tip"
+            role="status"
+            aria-live="polite"
+            hidden={!tip}
+            data-side={tip && tip.x > width / 2 ? "left" : "right"}
+            style={
+              tip
+                ? tip.x > width / 2
+                  ? { right: Math.max(0, width - tip.x + 10), top: Math.max(0, tip.y - 8) }
+                  : { left: tip.x + 10, top: Math.max(0, tip.y - 8) }
+                : undefined
+            }
+          >
+            {tip?.text}
+          </div>
+        )}
       </div>
+      {readout === "below" && <ReadoutLine tip={tip} />}
       <div className="grow-foot">
         <Legend
           steering={lane.steering}
@@ -833,7 +876,16 @@ function DayChart({
                   : "Typical day (too few days)"
                 : null
           }
+          hidden={hidden}
+          onToggle={toggle}
         />
+        <label className="grow-readout-choice">
+          Readings
+          <select value={readout} onChange={(event) => place(event.target.value as Readout)}>
+            <option value="below">Under the chart</option>
+            <option value="over">On the chart</option>
+          </select>
+        </label>
         <details className="timeline-events">
           <summary>Today’s events ({events.length})</summary>
           {events.length ? (
@@ -851,58 +903,129 @@ function DayChart({
   );
 }
 
+/** The chart's key: every entry switches its layer on and off. */
 function Legend({
   steering,
   jev,
   compare,
+  hidden,
+  onToggle,
 }: {
   steering: Steering | null;
   jev: boolean;
   compare: string | null;
+  hidden: ReadonlySet<ChartLayer>;
+  onToggle: (layer: ChartLayer) => void;
 }) {
   const kind: Steering = steering ?? "vegetative";
+  const entry = (layer: ChartLayer, title: string | undefined, children: ReactNode) => (
+    <li>
+      <button
+        type="button"
+        title={title}
+        aria-pressed={!hidden.has(layer)}
+        data-layer-toggle={layer}
+        onClick={() => onToggle(layer)}
+      >
+        {children}
+      </button>
+    </li>
+  );
   return (
     <ul className="grow-legend" aria-label="Chart key">
-      <li title="Solid: recorded today. Dashed: what is expected for the rest of the day, an estimate.">
-        <i className="key-vwc" aria-hidden="true" />
-        VWC
-      </li>
-      <li title="Right-hand axis, mS/cm. Green while steering vegetative, purple while generative.">
-        <i className="key-ec" data-steering={kind} aria-hidden="true" />
-        Pore EC
-      </li>
-      <li>
-        <i className="key-shot" aria-hidden="true" />
-        Shot
-        <i className="key-held" aria-hidden="true" />
-        held
-      </li>
-      <li title="Field capacity, with a thin runoff band: just above it for vegetative steering, just under it for generative.">
-        <i className="key-fc" aria-hidden="true" />
-        <i className="key-runoff" data-steering={kind} aria-hidden="true" />
-        FC · runoff
-      </li>
-      <li title="From the maintenance trigger (P2 re-waters under it) up to the peak target, over the ramp and maintenance hours.">
-        <i className="key-band" aria-hidden="true" />
-        Maintenance band
-      </li>
-      <li title="Overnight, the controller waters only below this level.">
-        <i className="key-rescue" aria-hidden="true" />
-        Rescue floor
-      </li>
-      {jev && (
-        <li title="Filled: code acted on it. Outline: advice, no action, or refused.">
-          <i className="key-jev" aria-hidden="true" />
-          Jev decision
-        </li>
+      {entry(
+        "vwc",
+        "Solid: recorded today. Dashed: what is expected for the rest of the day, an estimate.",
+        <>
+          <i className="key-vwc" aria-hidden="true" />
+          VWC
+        </>,
       )}
-      {compare && (
-        <li title="Drawn on today’s scale: an earlier day beyond it runs off the edge.">
-          <i className="key-compare" aria-hidden="true" />
-          {compare}
-        </li>
+      {entry(
+        "ec",
+        "Right-hand axis, mS/cm. Green while steering vegetative, purple while generative.",
+        <>
+          <i className="key-ec" data-steering={kind} aria-hidden="true" />
+          Pore EC
+        </>,
       )}
+      {entry(
+        "shots",
+        undefined,
+        <>
+          <i className="key-shot" aria-hidden="true" />
+          Shot
+          <i className="key-held" aria-hidden="true" />
+          held
+        </>,
+      )}
+      {entry(
+        "fc",
+        "Field capacity, with a thin runoff band: just above it for vegetative steering, just under it for generative.",
+        <>
+          <i className="key-fc" aria-hidden="true" />
+          <i className="key-runoff" data-steering={kind} aria-hidden="true" />
+          FC · runoff
+        </>,
+      )}
+      {entry(
+        "band",
+        "From the maintenance trigger (P2 re-waters under it) up to the peak target, over the ramp and maintenance hours.",
+        <>
+          <i className="key-band" aria-hidden="true" />
+          Maintenance band
+        </>,
+      )}
+      {entry(
+        "rescue",
+        "Overnight, the controller waters only below this level.",
+        <>
+          <i className="key-rescue" aria-hidden="true" />
+          Rescue floor
+        </>,
+      )}
+      {jev &&
+        entry(
+          "jev",
+          "Filled: code acted on it. Outline: advice, no action, or refused.",
+          <>
+            <i className="key-jev" aria-hidden="true" />
+            Jev decision
+          </>,
+        )}
+      {compare &&
+        entry(
+          "compare",
+          "Drawn on today’s scale: an earlier day beyond it runs off the edge.",
+          <>
+            <i className="key-compare" aria-hidden="true" />
+            {compare}
+          </>,
+        )}
     </ul>
+  );
+}
+
+/** The chart's reading under it, so it never covers what it reads: the moment first, then the
+ * rest on one line. */
+function ReadoutLine({ tip }: { tip: Tip | null }) {
+  const lines = tip?.text.split("\n").filter(Boolean) ?? [];
+  return (
+    <p
+      className="grow-readout"
+      role="status"
+      aria-live="polite"
+      data-empty={lines.length ? undefined : true}
+    >
+      {lines.length ? (
+        <>
+          <strong>{lines[0]}</strong>
+          {lines.length > 1 && ` · ${lines.slice(1).join(" · ")}`}
+        </>
+      ) : (
+        "Point at the chart, or tap it, to read it here."
+      )}
+    </p>
   );
 }
 
@@ -929,7 +1052,9 @@ function Chart({
   day,
   now,
   width,
-  compare,
+  compare: chosen,
+  hidden,
+  cursor,
   onTip,
 }: {
   lane: Lane;
@@ -937,8 +1062,14 @@ function Chart({
   now: number;
   width: number;
   compare: Compare;
+  /** Layers switched off from the key: not drawn, not pointed at, not read out. */
+  hidden: ReadonlySet<ChartLayer>;
+  /** Where the reading is taken, in pixels across the chart: a bar runs up the plot there. */
+  cursor: number | null;
   onTip: (tip: Tip | null | ((held: Tip | null) => Tip | null)) => void;
 }) {
+  const show = (layer: ChartLayer) => !hidden.has(layer);
+  const compare: Compare = show("compare") ? chosen : "none";
   const { zone, points, steps } = lane;
   const name = zone.name;
   const narrow = width < 420;
@@ -1054,8 +1185,9 @@ function Chart({
     return { column, cx, word: labelled ? word : "" };
   });
   // What the pointer is on, in order: the small marks first, then the columns, then the lines.
+  // A layer switched off is not there to point at.
   const hits: Hit[] = [
-    ...shotDots.map(({ shot, cx, cy }) => ({
+    ...(show("shots") ? shotDots : []).map(({ shot, cx, cy }) => ({
       x0: cx - 6,
       x1: cx + 6,
       y0: cy - 8,
@@ -1063,7 +1195,7 @@ function Chart({
       rank: 0,
       text: () => shotText(shot, lane),
     })),
-    ...heldRings.map(({ block, cx, cy }) => ({
+    ...(show("shots") ? heldRings : []).map(({ block, cx, cy }) => ({
       x0: cx - 6,
       x1: cx + 6,
       y0: cy - 8,
@@ -1071,7 +1203,7 @@ function Chart({
       rank: 0,
       text: () => blockText(block, lane),
     })),
-    ...markers.map((marker) => ({
+    ...(show("jev") ? markers : []).map((marker) => ({
       x0: marker.x - 8,
       x1: marker.x + 8,
       y0: JEV_Y - 9,
@@ -1079,7 +1211,7 @@ function Chart({
       rank: 0,
       text: () => marker.items.map((entry) => jevText(entry, lane)).join("\n\n"),
     })),
-    ...expected.map(({ shot, cx, cy }) => ({
+    ...(show("vwc") ? expected : []).map(({ shot, cx, cy }) => ({
       x0: cx - 5,
       x1: cx + 5,
       y0: cy - 7,
@@ -1114,9 +1246,24 @@ function Chart({
       y1: bottom,
       rank: 4,
       text: (at) =>
-        readingText(lane, at, now, day.start, before, typical, fc, band, rescue, compare),
+        readingText(lane, at, now, day.start, before, typical, fc, band, rescue, compare, show),
     },
   ];
+  // Where the bar crosses each line that is drawn: the readings it takes.
+  const cursorAt = cursor !== null && cursor >= L && cursor <= L + plotW ? timeAt(cursor) : null;
+  const cursorDots: { cy: number; series: string }[] = [];
+  if (cursorAt !== null) {
+    const vwcThen =
+      cursorAt <= now
+        ? valueAtTime(points, cursorAt)
+        : valueAtTime(projection?.points ?? [], cursorAt, 24 * 3_600_000);
+    if (show("vwc") && onAxis(vwcThen)) cursorDots.push({ cy: y(vwcThen), series: "vwc" });
+    const ecThen = cursorAt <= now ? valueAtTime(lane.ec, cursorAt, 40 * 60_000) : null;
+    if (show("ec") && ecAxis && ecThen !== null)
+      cursorDots.push({ cy: yEc(ecThen), series: "ec" });
+    const beforeThen = before.length ? valueAtTime(before, cursorAt) : null;
+    if (onAxis(beforeThen)) cursorDots.push({ cy: y(beforeThen), series: "yesterday" });
+  }
   const find = (event: PointerEvent<SVGSVGElement> | MouseEvent<SVGSVGElement>) => {
     const frame = event.currentTarget.getBoundingClientRect();
     const px = event.clientX - frame.left,
@@ -1179,7 +1326,7 @@ function Chart({
           </text>
         </g>
       ))}
-      {ecAxis && lane.ec.length > 0 && (
+      {show("ec") && ecAxis && lane.ec.length > 0 && (
         <g className="ec-axis" data-steering={lane.steering ?? undefined}>
           <text x={L + plotW + 7} y={10} className="axis-title">
             EC
@@ -1202,7 +1349,7 @@ function Chart({
         </g>
       )}
       <g clipPath={`url(#${id}-plot)`}>
-        {onAxis(fcNow) && lane.steering && (
+        {show("fc") && onAxis(fcNow) && lane.steering && (
           <g data-layer="runoff" data-steering={lane.steering}>
             {fc.map((level, index) => {
               const [low, high] = runoffBand(level.value, lane.steering!);
@@ -1219,7 +1366,7 @@ function Chart({
             })}
           </g>
         )}
-        {band.length > 0 && (
+        {show("band") && band.length > 0 && (
           <g data-layer="maintenance">
             {band.map((segment, index) => (
               <rect
@@ -1251,14 +1398,16 @@ function Chart({
             className="phase-divider"
           />
         ))}
-        {onAxis(fcNow) && <path data-layer="fc" d={flat(fc)} className="fc-line" />}
-        {rescue.some((level) => onAxis(level.value)) && (
+        {show("fc") && onAxis(fcNow) && (
+          <path data-layer="fc" d={flat(fc)} className="fc-line" />
+        )}
+        {show("rescue") && rescue.some((level) => onAxis(level.value)) && (
           <path data-layer="rescue" d={flat(rescue)} className="rescue-line" />
         )}
         {before.length > 0 && (
           <path data-layer="yesterday" d={linePath(before, x, yOpen)} className="yesterday-line" />
         )}
-        {lane.ec.length > 1 && ecAxis && (
+        {show("ec") && lane.ec.length > 1 && ecAxis && (
           <path
             data-layer="ec"
             data-steering={lane.steering ?? undefined}
@@ -1266,7 +1415,7 @@ function Chart({
             className="ec-line"
           />
         )}
-        {projection && (
+        {show("vwc") && projection && (
           <path
             data-layer="projected"
             d={projection.points
@@ -1278,9 +1427,9 @@ function Chart({
             className="projection"
           />
         )}
-        <path d={linePath(points, x, y)} className="vwc-line" data-layer="vwc" />
+        {show("vwc") && <path d={linePath(points, x, y)} className="vwc-line" data-layer="vwc" />}
       </g>
-      {fcNow !== null && vwcAxis && (
+      {show("fc") && fcNow !== null && vwcAxis && (
         <text
           x={L + plotW - 4}
           y={
@@ -1298,7 +1447,7 @@ function Chart({
           FC {number(fcNow)}%{onAxis(fcNow) ? "" : fcNow > vwcAxis.max ? " ↑" : " ↓"}
         </text>
       )}
-      {rescueNow && vwcAxis && (
+      {show("rescue") && rescueNow && vwcAxis && (
         <text
           x={Math.max(x(rescueNow.column.start) + 4, L + 4)}
           y={onAxis(rescueNow.value) ? y(rescueNow.value) - 4 : bottom - 4}
@@ -1313,7 +1462,7 @@ function Chart({
         </text>
       )}
       <g data-layer="expected">
-        {expected.map(({ shot, cx, cy }, index) => (
+        {(show("vwc") ? expected : []).map(({ shot, cx, cy }, index) => (
           <circle
             key={index}
             cx={cx}
@@ -1323,22 +1472,40 @@ function Chart({
           />
         ))}
       </g>
-      <g data-layer="shots">
-        {shotDots.map(({ cx, cy, r }, index) => (
-          <circle key={index} cx={cx} cy={cy} r={r} className="shot-dot" />
-        ))}
-        {heldRings.map(({ block, cx, cy }, index) => (
-          <circle
-            key={`h${index}`}
-            cx={cx}
-            cy={cy}
-            r={4}
-            className="held-ring"
-            data-kind={block.kind}
-          />
-        ))}
-      </g>
-      {markers.length > 0 && (
+      {show("shots") && (
+        <g data-layer="shots">
+          {shotDots.map(({ cx, cy, r }, index) => (
+            <circle key={index} cx={cx} cy={cy} r={r} className="shot-dot" />
+          ))}
+          {heldRings.map(({ block, cx, cy }, index) => (
+            <circle
+              key={`h${index}`}
+              cx={cx}
+              cy={cy}
+              r={4}
+              className="held-ring"
+              data-kind={block.kind}
+            />
+          ))}
+        </g>
+      )}
+      {cursorAt !== null && (
+        <g className="grow-cursor" data-layer="cursor">
+          <line x1={cursor!} x2={cursor!} y1={TOP} y2={bottom} className="cursor-bar" />
+          {cursorDots.map(({ cy, series }) => (
+            <circle
+              key={series}
+              cx={cursor!}
+              cy={cy}
+              r={3.5}
+              className="cursor-dot"
+              data-series={series}
+              data-steering={series === "ec" ? (lane.steering ?? undefined) : undefined}
+            />
+          ))}
+        </g>
+      )}
+      {show("jev") && markers.length > 0 && (
         <g data-layer="jev">
           {markers.map((marker, index) => (
             <path
@@ -1462,6 +1629,7 @@ function readingText(
   band: { start: number; end: number; high: number; low: number }[],
   rescue: Level[],
   compare: Compare,
+  show: (layer: ChartLayer) => boolean,
 ): string {
   const name = lane.zone.name;
   const lines: string[] = [];
@@ -1471,22 +1639,22 @@ function readingText(
     // The projection is a line from point to point, however far apart they are.
     const value = valueAtTime(lane.projection?.points ?? [], at, 24 * 3_600_000);
     lines.push(`≈${clock(at)} · ${name} · expected`);
-    lines.push(
-      value !== null
-        ? `VWC ≈${number(value)}%, an estimate: the controller waters by the probe`
-        : `No projection: ${lane.status ?? NO_ESTIMATE[lane.next.basis] ?? "not enough to go on"}`,
-    );
+    if (show("vwc"))
+      lines.push(
+        value !== null
+          ? `VWC ≈${number(value)}%, an estimate: the controller waters by the probe`
+          : `No projection: ${lane.status ?? NO_ESTIMATE[lane.next.basis] ?? "not enough to go on"}`,
+      );
   } else {
     const value = valueAtTime(lane.points, at);
     const phase = phaseAt(lane.bands, at);
     const ec = valueAtTime(lane.ec, at, 40 * 60_000);
     lines.push(`${clock(at)} · ${name}${phase ? ` · ${phase}` : ""}`);
-    lines.push(
-      [
-        value === null ? "No VWC reading then" : `VWC ${number(value, 1)}%`,
-        ...(ec === null ? [] : [`pore EC ${number(ec, 2)}`]),
-      ].join(" · "),
-    );
+    const readings = [
+      ...(show("vwc") ? [value === null ? "No VWC reading then" : `VWC ${number(value, 1)}%`] : []),
+      ...(show("ec") && ec !== null ? [`pore EC ${number(ec, 2)}`] : []),
+    ];
+    if (readings.length) lines.push(readings.join(" · "));
   }
   if (compare === "yesterday" && lane.yesterday) {
     const value = valueAtTime(before, at);
@@ -1501,14 +1669,14 @@ function readingText(
         `Typical ${number(point.median)}% (middle half ${number(point.low)}–${number(point.high)}%)`,
       );
   }
-  const maintenance = inside(band);
+  const maintenance = show("band") ? inside(band) : undefined;
   if (maintenance)
     lines.push(
       `Maintenance band ${number(maintenance.low)}–${number(maintenance.high)}%: re-waters under ${number(maintenance.low)}%`,
     );
-  const floor = inside(rescue);
+  const floor = show("rescue") ? inside(rescue) : undefined;
   if (floor) lines.push(`Rescue shot only under ${number(floor.value)}%`);
-  const capacity = inside(fc);
+  const capacity = show("fc") ? inside(fc) : undefined;
   if (capacity) lines.push(`Field capacity ${number(capacity.value)}%`);
   return lines.join("\n");
 }
