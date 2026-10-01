@@ -35,6 +35,7 @@ import dosing_runner
 import jev_bridge
 import jev_policy
 import setpoint_supervisor
+import zone_history
 from strategy_runtime import parse_snapshot, parameter_override, strategy_block
 
 from crop_steering_engine import (
@@ -835,6 +836,7 @@ class Controller:
             "water_history": None,
             "water_history_legacy_excluded_l": 0.0,
             "learn": auto_setpoints.fresh(),
+            **zone_history.fresh(),
         }
 
     def _apply_saved_zone(self, fresh, d):
@@ -901,6 +903,7 @@ class Controller:
                 s["water_history_legacy_excluded_l"] = excluded
         except (TypeError, ValueError):
             pass
+        s.update(zone_history.restore(d))
         return s
 
     def _read_state_file(self):
@@ -1255,6 +1258,9 @@ class Controller:
             "last_phase_change": lpc.isoformat() if isinstance(lpc, datetime) else None,
             "last_ec_steer": les.isoformat() if isinstance(les, datetime) else None,
             "last_daily_reset": ldr.isoformat() if isinstance(ldr, date) else None,
+            "plateau_hist": s.get("plateau_hist") or [],
+            "night_hist": s.get("night_hist") or [],
+            "night": s.get("night"),
         }
 
     def _save_state(self):
