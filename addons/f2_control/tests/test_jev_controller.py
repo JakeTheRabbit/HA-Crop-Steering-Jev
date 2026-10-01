@@ -46,8 +46,9 @@ def jev_with(monkeypatch):
     """Build controllers whose Jev answers with `answers` (or fails with `error`), synchronously."""
     def make(answers=None, error=None):
         transport = K.FakeTransport(answers, error)
+        monkeypatch.setattr(jev_bridge, "Routes", lambda found, **kw: transport)
         monkeypatch.setattr(jev_bridge, "Asker", functools.partial(
-            Asker, threaded=False, transport=transport, clock=lambda: NOW.timestamp()))
+            Asker, threaded=False, clock=lambda: NOW.timestamp()))
         c, fake = _build({"num_zones": 1, "enable_flag": KILL, "cf_account_id": "acct",
                           "cf_api_token": "tok"}, states=_states())
         c._jev_transport = transport
@@ -121,9 +122,44 @@ def test_the_controller_starts_even_if_jev_cannot(monkeypatch):
 
 
 def test_the_options_choose_the_judges(jev_with, monkeypatch):
-    monkeypatch.setattr(jev_bridge, "Asker", functools.partial(Asker, threaded=False,
-                                                                transport=K.FakeTransport({})))
+    monkeypatch.setattr(jev_bridge, "Routes", lambda found, **kw: K.FakeTransport({}))
+    monkeypatch.setattr(jev_bridge, "Asker", functools.partial(Asker, threaded=False))
     brain = jev_bridge.build({"jev_judges": "ramp, salt"}, ("a", "t", ""), "/tmp/state.json", lambda *a: None)
     assert sorted(j.name for j in brain.judges) == ["ramp", "salt"]
     assert jev_bridge.build({"jev_enabled": False}, ("a", "t", ""), "/tmp/s.json", lambda *a: None) is None
     assert controller.Controller.__dict__  # controller imports the bridge
+
+
+def _created(fake, code):
+    return [d["notification_id"] for dom, svc, d in fake.calls
+            if (dom, svc) == ("persistent_notification", "create") and f"({code})" in d["title"]]
+
+
+def test_the_jev_sensor_shows_the_routes_the_budget_and_the_stricter_gate(jev_with):
+    c, fake = jev_with({})
+    _p1_zone(c)  # in its ramp: nothing fires, so the pass takes no shot time
+    for _ in range(3):
+        c.jev.ledger.resolve(c.jev.ledger.record("ramp", "default", 1, "P2", "advance"), "fell back", False)
+    c.loop_once(NOW)
+    room = fake.sets["sensor.crop_steering_jev"][1]
+    assert room["routes"] == ["Cloudflare"] and room["daily_budget"] == 5000
+    assert {"last_route", "retries_today", "failovers_today", "reasks_today"} <= set(room)
+    assert fake.sets["sensor.crop_steering_zone_1_jev"][1]["strict"] == ["ramp"]
+
+
+def test_jev_pushes_once_when_todays_calls_reach_80_percent(jev_with):
+    c, fake = jev_with({})
+    _p1_zone(c)  # in its ramp, so the Ramp judge is asked: the day's first call
+    c.jev.asker.daily_budget = 1  # and that call is all of the budget
+    c.loop_once(NOW)
+    assert _created(fake, "CS-706") == ["f2_jev_budget_default"]
+    c.loop_once(NOW + timedelta(minutes=1))
+    assert len(_created(fake, "CS-706")) == 1
+
+
+def test_jev_pushes_when_a_judge_goes_on_the_stricter_gate(jev_with):
+    c, fake = jev_with({})
+    _p1_zone(c)
+    c.jev.events.append(("strict", "default", 1, "ramp"))
+    c.loop_once(NOW)
+    assert _created(fake, "CS-707") == ["f2_jev_ramp_default_z1"] and c.jev.events == []
