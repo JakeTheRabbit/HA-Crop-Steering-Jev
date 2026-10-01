@@ -1,7 +1,7 @@
 """zone_history.py: each zone's plateaus and nights, the dryback planner's record. The numbers are zone 1's: the
 explainer's planned night (36.0 plateau, 32.78 at lights-off, 25.58 at lights-on, first shot from 25.18), and the
 real night of 30 Sep 2026, which dried to the 20.7 floor and fired a rescue at 08:59."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -136,4 +136,36 @@ def test_a_night_from_another_grow_day_is_dropped_at_the_first_shot():
     H.lights_on(st, 51.2, datetime(2026, 9, 24, 10, 0))
     assert H.shot(st, vwc_before=47.0, now=datetime(2026, 9, 25, 10, 5), day="2026-09-25", first=True) is None
     assert st["night"] is None and st["night_hist"] == []
+
+
+def test_restore_drops_what_has_the_wrong_type_and_keeps_what_a_newer_version_added():
+    saved = {
+        "plateau_hist": [
+            {"date": "2026-09-28", "how": "x", "shots": 6},  # no value
+            {"date": "2026-09-29", "value": "36", "how": "x", "shots": 6},  # a value that is not a number
+            {"date": "2026-09-31", "value": 36.0, "how": "x", "shots": 6},  # no such date
+            {"date": "2026-09-30", "value": float("nan"), "how": "x", "shots": 6},
+            {"date": "2026-10-01", "value": 36.0, "how": "x", "shots": "6"},  # shots that are not a count
+            {"date": "2026-10-02", "value": 36.1, "how": "x", "shots": 6, "rule": "plateau"},  # a newer key: kept
+        ],
+        "night": {"off_at": "2026-10-01T22:00:00", "off_vwc": 32.78, "shots": "x"},
+    }
+    out = H.restore(saved)
+    assert out["plateau_hist"] == [{"date": "2026-10-02", "value": 36.1, "how": "x", "shots": 6, "rule": "plateau"}]
+    assert out["night"] is None
+    for bad in ({"off_at": "garbage"}, {"off_at": "2026-10-01T22:00:00", "off_vwc": "abc"},
+                {"off_at": "2026-10-01T22:00:00", "on_at": "noon"}, {"off_at": "2026-10-01T22:00:00", "day": "yesterday"},
+                {"off_at": "2026-10-01T22:00:00", "plateau": True}, {"off_at": "2026-10-01T22:00:00", "on_shots": -1}):
+        assert H.restore({"night": bad})["night"] is None, bad
+
+
+def test_a_night_mixing_times_with_and_without_a_utc_offset_is_still_measured():
+    """A newer version may write its times with a UTC offset, this one writes local times: both are real moments,
+    measured in real hours."""
+    off = datetime(2026, 9, 26, 22, 0, tzinfo=timezone(timedelta(hours=12)))
+    st = _zone(night=H.restore({"night": {"off_at": off.isoformat(), "off_vwc": 33.0, "day": "2026-09-26"}})["night"])
+    on = datetime(2026, 9, 27, 10, 0)
+    H.lights_on(st, 26.4, on)
+    rec = H.shot(st, vwc_before=26.0, now=datetime(2026, 9, 27, 10, 30), day="2026-09-27", first=True)
+    assert rec["night_rate"] == pytest.approx(6.6 / ((on.timestamp() - off.timestamp()) / 3600.0))
 

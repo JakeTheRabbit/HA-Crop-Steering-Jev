@@ -15,6 +15,7 @@ with them empty. Stored values keep full precision; only night_words() rounds, f
 """
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 
 KEEP = 14
@@ -29,16 +30,53 @@ def _night(off_at, off_vwc, plateau, day):
             "on_shots": 0, "shots": 0, "end_at": None, "end_vwc": None}
 
 
+def _number(v):
+    """`v` when it is a finite number (a bool is not one), else None."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+
+def _count(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def _parses(v, parse):
+    try:
+        parse(v)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _plateau_ok(e):
+    return (isinstance(e, dict) and _parses(e.get("date"), date.fromisoformat)
+            and (_number(e.get("value")) or 0) > 0 and _count(e.get("shots")))
+
+
+def _night_ok(n):
+    """The open night with every key in place, or None when anything in it has the wrong type."""
+    if not isinstance(n, dict) or not _parses(n.get("off_at"), datetime.fromisoformat):
+        return None
+    n = {**_night(n["off_at"], None, None, None), **n}
+    ok = (all(_count(n[k]) for k in ("shots", "on_shots"))
+          and all(n[k] is None or _parses(n[k], datetime.fromisoformat) for k in ("on_at", "end_at"))
+          and all(n[k] is None or _number(n[k]) is not None for k in ("off_vwc", "on_vwc", "end_vwc", "plateau"))
+          and (n["day"] is None or _parses(n["day"], date.fromisoformat)))
+    return n if ok else None
+
+
 def restore(saved):
-    """The three keys from a saved zone dict, dropping anything malformed instead of failing the load."""
+    """The three keys from a saved zone dict. Anything of the wrong shape or type is dropped instead of failing the
+    load, or failing later inside the control loop: a damaged file, or one a newer version wrote (whose extra keys
+    are kept)."""
     out = fresh()
-    for key in ("plateau_hist", "night_hist"):
-        items = saved.get(key)
-        if isinstance(items, list):
-            out[key] = [dict(x) for x in items if isinstance(x, dict) and isinstance(x.get("date"), str)][-KEEP:]
-    night = saved.get("night")
-    if isinstance(night, dict) and isinstance(night.get("off_at"), str):
-        out["night"] = {**_night(night["off_at"], None, None, None), **night}
+    items = saved.get("plateau_hist")
+    if isinstance(items, list):
+        out["plateau_hist"] = [dict(e) for e in items if _plateau_ok(e)][-KEEP:]
+    items = saved.get("night_hist")
+    if isinstance(items, list):
+        out["night_hist"] = [dict(e) for e in items
+                             if isinstance(e, dict) and _parses(e.get("date"), date.fromisoformat)][-KEEP:]
+    out["night"] = _night_ok(saved.get("night"))
     return out
 
 
@@ -47,12 +85,13 @@ def _iso(t):
 
 
 def _hours(start, end):
-    return (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds() / 3600.0
+    """Real hours between two ISO times, with or without a UTC offset: a clock change in between counts right."""
+    return (datetime.fromisoformat(end).timestamp() - datetime.fromisoformat(start).timestamp()) / 3600.0
 
 
 def plateau(st, *, day, value, how, shots):
     """Record the grow day's plateau. Nothing is recorded (None) without a usable value."""
-    if not isinstance(value, (int, float)) or value <= 0:
+    if (_number(value) or 0) <= 0:
         return None
     entry = {"date": day, "value": float(value), "how": str(how)[:80], "shots": int(shots or 0)}
     kept = [e for e in st.get("plateau_hist") or [] if e.get("date") != day]

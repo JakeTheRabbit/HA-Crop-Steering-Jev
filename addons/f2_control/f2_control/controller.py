@@ -2774,14 +2774,16 @@ class Controller:
         if not isinstance(st.get("learn"), dict):
             st["learn"] = auto_setpoints.fresh()
         auto_setpoints.shot(st["learn"], st.get("phase"), size_pct, st.get("last_vwc"), now.timestamp())
-        # the day's first shot closes the night: the VWC it started from is what the zone landed on
-        record = zone_history.shot(st, vwc_before=st.get("last_vwc"), now=now, day=day,
-                                   first=st.get("phase") == "P1" and st["shots"] == 0)
-        if record is not None:
-            words = zone_history.night_words(record)
-            tag = "" if room.prefix == "" else f"{room.slug} "
-            self._activity.insert(0, f"{now.strftime('%H:%M')} {tag}Z{zone} {words}"[:120])
-            log(f"[{room.slug}] Z{zone} {words}")
+        first = st.get("phase") == "P1" and st["shots"] == 0
+        try:  # the day's first shot closes the night: the VWC it started from is what the zone landed on
+            record = zone_history.shot(st, vwc_before=st.get("last_vwc"), now=now, day=day, first=first)
+            if record is not None:
+                words = zone_history.night_words(record)
+                tag = "" if room.prefix == "" else f"{room.slug} "
+                self._activity.insert(0, f"{now.strftime('%H:%M')} {tag}Z{zone} {words}"[:120])
+                log(f"[{room.slug}] Z{zone} {words}")
+        except Exception as e:  # a record is never worth a delivered shot the counters miss
+            log("zone history error", room.slug, zone, e)
         st["shots"] += 1
         st["last_shot"] = now
         st["last_shot_is_anchor"] = False  # water was delivered: this one is an irrigation
@@ -2795,10 +2797,13 @@ class Controller:
 
     def _record_phase(self, room, zone, st, was, new, now, how):
         """Keep the zone's history on a phase change by anyone (the engine, a Jev judge, the operator's Set Phase):
-        P1 handing over to P2 is the day's plateau."""
-        entry = zone_history.phase_changed(st, was, new, day=self._grow_day_start(room, now).isoformat(), how=how)
-        if entry is not None:
-            log(f"[{room.slug}] Z{zone} plateau {entry['value']:.2f} after {entry['shots']} shots: {entry['how']}")
+        P1 handing over to P2 is the day's plateau. A history error never stops the phase change."""
+        try:
+            entry = zone_history.phase_changed(st, was, new, day=self._grow_day_start(room, now).isoformat(), how=how)
+            if entry is not None:
+                log(f"[{room.slug}] Z{zone} plateau {entry['value']:.2f} after {entry['shots']} shots: {entry['how']}")
+        except Exception as e:
+            log("zone history error", room.slug, zone, e)
 
     # ---------- hardware (sync; this process does one thing) ----------
     @staticmethod
@@ -3912,12 +3917,15 @@ class Controller:
             snap, p = self._snapshot(room, zone, now, lights_on, lights_just_on)
             params[zone] = p
             if lights_just_off or lights_just_on:  # the night's two readings (zone_history), kept across a restart
-                vwc = snap.vwc if snap is not None else None
-                if lights_just_off:
-                    zone_history.lights_off(st, vwc, now, self._grow_day_start(room, now).isoformat())
-                else:
-                    zone_history.lights_on(st, vwc, now)
-                self._save_state()
+                try:
+                    vwc = snap.vwc if snap is not None else None
+                    if lights_just_off:
+                        zone_history.lights_off(st, vwc, now, self._grow_day_start(room, now).isoformat())
+                    else:
+                        zone_history.lights_on(st, vwc, now)
+                    self._save_state()
+                except Exception as e:  # a record never stops the room being decided and watered
+                    log("zone history error", room.slug, zone, e)
             jev_dirs = {}
             distrusted = room.__dict__.setdefault("_jev_distrusted", {})
             distrusted.pop(zone, None)

@@ -1,5 +1,6 @@
 """The plateau and night history inside the real controller: the lights edges, each way P1 hands over (the engine,
 Jev's Ramp judge, the operator), the day's first shot, and an app restart in the night."""
+import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -152,4 +153,38 @@ def test_a_night_left_open_across_a_missed_morning_is_not_merged_into_a_later_on
     st.update(phase="P1", shots=0, last_vwc=47.0)
     c._advance_shot_counters(room, 1, 3.0)
     assert st["night_hist"] == [] and st["night"] is None
+
+
+def test_a_history_with_wrong_types_is_dropped_on_load_and_the_room_carries_on(rig):
+    c, fake, room = rig
+    with open(c._state_path, "w") as fh:
+        json.dump({"default": {"1": {"phase": "P2", "last_daily_reset": "2026-09-23",
+                                     "plateau_hist": [{"date": "2026-09-23", "how": "no value", "shots": 6}],
+                                     "night": {"off_at": "garbage", "shots": "x"}}}}, fh)
+    c._load_state()
+    st = room.state[1]
+    assert (st["plateau_hist"], st["night"]) == ([], None)
+    room._was_lights_on = True
+    _loop(c, fake, room, Clock(2026, 9, 23, 22, 0), 58.4)
+    assert st["phase"] == "P3" and st["night"]["off_vwc"] == 58.4
+
+
+def test_a_history_error_never_costs_a_counted_shot(rig):
+    c, fake, room = rig
+    st = room.state[1]
+    st.update(phase="P1", shots=0, last_vwc=50.8,
+              night={"off_at": "garbage", "off_vwc": 58.4, "plateau": None, "day": "2026-09-22",
+                     "on_at": "2026-09-23T10:00:00", "on_vwc": 51.2, "on_shots": 0, "shots": 0, "end_at": None,
+                     "end_vwc": None})  # a night only code that skips restore could hold: it fails in the arithmetic
+    c._advance_shot_counters(room, 1, 3.0)
+    assert st["shots"] == 1 and st["daily_vol"] > 0 and st["last_shot"] == Clock.now()
+
+
+def test_a_broken_history_never_blocks_a_hand_over(rig):
+    c, fake, room = rig
+    st = room.state[1]
+    st.update(phase="P1", peak=44.0, shots=4, plateau_hist="junk")
+    fake.set_state("select.crop_steering_zone_1_set_phase", "P2")
+    c._apply_phase_request(room, 1, st, Clock.now())
+    assert st["phase"] == "P2"
 
