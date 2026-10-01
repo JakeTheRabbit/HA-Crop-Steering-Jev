@@ -134,11 +134,11 @@ def test_the_ledger_survives_a_restart_and_gives_a_track_record(tmp_path):
 
 
 # ------------------------------------------------------------------ brain + ramp
-def _ramp_ctx():
+def _ramp_ctx(now=K.NOW):
     h = K.history(points=[(m, 38.0 + (0.1 if m < 20 else 0), 5.4) for m in range(0, 90, 1)],
                   shots=[(60, 120, 36.0, 5.0, "p1_ramp"), (35, 120, 37.8, 5.2, "p1_ramp")])
     s = K.snap(phase="P1", vwc=39.2, shot_count=3, minutes_since_shot=25.0, ec=5.6, ec_settled=5.6)
-    return K.ctx("P1", s=s, h=h)
+    return K.ctx("P1", s=s, h=h, now=now)
 
 
 def test_the_brain_asks_in_the_background_and_hands_over_the_ramp(tmp_path):
@@ -328,3 +328,67 @@ def test_the_owner_is_told_once_when_a_judge_goes_on_the_stricter_gate():
     brain.tick(_ramp_ctx())
     assert brain.events == [("strict", "default", 1, "ramp")]  # once, when the run tipped over
     assert _brain(K.FakeTransport({}), led).events == []  # a restart reads the gate, it does not push again
+
+
+def _brain_at(t, clock, ledger=None, judge=None):
+    asker = Asker("acct", "tok", transport=t, threaded=False, clock=lambda: clock["t"])
+    return Brain(asker, ledger or Ledger(None), [judge or RampJudge()], log=lambda *a: None)
+
+
+def test_a_second_look_is_dropped_once_the_zone_leaves_the_judges_phase():
+    t = K.ScriptedTransport(UNSURE, SURE)
+    brain = _brain(t)
+    assert brain.tick(_ramp_ctx()) == []  # unsure: a second look is due
+    brain.tick(K.ctx("P2", s=K.snap(phase="P2")))  # the zone handed over by other means first
+    brain.tick(_ramp_ctx(K.NOW + timedelta(days=1)))  # the next day's ramp
+    assert "second_look" not in t.calls[-1]["state"] and brain.asker.stats["reasks"] == 0
+
+
+def test_a_second_look_is_dropped_once_the_answer_it_rechecks_is_too_old():
+    clock = {"t": K.NOW.timestamp()}
+    t = K.ScriptedTransport(UNSURE, SURE)
+    brain = _brain_at(t, clock)
+    brain.asker.daily_budget = 1  # the day's calls are spent: the second look cannot go out yet
+    assert brain.tick(_ramp_ctx()) == [] and brain.tick(_ramp_ctx()) == []
+    brain.asker.daily_budget = 5000
+    clock["t"] += 30 * 60  # half an hour on: older than the ramp judge's 25 minutes
+    brain.tick(_ramp_ctx(K.NOW + timedelta(minutes=30)))
+    assert "second_look" not in t.calls[-1]["state"]
+
+
+def test_on_the_stricter_gate_yesterdays_call_does_not_confirm_todays():
+    led = Ledger(None)
+    _bad_run(led)
+    clock = {"t": K.NOW.timestamp()}
+    t = K.ScriptedTransport(SURE, SURE)
+    brain = _brain_at(t, clock, led)
+    brain.asker.daily_budget = 1  # no second look can go out on day one
+    assert brain.tick(_ramp_ctx()) == []
+    clock["t"] += 86400
+    assert brain.tick(_ramp_ctx(K.NOW + timedelta(days=1))) == []  # the same call a day later is not a second look
+
+
+def test_an_answer_that_acted_is_not_asked_again():
+    """0.65 is enough for the Ramp judge to hand over (0.6) and under 0.7: it acts once, and is not asked again, so
+    one decision is one call and one entry in the ledger."""
+    led = Ledger(None)
+    t = K.ScriptedTransport(K.both("ramp_state", K.choice_answer(
+        "ec_is_feed_front", {"ec_is_feed_front": 0.65, "keep_ramping": 0.35})))
+    brain = _brain(t, led)
+    assert [(d.kind, d.value) for d, _ in brain.tick(_ramp_ctx())] == [("advance", "P2")]
+    brain.tick(_ramp_ctx())
+    assert len(t.calls) == 1 and len(led.entries) == 1
+
+
+def test_only_the_questions_a_judge_decides_on_can_make_it_ask_again():
+    """Probe decides on `tracking`; `mode` only names the fault. A split `mode` beside a firm `tracking` is sure."""
+    answers = {**K.both("tracking", K.noul_answer(0.92)),
+               **K.both("mode", K.choice_answer("healthy", {"healthy": 0.5, "stuck": 0.5}))}
+    t = K.ScriptedTransport(answers)
+    h = K.history(points=[(m, 30.0, 3.0) for m in range(0, 200)],
+                  shots=[(120, 200, 30.0, 3.0, "p2_topup"), (60, 200, 30.0, 3.0, "p2_topup")])
+    brain = _brain(t, judge=ProbeJudge())
+    brain.tick(K.ctx(h=h))
+    brain.tick(K.ctx(h=h))
+    assert len(t.calls) == 1
+

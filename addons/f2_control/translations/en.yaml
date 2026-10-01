@@ -143,9 +143,9 @@ configuration:
   jev_reask_max:
     name: Second looks when Jev is unsure
     description: >-
-      When an answer is under the sureness below, or its two phrasings disagree, Jev is
-      asked again with more evidence, up to this many times (default 2). Then the engine
-      decides.
+      When an answer that did not act is under the sureness below, or its two phrasings
+      disagree, Jev is asked again with more evidence, up to this many times (default 2).
+      Then the engine decides.
   jev_unsure_below:
     name: Jev is unsure below
     description: >-

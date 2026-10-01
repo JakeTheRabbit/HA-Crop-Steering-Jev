@@ -44,6 +44,7 @@ class Judge:
     needs_probe = True  # asked only while the zone has a usable probe
     outcome_after_min = None  # when set, an admitted directive is checked this long after
     questions: dict = {}  # {question: [phrasing, phrasing]}
+    deciding: tuple = ()  # the questions decide() rests on, for the second look and the stricter gate; () = all
 
     def due(self, ctx, last_asked):
         if ctx.phase not in self.phases or (self.needs_probe and ctx.snap is None):

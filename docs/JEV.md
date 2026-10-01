@@ -70,11 +70,12 @@ Jev is optional at every level: no TypeSafe key and no Cloudflare credentials, `
 decisions are the base engine's, unchanged. Jev is reached over every route it has, TypeSafe direct first and then
 Cloudflare's `/ai/run`; each is tried up to `jev_retries` times inside 60 seconds while its failure may pass (a busy
 or failing server, a timeout), and a refused key moves straight on. A question that waited more than five minutes
-behind failing calls is dropped unasked, because its evidence is stale. When Jev is unsure (an answer under
-`jev_unsure_below`, or two phrasings that disagree) it is asked again with more evidence, up to `jev_reask_max`
-times, before the engine decides. After `jev_strict_after` of a judge's calls in a row did not work out for a zone,
+behind failing calls is dropped unasked, because its evidence is stale, and an answer is as old as its question.
+When an answer that did not act is unsure (under `jev_unsure_below`, or two phrasings that disagree), Jev is asked
+again with more evidence, up to `jev_reask_max` times, before the engine decides; the second look is dropped once
+the zone leaves the judge's phase or the answer is older than the judge's window. After `jev_strict_after` of a judge's calls in a row did not work out for a zone,
 that judge is on the stricter gate there: it acts only when both phrasings agree at `jev_strict_prob` or more and a
-second look gives the same call, until two calls in a row work. Jev keeps judging throughout.
+second look inside the judge's window gives the same call, until two calls in a row work. Jev keeps judging throughout.
 
 ## Configuration
 

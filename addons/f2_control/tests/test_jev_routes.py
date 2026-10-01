@@ -161,3 +161,17 @@ def test_an_old_usage_file_loads_and_a_restart_does_not_warn_twice(tmp_path):
     b = Asker("acct", "tok", transport=K.FakeTransport(ANSWERS), threaded=False, clock=lambda: K.NOW.timestamp())
     jev_bridge.restore_usage(b, str(path))
     assert b.submit("k", {}, {}) and not b.take_warning()  # warned before the restart: not again today
+
+
+def test_an_answer_is_as_old_as_its_question():
+    """The answer is about the zone as it was when the question was asked: a slow route does not make it fresher."""
+    now = {"t": K.NOW.timestamp()}
+
+    def slow(account, token, state, questions, gateway=None, timeout=20.0):
+        now["t"] += 120  # two routes timing out before one answers
+        return dict(ANSWERS), {}, None
+
+    a = Asker("acct", "tok", transport=slow, threaded=False, clock=lambda: now["t"])
+    asked = now["t"]
+    assert a.submit("k", {}, {}) and a.result("k").at == asked
+

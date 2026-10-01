@@ -150,7 +150,7 @@ class Routes:
 @dataclass
 class Answer:
     answers: dict
-    at: float  # epoch seconds the answer arrived
+    at: float  # epoch seconds the question was asked: the answer is about the zone as it was then
     usage: dict = field(default_factory=dict)
     seq: int = 0  # unique per answer: two answers arriving in the same second are still two
 
@@ -242,7 +242,7 @@ class Asker:
         with self._lock:
             self._pending.discard(key)
             self._seq += 1
-            self._results[key] = Answer(answers, self.clock(), usage, self._seq)
+            self._results[key] = Answer(answers, asked, usage, self._seq)
             self.stats["input_tokens"] += int(usage.get("input_tokens") or 0)
             self.stats["retries"] += int(usage.get("retries") or 0)
             self.stats["failovers"] += 1 if usage.get("failover") else 0
