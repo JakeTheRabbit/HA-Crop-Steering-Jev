@@ -223,10 +223,17 @@ async def test_the_controller_carries_straight_on_after_the_upgrade_without_a_di
 
 
 async def test_3_8_0_app_options_keep_their_jev_budget_and_take_the_new_defaults(
-    hass, controller_for
+    hass, controller_for, monkeypatch
 ):
     """F2's 3.8.0 options (tests_ha/fixtures/options_3_8_0_f2.json) start Jev on the TypeSafe
     route with the owner's 2000 calls, and every new setting at its default."""
+    import functools
+
+    import jev_bridge
+    from jev.client import Asker
+
+    # No asker worker thread: Home Assistant's test harness fails a test that leaves one running.
+    monkeypatch.setattr(jev_bridge, "Asker", functools.partial(Asker, threaded=False))
     await _upgrade(hass, "entry_2_17_wizard.json")
     options = fixture("options_3_8_0_f2.json")["options"]
     c, _fake, _clock = controller_for(options)
