@@ -726,15 +726,24 @@ describe("earlier grow-days on today's axis", () => {
     };
     const cut = earlierTraces(week, room, day, { on: 10, off: 22 }, config);
     const zone1 = cut.traces.get(1)!;
-    // The day before yesterday the room was switched off for an hour: nothing to compare.
+    // The day before yesterday the room was switched off for an hour: still drawn, marked.
     expect(zone1.map((trace) => trace !== null)).toEqual([
       true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(zone1.map((trace) => trace?.roomOff ?? false)).toEqual([
       false,
       true,
-      true,
-      true,
-      true,
-      true,
+      false,
+      false,
+      false,
+      false,
+      false,
     ]);
     expect(cut.setup).toEqual([5, 5, 4, 4, 4, 4, 4]);
     expect(revisionAt(week[config], days[3].start + 3_600_000 + 1)).toBe(4);
@@ -843,7 +852,7 @@ describe("how today is tracking", () => {
     });
     expect(compareDays([at(1), at(2), at(1.5)], 3, 28, 28.4)!.reached).toBe(1.5);
   });
-  it("no recorded day: nothing to compare, and no line", () => {
+  it("no recorded day: nothing to compare, and no line; a room switched off still draws", () => {
     expect(compareDays([], 3, 28, 28.4)).toBeNull();
     const empty = dayTrace(
       { vwc: [row("27", START)] },
@@ -858,7 +867,8 @@ describe("how today is tracking", () => {
       1,
       day,
     );
-    expect(off).toBeNull();
+    expect(off).toMatchObject({ roomOff: true });
+    expect(off!.points).toHaveLength(2);
   });
   it("the typical day: the median and middle half of the days recorded, where three or more were", () => {
     const days = [0, 1, 2, 3, 4].map((offset) =>
