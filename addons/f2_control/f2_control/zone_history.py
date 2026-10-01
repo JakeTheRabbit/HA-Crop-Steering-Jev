@@ -6,14 +6,16 @@ state dict and nothing else.
   many shots. A second hand-over on the same grow day replaces the first.
 - night_hist: one entry per morning: the night from lights-off to the day's first shot, where Athena measures the
   landing (p.39), with the night's drying rate and the P0 drop.
-- night: the night being measured now, from the lights-off reading until the day's first shot closes it.
+- night: the night being measured now, from the lights-off reading until the next grow day's first shot closes it.
+  A night still open when a later morning's first shot comes (a missed lights-on or lights-off: the room was off,
+  or the app restarted across it) is dropped: no record beats a record of two nights.
 
 Both lists keep the newest KEEP entries. A state file from before this module has none of the three keys and loads
 with them empty. Stored values keep full precision; only night_words() rounds, for people to read.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 KEEP = 14
 
@@ -22,8 +24,8 @@ def fresh():
     return {"plateau_hist": [], "night_hist": [], "night": None}
 
 
-def _night(off_at, off_vwc, plateau):
-    return {"off_at": off_at, "off_vwc": off_vwc, "plateau": plateau, "on_at": None, "on_vwc": None,
+def _night(off_at, off_vwc, plateau, day):
+    return {"off_at": off_at, "off_vwc": off_vwc, "plateau": plateau, "day": day, "on_at": None, "on_vwc": None,
             "on_shots": 0, "shots": 0, "end_at": None, "end_vwc": None}
 
 
@@ -36,7 +38,7 @@ def restore(saved):
             out[key] = [dict(x) for x in items if isinstance(x, dict) and isinstance(x.get("date"), str)][-KEEP:]
     night = saved.get("night")
     if isinstance(night, dict) and isinstance(night.get("off_at"), str):
-        out["night"] = {**_night(night["off_at"], None, None), **night}
+        out["night"] = {**_night(night["off_at"], None, None, None), **night}
     return out
 
 
@@ -71,7 +73,7 @@ def lights_off(st, vwc, now, day):
     dropped. `day` is the grow day that is ending: its plateau, when P1 found one, is what the landing is measured
     from, never an older day's."""
     last = (st.get("plateau_hist") or [None])[-1]
-    st["night"] = _night(_iso(now), vwc, last["value"] if last and last.get("date") == day else None)
+    st["night"] = _night(_iso(now), vwc, last["value"] if last and last.get("date") == day else None, day)
 
 
 def lights_on(st, vwc, now):
@@ -82,8 +84,8 @@ def lights_on(st, vwc, now):
 
 
 def shot(st, *, vwc_before, now, day, first):
-    """A shot was delivered. The day's first shot (`first`) closes the night: the VWC just before it is the landing,
-    and the record goes into night_hist. Any other shot while a night is open is counted; the night's rate is
+    """A shot was delivered. The day's first shot (`first`) closes the night it follows, the one whose lights-off
+    ended the grow day before `day`: the VWC just before the shot is the landing, and the record goes into night_hist. Any other shot while a night is open is counted; the night's rate is
     measured up to the first one that came before lights-on. Returns the closed record, or None."""
     n = st.get("night")
     if n is None:
@@ -94,6 +96,8 @@ def shot(st, *, vwc_before, now, day, first):
         n["shots"] += 1
         return None
     st["night"] = None
+    if n["day"] is None or date.fromisoformat(n["day"]) != date.fromisoformat(day) - timedelta(days=1):
+        return None  # not last night: a morning was missed in between
     record = _close(n, vwc_before, now, day)
     kept = [e for e in st.get("night_hist") or [] if e.get("date") != day]
     st["night_hist"] = (kept + [record])[-KEEP:]

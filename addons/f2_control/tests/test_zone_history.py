@@ -126,3 +126,14 @@ def test_the_lists_keep_the_newest_14():
     for d in range(1, 21):
         H.phase_changed(st, "P1", "P2", day=f"2026-09-{d:02d}", how="x")
     assert len(st["plateau_hist"]) == H.KEEP == 14 and st["plateau_hist"][0]["date"] == "2026-09-07"
+
+
+def test_a_night_from_another_grow_day_is_dropped_at_the_first_shot():
+    """The room went off on 24 Sep before the ramp and came back on the 25th: the 23rd's night never reached its
+    first shot, so it is dropped, never closed as the 25th's night."""
+    st = _zone(plateau_hist=[{"date": "2026-09-23", "value": 61.0, "how": "x", "shots": 6}])
+    H.lights_off(st, 58.4, datetime(2026, 9, 23, 22, 0), "2026-09-23")
+    H.lights_on(st, 51.2, datetime(2026, 9, 24, 10, 0))
+    assert H.shot(st, vwc_before=47.0, now=datetime(2026, 9, 25, 10, 5), day="2026-09-25", first=True) is None
+    assert st["night"] is None and st["night_hist"] == []
+

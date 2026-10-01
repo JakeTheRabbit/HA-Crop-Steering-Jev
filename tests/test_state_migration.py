@@ -340,6 +340,7 @@ def test_the_history_survives_a_restart_and_junk_in_it_is_dropped(tmp_path):
         "off_at": "2026-10-01T22:00:00",
         "off_vwc": 32.78,
         "plateau": 36.0,
+        "day": "2026-10-01",
         "on_at": None,
         "on_vwc": None,
         "on_shots": 0,

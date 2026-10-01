@@ -138,3 +138,18 @@ def test_a_hand_over_set_by_hand_records_the_plateau(rig):
     c._apply_phase_request(room, 1, st, Clock.now())
     assert st["phase"] == "P2"
     assert st["plateau_hist"] == [{"date": "2026-09-23", "value": 44.0, "how": "set by hand", "shots": 4}]
+
+
+def test_a_night_left_open_across_a_missed_morning_is_not_merged_into_a_later_one(rig):
+    c, fake, room = rig
+    st = room.state[1]
+    st.update(phase="P2", last_daily_reset=date(2026, 9, 23))
+    room._was_lights_on = True
+    _loop(c, fake, room, Clock(2026, 9, 23, 22, 0), 58.4)
+    room._was_lights_on = None  # the 24th's edges were missed: the room was off, or the app restarted
+    _loop(c, fake, room, Clock(2026, 9, 25, 10, 0), 52.0)
+    Clock.instant = Clock(2026, 9, 25, 10, 30)
+    st.update(phase="P1", shots=0, last_vwc=47.0)
+    c._advance_shot_counters(room, 1, 3.0)
+    assert st["night_hist"] == [] and st["night"] is None
+
