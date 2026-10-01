@@ -25,7 +25,7 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | CS-4xx | **Settings**: A setting is missing, out of range, or read from somewhere new. |
 | CS-5xx | **Checks across zones**: Advice from comparing a room's zones. |
 | CS-6xx | **Repairs cards**: Raised by the integration, under Settings → Repairs. |
-| CS-7xx | **Jev**: Jev's judgements about a zone: advice, and a probe it set aside (docs/JEV.md). |
+| CS-7xx | **Jev**: Jev's judgements about a zone (advice, a probe it set aside), and how Jev itself is doing: its calls running low, a judge on the stricter gate (docs/JEV.md). |
 | CS-8xx | **Dosing**: Batch-tank dosing: a dose or a batch that did not end as it should (docs/DOSING.md). |
 
 ## All codes
@@ -75,6 +75,8 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 | [CS-703](#cs-703) | Overnight low reading looks like a probe fault | Warning | Notification |
 | [CS-704](#cs-704) | Jev set this zone's probe aside | Warning | Notification |
 | [CS-705](#cs-705) | The zone is off the stage's arc | Information | Notification |
+| [CS-706](#cs-706) | Jev has used most of today's calls | Warning | Notification |
+| [CS-707](#cs-707) | Jev is on the stricter gate for this zone | Warning | Notification |
 | [CS-801](#cs-801) | A dosing pump ran past its time and was switched off | Critical | Notification |
 | [CS-802](#cs-802) | A dose could not be confirmed, or ended early | Warning | Notification |
 | [CS-803](#cs-803) | A dose or batch was interrupted by a restart | Warning | Notification |
@@ -1002,6 +1004,48 @@ setup change (CS-201) and a hardware hold (CS-301, CS-308, CS-309) are still rep
 
 - Compare the zone's settings with the stage (docs/JEV.md, the owner's stage arc), and change them if the stage has moved on.
 - Check jev_flower_start points at the right flip date.
+
+<a id="cs-706"></a>
+
+### CS-706: Jev has used most of today's calls
+
+*Warning · Notification*
+
+**What it means.** Jev has been asked the warning share (80 % by default) of its daily call budget, across every room. Once the budget is spent, Jev is not asked again until midnight.
+
+**Watering meanwhile.** Carries on as normal. Once the budget is spent, the engine's own rules decide every zone until midnight.
+
+**Likely causes**
+
+- More zones or judges than the budget was set for.
+- Many second looks: Jev was often unsure today.
+- The budget option is still at an older, lower value.
+
+**Suggested fixes**
+
+- Raise jev_daily_calls in the app's options, then restart the app.
+- Check reasks_today and errors_today on the Jev sensor: many of either show what used the calls.
+
+<a id="cs-707"></a>
+
+### CS-707: Jev is on the stricter gate for this zone
+
+*Warning · Notification*
+
+**What it means.** Several of one Jev judge's calls in a row for this zone (three by default) did not work out when they were checked. Until two in a row do, that judge acts only when both phrasings agree at 0.8 or more (the default) and a second look gives the same answer.
+
+**Watering meanwhile.** Carries on. Jev keeps judging the zone; whenever it is not sure enough, the engine's own rules act, as they do without Jev.
+
+**Likely causes**
+
+- A probe or sensor misleading the judge.
+- Conditions the judge has not met before, such as a new stage or a changed room.
+- A setting that works against the judge's calls.
+
+**Suggested fixes**
+
+- Read the zone's Jev log on the dashboard: the calls and how each was checked.
+- Check the zone's probe and settings.
 
 ## Dosing (CS-8xx)
 
