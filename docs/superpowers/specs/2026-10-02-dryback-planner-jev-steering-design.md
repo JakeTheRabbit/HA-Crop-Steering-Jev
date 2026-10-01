@@ -2,13 +2,13 @@
 
 Date: 2026-10-02
 
-Status: design approved by the owner on 2 Oct 2026 (explainer page, version 5). Next step: implementation plan.
+Status: design approved by the owner on 2 Oct 2026 (explainer page, version 5), amended the same day so Jev is used maximally (version 6). Next step: implementation plan.
 
 Athena citations are to the Athena Pro Line handbook, metric, A01.002, by printed page: pp.33-41 are the sensor irrigation program (P0-P3), pp.42-47 are hand watering. Numbers and rules that are not from the handbook are marked "ours".
 
 ## Outcome and scope
 
-Each morning P1 finds the zone's plateau. From it the controller draws a line, the planned VWC and pore EC for every minute until the next morning's first shot, and Jev steers the zone along that line live, every 15 minutes. In the afternoon Jev also sets where P2 ends (the time of the last shot and the VWC it leaves the block at), so the P3 dryback runs clean through the night and P0 to the next first shot with no night shot. Code keeps the arithmetic and the safety locks.
+Each morning P1 finds the zone's plateau. From it the controller draws a line, the planned VWC and pore EC for every minute until the next morning's first shot, and Jev steers the zone along that line live, every 15 minutes. In the afternoon Jev also sets where P2 ends (the time of the last shot and the VWC it leaves the block at), so the P3 dryback runs clean through the night and P0 to the next first shot with no night shot. Jev makes every agronomic decision in the system; code works out the options, carries out the decision and holds the safety locks.
 
 Everything is behind a per-zone switch, off by default, so a generic install sees no change. F2 zone 1 is the first live zone.
 
@@ -39,26 +39,45 @@ F2 history, 22 Sep - 1 Oct 2026:
 
 ### Who does what
 
-Code measures, builds the line, works out gaps and forecasts, carries out every action, and holds the locks. Jev judges what a gap means and what to do about it. Jev answers typed questions with a confidence, each asked in two phrasings that must agree, as Jev does today. On zones with the switch on, the only limits on Jev's steering answers are the safety locks; agronomic choices inside them are Jev's. The code's own fallback rule acts whenever Jev is offline, unsure (confidence under 0.7) or benched.
+Code measures, builds the line from Jev's choices, works out gaps, forecasts and option menus, carries out every action, and holds the safety locks. Jev makes every agronomic decision. It answers typed questions with a confidence, each asked in two phrasings that must agree, as it does today. On zones with the switch on, the only limits on Jev are the safety locks.
+
+The code's own rules (ours) act only when Jev cannot be reached at all (see Availability). They follow the Athena cells, so an outage costs judgement, not correctness.
+
+| Decision | Jev decides | Code's part |
+| --- | --- | --- |
+| First shot of the day | when, inside the P0 window | the window (ours, from p.39) |
+| P1 shots | the size and spacing of each shot, inside 2-6 % of substrate volume and 15-30 min (p.36) | P1 caps; scoring each shot |
+| Is the block full | full / keep going (rinse) / test shot / accept a lower peak / probe lagging | the plateau rule as evidence; the owner's not-lower-than-yesterday rule on vegetative days |
+| Tonight's depth | the dryback inside the Athena cell, every day from day one | the landing lock |
+| P2 re-watering | the re-water level and each shot's size | the shot-size range; the machine-gun guard |
+| Pore EC | the day's target inside the Athena cell; flush, build or dilute | the flush-size cap |
+| P2 end | the end VWC and time | the menu and its constraints |
+| Night | whether, when and how big a correction is | one a night; size cap; emergency floor |
+| Probe trust, shot landing, zone differences | as today | evidence; alerts |
+| Daily plan | each morning: depth, EC target, how hard P1 pushes, the night to plan for | the record it reads |
+| Stage and steering | proposes a change of Athena cell, with evidence | the owner approves the switch |
+| Alerts | who is told what, and how urgently | the owner's recipient rules |
+| Weekly review | proposes doctrine and setting changes from its ledger | the owner approves; never self-applied |
+| Room (stage 2) | how much to scale the night rate it plans for | ±20 % |
 
 ### P0
 
-- Window (ours): the first shot no earlier than 30 min and no later than 2 h after lights-on, matching Athena's 30 min to 2 h (p.39). Page 36 says 1-2 h.
+- Window (ours): the first shot no earlier than 30 min and no later than 2 h after lights-on, matching Athena's 30 min to 2 h (p.39). Page 36 says 1-2 h. Jev picks the time inside it.
 - The morning dryback is measured from yesterday's plateau, the one peak.
 - Athena's 1-5 % additional dryback (p.39) may be raw points: on the same page "2 %/hour" means 50 % falling to 48 % VWC. The handbook calls only the 30-40 and 40-50 targets relative. It is not used as a relative target here.
 
 ### P1: finding the plateau
 
-1. Ramp shots every 20 min, inside Athena's 15-30 (p.36), growing by the existing increment. The grow-plan stage sets the minimum number of shots.
+1. Jev sets each ramp shot's size and spacing inside Athena's 2-6 % of substrate volume and 15-30 min (p.36). The grow-plan stage sets the minimum number of shots. If Jev cannot be reached: every 20 min, growing by the existing increment.
 2. Each shot is scored: rise = VWC about 10 min after the shot minus VWC just before it, and the direction pore EC moved.
-3. Plateau (code): two consecutive rises below max(0.6 points, 25 % of the first rise).
+3. The code's plateau rule (two consecutive rises below max(0.6 points, 25 % of the first rise)) is evidence for Jev. The rule decides on its own only when Jev cannot be reached.
 4. After each shot Jev answers: full / keep going / one bigger test shot / accept a lower peak / probe lagging.
    - On a vegetative day "keep going" includes rinsing: keep shooting until pore EC turns down. On a generative day stop at fullness, because waiting for EC to fall pushes the block through the salt and into runoff, the opposite of EC stacking (Athena p.33, p.34).
    - Vegetative day: today's plateau may not be lower than yesterday's unless last night's dryback went past the cell maximum, which code verifies. Otherwise one test shot at 1.5 times the size; if VWC is still flat, accept the lower plateau and alert the owner.
    - Generative day: Athena sets the peak on purpose at or below field capacity (p.34), so a lower peak is allowed without a big dryback.
    - "Probe lagging": the zone falls back to its fixed P1 target for the day.
 5. Locks: 8 shots or 150 min, the zone's plateau ceiling, flood protection.
-6. Jev offline: the code's plateau rule decides.
+6. Jev unreachable: the code's plateau rule decides.
 7. The plateau is saved to history and drives the line. It is passed to the engine in memory as the field-capacity parameter. The operator's `field_capacity` number is not written.
 
 Athena ends P1 when VWC is on target and runoff is in range: 2-6 % shots every 15-30 min until 2-7 % runoff when establishing veg (p.36). Without a runoff measurement the plateau stands in for that.
@@ -77,12 +96,12 @@ Built at the plateau call, and rebuilt whenever the plan changes (a Jev call, a 
   | Finish | flower 8-9 (p.34 says 8-10) | vegetative EC, generative dryback | 40-50 % | 3-4 |
 
   The p.39 summary card (30-40 % vegetative, 40-50 % generative) and the hand-water targets (pp.42-43: veg and bulk 30-40 %, stretch weeks 2-3 and the last week 50-60 %) are not used.
-- **Start point in the cell**: the low end (bulk 30 %). Jev may move within the cell once 3 nights have landed.
+- **Depth in the cell**: Jev picks it every morning in the daily plan, from day one. The first day, and any day Jev cannot be reached, uses the low end (bulk 30 %).
 - **Landing lock** (ours): never below emergency floor + 2. A cell that needs a deeper landing is capped. Zone 1 on a 36.0 plateau with a 20.7 floor reaches at most 36.9 % (36.0 down to 22.7), so the 40-50 % cells do not fit until the morning plateau is a full reading. Half of a 70 reading is 35, which clears 22.7.
-- **P2 hold** (ours): top up when VWC drops below the plateau minus one shot's measured rise, plus the existing EC offset. It is not tied to runoff, so it can sit either side of field capacity (an open issue).
+- **P2 re-watering**: Jev sets the re-water level and the shot size. The default and the unreachable rule (ours) is to top up below the plateau minus one shot's measured rise, plus the existing EC offset. It is not tied to runoff, so it can sit either side of field capacity (an open issue).
 - **P2 end**: Jev's choice (below). The default is a shot back to the plateau at the formula time.
 - **After the P2 end**: today's measured day rate to lights-off, the planned night rate to lights-on, and the zone's measured morning rate through P0.
-- **Pore EC line**: the p.40 substrate EC cell for the stage is the band, and the operator's EC target (existing entities) is a point inside it. Pore EC is compared with substrate EC, not runoff EC: runoff reads slightly lower than substrate EC (p.41). The "runoff 1-2 EC over input" note (p.47) belongs to the hand-water chart (p.42).
+- **Pore EC line**: the p.40 substrate EC cell for the stage is the band. Jev sets the day's target inside it; the default is the operator's EC target (existing entities). Pore EC is compared with substrate EC, not runoff EC: runoff reads slightly lower than substrate EC (p.41). The "runoff 1-2 EC over input" note (p.47) belongs to the hand-water chart (p.42).
 
 ### The tracker (code, every minute)
 
@@ -90,19 +109,23 @@ For each zone: the gap to the line for VWC and pore EC; rates over the last 30 a
 
 ### Jev steering
 
-Asked every 15 min with lights on and every 30 min at night (ours). Also asked straight away when VWC is 1.0 point or pore EC is 0.5 off the line, or the phase changes (ours).
+Asked every 5 min with lights on and every 10 min at night (ours). Also asked straight away on any event: a shot landing, VWC 1.0 point or pore EC 0.5 off the line, a phase change, or a sibling zone or the room changing (ours).
 
-The question carries the tracker's facts in plain words, the owner's doctrine and the zone's Athena cell. Answers: on track / shoot now (small, normal or big) / skip the next shot / set the P2 end / flush (a big shot for runoff) / let EC build / dilute / tonight deeper or softer inside the cell / probe suspect / call the owner.
+The question carries the tracker's facts in plain words, the owner's doctrine and the zone's Athena cell. Answers: on track / shoot now (with its size) / skip the next shot / set the re-water level / set the EC target inside the cell / set the P2 end / flush (a big shot for runoff) / let EC build / dilute / tonight deeper or softer inside the cell / probe suspect / call the owner.
 
-Acting: with confidence 0.7 or more (ours) and both phrasings agreeing, the answer goes to the lock check and then runs. Otherwise the code's fallback rule acts (ours): shoot when VWC is more than the drift threshold (1.0 point) below the line, skip the next shot when it is more than that above, and flush when pore EC is 20 % over its target.
+Acting: with confidence 0.7 or more (ours) and both phrasings agreeing, the answer goes to the lock check and then runs. If Jev is unsure (under 0.7, or the phrasings disagree), the code asks again with more evidence: the last 3 days, the sibling zones and the doctrine excerpt. It re-asks up to twice inside the check window. The code's own rule (ours) acts only if Jev is still unsure or cannot be reached:
 
-Marking (ours): every call that acted is graded 30-60 min later (did the gap shrink?). Three worse calls in a row bench Jev for the rest of the day: the code's rule steers live and the owner gets a push. There are no shadow or advisor runs at any stage.
+- shoot when VWC is more than the drift threshold (1.0 point) below the line;
+- skip the next shot when it is more than that above;
+- flush only above the top of the stage cell (bulk 6).
+
+Marking (ours): every call that acted is graded 30-60 min later (did the gap shrink?). Three worse calls in a row put Jev on a stricter gate: confidence 0.8 and an agreeing re-ask, until two calls in a row close the gap. The owner gets a push. Jev keeps steering throughout. There are no shadow or advisor runs at any stage.
 
 On switched zones the Steer question covers the moments of today's narrow judges: Dawn, Ramp, Salt, Dusk and Night are not asked. Probe, Shot, Zones and Stage stay as they are. The Setpoints judge is retired on these zones; its persistent notches are the path that drifted on 26 Sep.
 
 ### The P2 end
 
-From mid-afternoon, every 30 min until the last shot, the code builds a menu. For each end VWC from the hold level up to the plateau in 0.2-point steps it gives:
+From mid-afternoon, every 15 min until the last shot, the code builds a menu. For each end VWC from the hold level up to the plateau in 0.2-point steps it gives:
 
 - the last-shot time that lands on target at the first shot;
 - the lights-off VWC;
@@ -123,11 +146,28 @@ Worked example (zone 1 in the explainer): the default plateau shot at 16:13, pla
 
 ### P3 and the night watch
 
-There are no routine shots (Athena p.39). Jev checks the pace every 30 min.
+There are no routine shots (Athena p.39). Jev checks the pace every 10 min and decides any correction: whether, when and how big, from the pace, the sibling zones and the probe's record. The limits are ours: one a night, capped in size, and the emergency floor and shot unchanged and always on.
 
-Safety net (ours): if the zone is heading more than 0.5 under target with more than 1 h left, one correction shot sized to land on target. Skipping it as a probe fault needs two agreeing "probe fault" answers plus code evidence; if Jev is offline the shot fires. One per night, capped in size. The emergency floor and shot are unchanged and always on.
+If Jev cannot be reached (ours): one shot sized to land on target when the zone is heading more than 0.5 under with more than 1 h left.
 
 Each morning the controller records: the landing against target at the first shot, the night rate, the P0 drop, whether the night was clean, and whether the net fired. The record feeds the next P2 end menu.
+
+### Jev's daily and weekly jobs
+
+- **Morning plan**, after the night is recorded: tonight's depth inside the cell, the day's pore EC target inside the cell, how hard P1 pushes, and the night to plan for.
+- **Stage proposal**, daily: whether the zone's Athena cell should change (for example bulk to finish), with the evidence. The owner approves the switch.
+- **Morning report**: a plain-English summary per zone, plus any question for the owner.
+- **Alert triage**: as today, now with the line's context.
+- **Weekly review**: Jev reads its own ledger (calls and outcomes) and proposes doctrine or setting changes. The owner approves; Jev never applies them itself.
+
+### Availability
+
+- Two routes to the same model: TypeSafe direct, and Cloudflare `/ai/run`. The controller fails over automatically.
+- Retries on server errors and timeouts: 3 tries inside 60 s, with backoff.
+- Answers are cached and acted on for their validity window.
+- The daily call budget rises to 5000, with a push at 80 %.
+
+Expected use is about 900-1000 calls a day for a three-zone room. At about 4,100 input tokens a call (2 Oct: 159,248 tokens over 39 calls) that is roughly 4 M input tokens, about $0.15-0.20 a day at $0.042 per million input tokens, with output free. The code's own rules act only when every route has failed and the last answer has expired.
 
 ### Room conditions (stage 2)
 
@@ -159,12 +199,13 @@ This design sets no room target.
 | 2 | P1 caps | 8 shots, 150 min | existing `p1_maximum_shots`; new per-zone number `p1_max_minutes` |
 | 3 | Plateau ceiling | 90 generic; F2 zone 3 at 70 | new per-zone number `plateau_ceiling` |
 | 4 | Minimum daily water against the dryback | the minimum wins; the planner front-loads P2 | rule |
-| 5 | Start point in the cell | the low end (bulk 30 %); 40-50 % only where floor + 2 allows | rule |
-| 6 | Steer cadence and drift | 15 min with lights on, 30 at night; VWC 1.0, pore EC 0.5 | add-on options |
-| 7 | When Jev is overruled | confidence 0.7; bench after 3 worse calls in a row | add-on options |
+| 5 | Depth in the cell | Jev picks daily from day one (first day and unreachable: the low end, bulk 30 %); 40-50 % only where floor + 2 allows | rule |
+| 6 | Steer cadence and drift | 5 min with lights on, 10 at night, plus every event; VWC 1.0, pore EC 0.5 | add-on options |
+| 7 | When Jev is unsure or on a bad run | under 0.7 or disagreeing: re-ask up to twice with more evidence; 3 worse calls in a row: stricter gate (0.8 and an agreeing re-ask) and a push, Jev keeps steering | add-on options |
 | 8 | Machine-gun guard | at least 15 min apart, at most 4 an hour | engine parameter |
 | 9 | P0 window | first shot 30 min to 2 h after lights-on | add-on options |
 | 10 | Clean night | within 0.5 at the first shot, no night shot | add-on option |
+| 11 | Availability | two routes, 3 retries inside 60 s, budget 5000 a day, push at 80 % | add-on options |
 
 Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default off, following the existing `zone_{n}_enabled` key pattern. Add-on options are read with `o.get("key", default)` so an old `options.json` still works.
 
@@ -184,7 +225,7 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
   - `p2_end.py`: the menu, grown out of `curve_tracker.plan_day` (`curve_tracker.py:64-90`).
   - `night.py`: the watch and the net.
 
-  Jev gets a `steer` judge with P1, P2-end and night variants, in `jev/judges/steer.py`; marking and the bench live in `jev_bridge.py`. On switched zones the plateau is passed to the engine in memory and the operator's `field_capacity` number is left alone.
+  Jev gets a `steer` judge with P1, P2-end and night variants (`jev/judges/steer.py`), plus `plan`, `report` and `review` judges and a stage proposal on the existing Stage judge. Marking, the stricter gate, re-asks, route failover, retries and the budget live in `jev_bridge.py` and `jev/client.py`. On switched zones the plateau is passed to the engine in memory and the operator's `field_capacity` number is left alone.
 - **Integration**: the per-zone switch and two per-zone numbers, all additive. Each zone also publishes, as a sensor or attributes on the existing zone sensor: the line, the P2 end plan, the last landing, the clean-night streak and Jev's running score.
 - **Dashboard**: a line layer and a P2-end marker on the day chart, using the layer toggles from #29, and Jev's calls on the existing Jev layer.
 - **Doctrine** (`jev/doctrine.py`): on switched zones the target is the Athena p.40 cell as a share of the plateau (owner, 1 Oct 2026). The rule that "the owner's stage arc leads" where Athena's relative drybacks and the owner's point drybacks differ no longer sets it. The three Athena copies (the frontend `athenaDryback`, `curve_tracker` ATHENA and the doctrine) collapse into one table from p.40.
@@ -195,7 +236,7 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
 
   Jev's marks go in the existing ledger. An old state file loads unchanged, proven by a seeded fixture.
 - **Fail-safe**:
-  - Jev offline or benched: the code's rules act.
+  - Jev unreachable on every route with the last answer expired: the code's rules act. Unsure: re-asked. Bad run: stricter gate.
   - Probe distrusted: the zone falls back to today's fixed targets for the day.
   - No history (fresh install): the zone's existing rate EWMAs, or else the current defaults.
   - Restart: state is restored and the line rebuilt.
@@ -205,10 +246,12 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
 Live, zone by zone, with no shadow runs. One change per pull request into `testing`, classed per `docs/RELEASING.md`; the engine, controller, state and add-on options are C3.
 
 1. **Remember nights and plateaus**: state fields and the morning record. C3.
-2. **P1 plateau, live on switched zones**: engine `p1_done`, `plateau.py`, Steer in P1. C3.
-3. **The line, Steer, the P2 end and the night net, live**: `line.py`, `tracker.py`, `p2_end.py`, `night.py`, the engine inputs and the judge. C3. The dashboard layer ships as its own C1 PR.
-4. **F2 zone order**: zone 1, then zone 3. Zone 2 once the Probe judge trusts its probe.
-5. **Room conditions (stage 2)**: the descriptor and the guard change. C3.
+2. **Jev availability**: second route, retries, re-asks, cached answers, the stricter gate, the budget. C3 (add-on options).
+3. **P1 plateau, live on switched zones**: engine `p1_done`, `plateau.py`, Steer in P1 with Jev sizing the shots. C3.
+4. **The line, Steer, the P2 end and the night decisions, live**: `line.py`, `tracker.py`, `p2_end.py`, `night.py`, the engine inputs and the judge. C3. The dashboard layer ships as its own C1 PR.
+5. **Jev's daily and weekly jobs**: plan, stage proposal, report, review. C3.
+6. **F2 zone order**: zone 1, then zone 3. Zone 2 once the Probe judge trusts its probe.
+7. **Room conditions (stage 2)**: the descriptor and the guard change. C3.
 
 Tests:
 
@@ -217,7 +260,7 @@ Tests:
 - the line and P2-end arithmetic against the worked example;
 - properties for the landing lock and the machine-gun guard;
 - clean-night classification;
-- the bench;
+- re-asks, the stricter gate, route failover, retries and the budget;
 - council and envelope tests for the Steer judge;
 - state migration from a seeded old file;
 - `tests_ha/` for the new switch and numbers;
@@ -231,7 +274,6 @@ Live check on zone 1: the day chart shows the line and Jev's calls, each morning
 - **Zone 1's plateau is not a full reading.** The generative cells fit only once the morning plateau is full.
 - **Zone 2's probe** gives about half the response of the others. It stays on fixed targets until trusted.
 - **The 2000 mL minimum** is unchecked against Athena's shot table (p.40).
-- **The fallback flush is early for bulk.** The code's fallback flushes at 20 % over the operator's EC target (4.8 on a 4.0 target), which is inside the bulk cell (3.5-6, p.40). With Jev online, Jev holds in that case; with Jev offline the fallback flushes early. Tying the fallback to the top of the stage cell is a candidate change for the plan.
 - **F2's AC targets** (27.5 °C day, 27.0 night) sit above Athena's bulk climate card (23.8-26.6 °C, p.33). That is out of scope here.
 - **Stage boundaries differ.** Athena's weeks (p.34, p.40) and the owner's stage arc in `doctrine.py` (bulk days 22-42, finish 43-56) disagree. The cell is picked from the zone's steering and stage selects, which the owner sets.
 - **Handbook contradictions are kept as they are:**
