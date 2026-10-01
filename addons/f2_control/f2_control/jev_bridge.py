@@ -267,6 +267,7 @@ def advance(c, room, zone, snap, d, now):
     """Move the zone forward one phase as Jev judged, with the bookkeeping the engine does itself."""
     st = room.state[zone]
     was, st["phase"] = st["phase"], d.value
+    c._record_phase(room, zone, st, was, d.value, now, f"Jev's {d.judge} judge: {d.why}")
     st["last_phase_change"] = now
     if d.value == "P1":
         st["shots"] = 0
