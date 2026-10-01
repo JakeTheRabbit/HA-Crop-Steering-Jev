@@ -87,6 +87,50 @@
 .day-timeline .grow-tip[hidden] {
   display: none;
 }
+/* The reading under the chart: one wrapped line, the same height whether or not it reads. */
+.day-timeline .grow-readout {
+  min-height: calc(2 * 1.45em + 12px);
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.day-timeline .grow-readout strong {
+  font-weight: 600;
+}
+.day-timeline .grow-readout[data-empty] {
+  color: var(--muted-foreground);
+}
+/* Where the reading is taken: a bar up the plot, a dot on each line it crosses. */
+.day-timeline .grow-cursor {
+  pointer-events: none;
+}
+.day-timeline .cursor-bar {
+  stroke: var(--foreground);
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+}
+.day-timeline .cursor-dot {
+  fill: var(--surface);
+  stroke: var(--primary);
+  stroke-width: 1.8;
+}
+.day-timeline .cursor-dot[data-series="ec"] {
+  stroke: var(--muted-foreground);
+}
+.day-timeline .cursor-dot[data-series="ec"][data-steering="vegetative"] {
+  stroke: var(--gd-veg);
+}
+.day-timeline .cursor-dot[data-series="ec"][data-steering="generative"] {
+  stroke: var(--gd-gen);
+}
+.day-timeline .cursor-dot[data-series="yesterday"] {
+  stroke: var(--muted-foreground);
+}
 
 /* The chart's marks. */
 .day-timeline .light-day {
@@ -156,8 +200,8 @@
 .day-timeline .yesterday-line {
   fill: none;
   stroke: var(--muted-foreground);
-  stroke-opacity: 0.45;
-  stroke-width: 1.2;
+  stroke-opacity: 0.75;
+  stroke-width: 1.6;
   stroke-linejoin: round;
 }
 .day-timeline .ec-line {
@@ -278,6 +322,45 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* Each key entry switches its layer: off reads faded and struck through. */
+.day-timeline .grow-legend button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.day-timeline .grow-legend button:hover {
+  color: var(--foreground);
+}
+.day-timeline .grow-legend button:focus-visible {
+  outline: 2px solid var(--ring, var(--primary));
+  outline-offset: 2px;
+}
+.day-timeline .grow-legend button[aria-pressed="false"] {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.day-timeline .grow-readout-choice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.day-timeline .grow-readout-choice select {
+  height: 26px;
+  padding: 0 28px 0 8px;
+  font-size: 12px;
 }
 .day-timeline .grow-legend i {
   display: inline-block;

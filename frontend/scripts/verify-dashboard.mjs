@@ -507,18 +507,49 @@ try {
       ]);
       const key = day.getByRole("list", { name: "Chart key" });
       assert.ok((await key.locator("li").count()) <= 8, "the key stays small");
-      // Pointing at a shot says what it was.
+      // Pointing at a shot says what it was, under the chart rather than over it, and a bar up the
+      // plot marks where the reading is taken.
       const svg = day.locator(".grow-svg");
       const box = await svg.boundingBox();
       const dot = await svg
         .locator(".shot-dot")
         .nth(2)
         .evaluate((circle) => ({ x: +circle.getAttribute("cx"), y: +circle.getAttribute("cy") }));
+      const readout = day.locator(".grow-readout");
+      await page.mouse.move(box.x + dot.x, box.y + dot.y);
+      await day.locator(".cursor-bar").waitFor({ state: "attached" }); // a 0-wide line: never "visible"
+      assert.match(await readout.innerText(), /P1 shot /);
+      assert.equal(await day.locator(".grow-tip").count(), 0, "nothing floats over the plot");
+      assert.equal(
+        Math.round(+(await day.locator(".cursor-bar").getAttribute("x1"))),
+        Math.round(dot.x),
+        "the bar stands where the pointer is",
+      );
+      await page.mouse.move(0, 0);
+      await day.locator(".cursor-bar").waitFor({ state: "detached" });
+      assert.match(await readout.innerText(), /Point at the chart/);
+      // Or over the chart by the pointer, when that is chosen.
+      const readings = day.getByLabel("Readings");
+      await readings.selectOption("over");
+      assert.equal(await readout.count(), 0);
       await page.mouse.move(box.x + dot.x, box.y + dot.y);
       await expectVisible(day.locator(".grow-tip"));
       assert.match(await day.locator(".grow-tip").innerText(), /P1 shot /);
       await page.mouse.move(0, 0);
       await day.locator(".grow-tip").waitFor({ state: "hidden" });
+      await readings.selectOption("below");
+      // Every entry in the key switches its layer, off the chart and out of the readings.
+      const ecKey = key.getByRole("button", { name: "Pore EC" });
+      assert.equal(await ecKey.getAttribute("aria-pressed"), "true");
+      await expectVisible(layer("ec"));
+      await ecKey.click();
+      assert.equal(await ecKey.getAttribute("aria-pressed"), "false");
+      assert.equal(await layer("ec").count(), 0);
+      const plot = await svg.locator(".vwc-line").boundingBox();
+      await page.mouse.move(plot.x + plot.width / 2, box.y + box.height / 2);
+      assert.doesNotMatch(await readout.innerText(), /pore EC/);
+      await page.mouse.move(0, 0);
+      assert.equal(await key.getByRole("button").count(), await key.locator("li").count());
       const compare = day.getByLabel("Compare with");
       await compare.selectOption("typical");
       await expectVisible(layer("typical"));
@@ -530,10 +561,14 @@ try {
       await compare.selectOption("none");
       assert.equal(await layer("typical").count(), 0);
       assert.equal(await layer("yesterday").count(), 0);
-      // The choice is remembered in the browser.
+      // The choices are remembered in the browser.
       await page.reload({ waitUntil: "networkidle" });
       await expectVisible(day.locator(".grow-svg"));
       assert.equal(await compare.inputValue(), "none");
+      assert.equal(await ecKey.getAttribute("aria-pressed"), "false");
+      assert.equal(await layer("ec").count(), 0);
+      await ecKey.click();
+      await expectVisible(layer("ec"));
       await compare.selectOption("yesterday");
       await expectVisible(layer("yesterday"));
       await axe("zone day", "[data-day-timeline]");
