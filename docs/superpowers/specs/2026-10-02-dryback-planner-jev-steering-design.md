@@ -231,8 +231,9 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
 - **Doctrine** (`jev/doctrine.py`): on switched zones the target is the Athena p.40 cell as a share of the plateau (owner, 1 Oct 2026). The rule that "the owner's stage arc leads" where Athena's relative drybacks and the owner's point drybacks differ no longer sets it. The three Athena copies (the frontend `athenaDryback`, `curve_tracker` ATHENA and the doctrine) collapse into one table from p.40.
 - **State** (`/data/state.json`, per zone, read with `.get()` and seeded in `_fresh_zone`):
   - plateau history: date, value, how it was found, shots;
-  - night history: date, night rate, P0 drop, target, landing, clean, net fired;
-  - bench-until.
+  - night history: date, night rate, P0 drop, target, landing, clean, net fired.
+
+  The stricter gate is read from Jev's ledger, so it needs no state field (there is no bench).
 
   Jev's marks go in the existing ledger. An old state file loads unchanged, proven by a seeded fixture.
 - **Fail-safe**:
