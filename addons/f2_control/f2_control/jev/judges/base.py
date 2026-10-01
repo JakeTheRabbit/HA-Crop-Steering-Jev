@@ -65,6 +65,16 @@ class Judge:
         """(what happened, good?) for a ledger entry whose check is due, or None to wait."""
         return None
 
+    def more_evidence(self, ctx, verdicts) -> dict:
+        """What a second look adds when the last answer was unsure: that answer, and the sibling zones. A judge with
+        more to show (the last few days, the doctrine) adds to it."""
+        return {
+            "why_again": "your last answer was unsure, or your two readings of it disagreed: look again with this",
+            "your_last_answer": {q: {"answer": v.label, "p": v.prob, "agreed": v.agreed}
+                                 for q, v in verdicts.items() if v is not None},
+            "sibling_zones": dict(ctx.siblings or {}),
+        }
+
     def directive(self, ctx, kind, value, why):
         return Directive(self.name, kind, value, why, ctx.now + timedelta(minutes=self.max_age_min))
 

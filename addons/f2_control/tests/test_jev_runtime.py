@@ -210,3 +210,108 @@ def test_a_typesafe_key_is_used_before_cloudflare(monkeypatch):
     brain = jev_bridge.build({}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
     assert brain.asker.transport is call
     assert jev_bridge.build({}, ("", "", ""), "/tmp/state.json", lambda *a: None) is None
+
+
+# ------------------------------------------------------------------ second looks and the stricter gate
+UNSURE = K.both("ramp_state", K.choice_answer("slab_full", {"slab_full": 0.5, "keep_ramping": 0.5}))
+SURE = K.both("ramp_state", K.choice_answer("ec_is_feed_front", {"ec_is_feed_front": 0.85, "keep_ramping": 0.15}))
+FAIRLY = K.both("ramp_state", K.choice_answer("ec_is_feed_front", {"ec_is_feed_front": 0.75, "keep_ramping": 0.25}))
+
+
+def _brain(t, ledger=None, judge=None):
+    asker = Asker("acct", "tok", transport=t, threaded=False, clock=lambda: K.NOW.timestamp())
+    return Brain(asker, ledger or Ledger(None), [judge or RampJudge()], log=lambda *a: None)
+
+
+def _bad_run(led, judge="ramp", n=3):
+    for _ in range(n):
+        led.resolve(led.record(judge, "default", 1, "P2", "advance"), "moisture fell back", False)
+
+
+def test_an_unsure_answer_is_asked_again_with_more_evidence_and_the_sure_one_acts():
+    t = K.ScriptedTransport(UNSURE, SURE)
+    brain = _brain(t)
+    assert brain.tick(_ramp_ctx()) == []  # unsure: nothing acts
+    out = brain.tick(_ramp_ctx())  # the same minute: asked again at once, not after the 15-minute cadence
+    assert [(d.kind, d.value) for d, _ in out] == [("advance", "P2")]
+    assert len(t.calls) == 2 and "second_look" not in t.calls[0]["state"]
+    look = t.calls[1]["state"]["second_look"]
+    assert look["your_last_answer"]["ramp_state"] == {"answer": "slab_full", "p": 0.5, "agreed": True}
+    assert brain.asker.stats["reasks"] == 1
+
+
+def test_jev_is_asked_again_at_most_twice_then_the_engine_decides():
+    t = K.ScriptedTransport(UNSURE)
+    brain = _brain(t)
+    for _ in range(5):
+        assert brain.tick(_ramp_ctx()) == []
+    assert len(t.calls) == 3 and brain.asker.stats["reasks"] == 2  # the question and two second looks
+
+
+def test_two_phrasings_that_disagree_are_asked_again():
+    split = K.both("ramp_state",
+                   K.choice_answer("ec_is_feed_front", {"ec_is_feed_front": 0.9, "keep_ramping": 0.1}),
+                   K.choice_answer("keep_ramping", {"ec_is_feed_front": 0.2, "keep_ramping": 0.8}))
+    t = K.ScriptedTransport(split)
+    brain = _brain(t)
+    brain.tick(_ramp_ctx())
+    brain.tick(_ramp_ctx())
+    assert len(t.calls) == 2
+
+
+def test_a_single_phrasing_is_asked_again():
+    one = {"ramp_state__v0": K.choice_answer("ec_is_feed_front", {"ec_is_feed_front": 0.95, "keep_ramping": 0.05})}
+    t = K.ScriptedTransport(one)
+    brain = _brain(t)
+    assert brain.tick(_ramp_ctx()) == [] and brain.tick(_ramp_ctx()) == []
+    assert len(t.calls) == 2
+
+
+def test_the_stricter_gate_comes_after_three_bad_calls_and_lifts_after_two_good():
+    led = Ledger(None)
+    _bad_run(led, n=2)
+    assert not led.strict("ramp", "default", 1)
+    _bad_run(led, n=1)
+    assert led.strict("ramp", "default", 1) and not led.strict("ramp", "default", 2)  # per zone
+    led.resolve(led.record("ramp", "default", 1, "P2", "advance"), "held", True)
+    assert led.strict("ramp", "default", 1)  # one good call is not enough
+    led.resolve(led.record("ramp", "default", 1, "P2", "advance"), "held", True)
+    assert not led.strict("ramp", "default", 1)
+
+
+def test_on_the_stricter_gate_a_sure_answer_waits_for_a_second_look_that_agrees():
+    led = Ledger(None)
+    _bad_run(led)
+    t = K.ScriptedTransport(SURE, SURE)
+    brain = _brain(t, led)
+    assert brain.tick(_ramp_ctx()) == []  # 0.85, but no second look yet
+    assert brain.zone_status("default", 1)["ramp"]["why"].startswith("refused: stricter gate")
+    out = brain.tick(_ramp_ctx())  # the second look agrees: it acts
+    assert [(d.kind, d.value) for d, _ in out] == [("advance", "P2")] and len(t.calls) == 2
+    assert brain.strict == {("default", 1, "ramp"): True}
+
+
+def test_on_the_stricter_gate_an_answer_under_0_8_never_acts():
+    led = Ledger(None)
+    _bad_run(led)
+    t = K.ScriptedTransport(FAIRLY)
+    brain = _brain(t, led)
+    for _ in range(4):
+        assert brain.tick(_ramp_ctx()) == []
+    assert len(t.calls) == 3  # the question and two second looks, all at 0.75
+
+
+def test_the_owner_is_told_once_when_a_judge_goes_on_the_stricter_gate():
+    class Graded(RampJudge):
+        def outcome(self, entry, ctx):
+            return "moisture fell back", False
+
+    led = Ledger(None)
+    for _ in range(3):
+        led.record("ramp", "default", 1, "P2", "advance", check_at=K.NOW - timedelta(minutes=1), check={})
+    brain = _brain(K.FakeTransport({}), led, Graded())
+    brain.tick(_ramp_ctx())
+    assert brain.events == [("strict", "default", 1, "ramp")] and led.strict("ramp", "default", 1)
+    brain.tick(_ramp_ctx())
+    assert brain.events == [("strict", "default", 1, "ramp")]  # once, when the run tipped over
+    assert _brain(K.FakeTransport({}), led).events == []  # a restart reads the gate, it does not push again

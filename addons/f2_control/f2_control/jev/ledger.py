@@ -73,6 +73,21 @@ class Ledger:
         whats = "; ".join(e["outcome"]["what"] for e in done)
         return f"your last {len(done)} call(s) of this kind worked {good} time(s): {whats}"
 
+    def strict(self, judge, room, zone, after=3, clear=2):
+        """True while this judge, for this zone, is on the stricter gate: `after` calls in a row that did not work out
+        put it there, and `clear` in a row that did take it off. Read from the resolved calls, so a restart keeps it."""
+        with self._lock:
+            done = [bool(e["outcome"]["good"]) for e in self.entries if e["judge"] == judge
+                    and e["room"] == room and e["zone"] == zone and e.get("outcome")]
+        on, bad, good = False, 0, 0
+        for ok in done:
+            bad, good = (0, good + 1) if ok else (bad + 1, 0)
+            if bad >= after:
+                on = True
+            elif on and good >= clear:
+                on = False
+        return on
+
     def _trim_and_save(self):
         self.entries = self.entries[-MAX_ENTRIES:]
         if not self.path:
