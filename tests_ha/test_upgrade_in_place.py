@@ -10,6 +10,8 @@ straight on. To cover another kind of old install, add a snapshot rather than ha
 """
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from conftest import fixture, switch_calls
@@ -220,6 +222,39 @@ async def test_the_controller_carries_straight_on_after_the_upgrade_without_a_di
         ("turn_off", "switch.main_line"),
         ("turn_off", "switch.main_pump"),
     ]
+
+
+async def test_a_3_8_0_state_file_loads_with_its_history_empty_and_nothing_moves(
+    hass, controller_for
+):
+    """3.8.0 kept no plateau or night history (tests_ha/fixtures/state_3_8_0_mid_grow.json).
+    The new controller loads that file exactly as it was, starts the history empty, and writing
+    it back changes nothing else."""
+    await _upgrade(hass, "entry_2_17_wizard.json")
+    seed = fixture("state_3_8_0_mid_grow.json")["state"]
+    hass.states.async_set(KILL, "on")
+
+    c, _fake, _clock = controller_for({"enable_flag": KILL}, saved_state=seed)
+    room = c.rooms[0]
+
+    assert room._setup_pending is None, room._setup_pending
+    for zone in (1, 2):
+        st, old = room.state[zone], seed["default"][str(zone)]
+        assert (st["phase"], st["peak"], st["shots"], st["daily_vol"]) == (
+            old["phase"],
+            old["peak"],
+            old["shots"],
+            old["daily_vol"],
+        )
+        assert st["learn"]["night_rate"] == old["learn"]["night_rate"]
+        assert (st["plateau_hist"], st["night_hist"], st["night"]) == ([], [], None)
+    assert c._save_state()
+    saved = json.loads(Path(os.environ["F2_STATE_PATH"]).read_text(encoding="utf-8"))
+    for zone in ("1", "2"):
+        written = dict(saved["default"][zone])
+        kept = (written.pop("plateau_hist"), written.pop("night_hist"), written.pop("night"))
+        assert kept == ([], [], None)
+        assert written == seed["default"][zone]
 
 
 # ------------------------------------------------------------------ an env-file era install
