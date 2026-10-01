@@ -212,7 +212,7 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
 ## Architecture and invariants
 
 - **Engine** (`crop-steering-engine/src/crop_steering_engine/core.py` and its vendored copy, kept identical). New inputs, each neutral by default:
-  - `p1_done`: ends P1 on the controller's plateau call. The ceiling and shot-count exits (`core.py:208-226`) stay for zones with the switch off.
+  - `plateau_reached`: ends P1 on the controller's plateau call. (`p1_done` is already the name of a `waiting_for()` rule the dashboard reads.) The ceiling and shot-count exits (`core.py:208-226`) stay for zones with the switch off.
   - `p2_end_at` and `final_shot_pct`: at `p2_end_at`, fire the final shot and enter P3 with the lights on. This replaces predictive P3 (`core.py:227-237`) on switched zones.
   - `night_correction_pct`: one P3 shot when set, cleared after it fires.
   - The machine-gun guard: a minimum gap and an hourly cap for non-P1, non-emergency shots.
@@ -227,7 +227,7 @@ Per-zone switch: `switch.crop_steering_{prefix}zone_{n}_line_steering`, default 
 
   Jev gets a `steer` judge with P1, P2-end and night variants (`jev/judges/steer.py`), plus `plan`, `report` and `review` judges and a stage proposal on the existing Stage judge. Marking, the stricter gate, re-asks, route failover, retries and the budget live in `jev_bridge.py` and `jev/client.py`. On switched zones the plateau is passed to the engine in memory and the operator's `field_capacity` number is left alone.
 - **Integration**: the per-zone switch and two per-zone numbers, all additive. Each zone also publishes, as a sensor or attributes on the existing zone sensor: the line, the P2 end plan, the last landing, the clean-night streak and Jev's running score.
-- **Dashboard**: a line layer and a P2-end marker on the day chart, using the layer toggles from #29, and Jev's calls on the existing Jev layer.
+- **Dashboard**: a line layer and a P2-end marker on the day chart, using the layer toggles from #29, and Jev's calls on the existing Jev layer. The previous run stays on the chart: yesterday's actual VWC and pore EC, with yesterday's line and where it landed, drawn on the same clock as the compare layer (#28 draws it even when the room was off), so each day reads against the last.
 - **Doctrine** (`jev/doctrine.py`): on switched zones the target is the Athena p.40 cell as a share of the plateau (owner, 1 Oct 2026). The rule that "the owner's stage arc leads" where Athena's relative drybacks and the owner's point drybacks differ no longer sets it. The three Athena copies (the frontend `athenaDryback`, `curve_tracker` ATHENA and the doctrine) collapse into one table from p.40.
 - **State** (`/data/state.json`, per zone, read with `.get()` and seeded in `_fresh_zone`):
   - plateau history: date, value, how it was found, shots;
@@ -247,7 +247,7 @@ Live, zone by zone, with no shadow runs. One change per pull request into `testi
 
 1. **Remember nights and plateaus**: state fields and the morning record. C3.
 2. **Jev availability**: second route, retries, re-asks, cached answers, the stricter gate, the budget. C3 (add-on options).
-3. **P1 plateau, live on switched zones**: engine `p1_done`, `plateau.py`, Steer in P1 with Jev sizing the shots. C3.
+3. **P1 plateau, live on switched zones**: engine `plateau_reached`, `plateau.py`, Steer in P1 with Jev sizing the shots. C3.
 4. **The line, Steer, the P2 end and the night decisions, live**: `line.py`, `tracker.py`, `p2_end.py`, `night.py`, the engine inputs and the judge. C3. The dashboard layer ships as its own C1 PR.
 5. **Jev's daily and weekly jobs**: plan, stage proposal, report, review. C3.
 6. **F2 zone order**: zone 1, then zone 3. Zone 2 once the Probe judge trusts its probe.
