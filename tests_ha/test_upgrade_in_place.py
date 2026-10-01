@@ -222,6 +222,21 @@ async def test_the_controller_carries_straight_on_after_the_upgrade_without_a_di
     ]
 
 
+async def test_3_8_0_app_options_keep_their_jev_budget_and_take_the_new_defaults(
+    hass, controller_for
+):
+    """F2's 3.8.0 options (tests_ha/fixtures/options_3_8_0_f2.json) start Jev on the TypeSafe
+    route with the owner's 2000 calls, and every new setting at its default."""
+    await _upgrade(hass, "entry_2_17_wizard.json")
+    options = fixture("options_3_8_0_f2.json")["options"]
+    c, _fake, _clock = controller_for(options)
+    assert c.jev is not None and c.jev.routes == ["TypeSafe"]
+    assert c.jev.asker.daily_budget == 2000  # the owner's value stays until the owner changes it
+    settings = (c.jev.reask_max, c.jev.unsure_below, c.jev.strict_after, c.jev.strict_prob)
+    assert settings == (2, 0.7, 3, 0.8)
+    assert (c.jev.asker.warn_pct, c.jev.asker.transport.tries) == (80, 3)
+
+
 # ------------------------------------------------------------------ an env-file era install
 async def test_an_env_era_install_with_only_front_and_back_probes_still_loads_and_fuses(
     hass,

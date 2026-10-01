@@ -65,8 +65,16 @@ The live runs drew the line between doctrine for Jev and doctrine for code. Told
 
 ## Failing safe
 
-Jev is optional at every level: no Cloudflare credentials, `jev_enabled` off, a judge left out of `jev_judges`, the daily budget spent, Jev slow or down, or an answer that
-fails to parse: each means that judge's decisions are the base engine's, unchanged.
+Jev is optional at every level: no TypeSafe key and no Cloudflare credentials, `jev_enabled` off, a judge left out of
+`jev_judges`, the daily budget spent, every route down, or an answer that fails to parse: each means that judge's
+decisions are the base engine's, unchanged. Jev is reached over every route it has, TypeSafe direct first and then
+Cloudflare's `/ai/run`; each is tried up to `jev_retries` times inside 60 seconds while its failure may pass (a busy
+or failing server, a timeout), and a refused key moves straight on. A question that waited more than five minutes
+behind failing calls is dropped unasked, because its evidence is stale. When Jev is unsure (an answer under
+`jev_unsure_below`, or two phrasings that disagree) it is asked again with more evidence, up to `jev_reask_max`
+times, before the engine decides. After `jev_strict_after` of a judge's calls in a row did not work out for a zone,
+that judge is on the stricter gate there: it acts only when both phrasings agree at `jev_strict_prob` or more and a
+second look gives the same call, until two calls in a row work. Jev keeps judging throughout.
 
 ## Configuration
 
@@ -74,19 +82,26 @@ Add-on options (the controller app):
 
 | Option | Default | What it does |
 |---|---|---|
-| `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Used when set. |
+| `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Tried first when set; Cloudflare, when set too, is the second route. |
 | `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Or Jev through Cloudflare Workers AI: the account, a token with Workers AI access, and the AI Gateway (optional). With neither a TypeSafe key nor these, Jev is off. |
 | `jev_enabled` | on | Off runs the plain engine even with Cloudflare set. |
 | `jev_judges` | all | The judges that may act, e.g. `dawn,ramp,salt,dusk,probe,shot,night,zones,stage,setpoints,alerts`. Setpoints also needs the room's **Auto setpoints** switch on; while it runs, the base engine's own Auto Setpoints learner never writes. |
-| `jev_daily_calls` | 2000 | The day's call budget across rooms. |
+| `jev_daily_calls` | 5000 | The day's call budget across rooms. |
+| `jev_budget_warn_pct` | 80 | CS-706 once a day when the calls reach this share of the budget. |
+| `jev_retries` | 3 | Tries per route, inside 60 seconds, while a failure may pass. |
+| `jev_reask_max` | 2 | Second looks, with more evidence, when Jev is unsure. |
+| `jev_unsure_below` | 0.7 | Under this probability, or with phrasings that disagree, an answer is unsure. |
+| `jev_strict_after` | 3 | Bad calls in a row before a judge is on the stricter gate for a zone (CS-707). |
+| `jev_strict_prob` | 0.8 | How sure an answer must be to act on the stricter gate. |
 | `jev_flower_start` | empty | Each room's first day of 12/12: an input_datetime or a date, for every room or as `room=value` pairs, e.g. `default=input_datetime.f2_flip_date, f1=input_datetime.f1_flip_date`. |
 | `jev_flower_days` | 56 | The cultivar's flowering length; the finish is its last 14 days. |
 
 ## What Jev can raise
 
-Five codes, in their own group of the error-code list (docs/ERROR_CODES.md): **CS-701** water isn't reaching a
+Seven codes, in their own group of the error-code list (docs/ERROR_CODES.md): **CS-701** water isn't reaching a
 zone, **CS-702** a zone's water per plant is out of line, **CS-703** an overnight low looks like a probe fault,
-**CS-704** Jev set a zone's probe aside, **CS-705** a zone is off its stage's arc. The controller raises them through one method with each code written
+**CS-704** Jev set a zone's probe aside, **CS-705** a zone is off its stage's arc, **CS-706** Jev has used most of
+today's calls, **CS-707** a judge is on the stricter gate for a zone. The controller raises them through one method with each code written
 out, so a judge can never raise anything the list does not explain.
 
 ## What it shows

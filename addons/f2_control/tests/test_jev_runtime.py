@@ -202,14 +202,27 @@ def test_typesafe_answers_are_read_from_the_top_level():
     assert parse_typesafe(None) == (None, None)
 
 
-def test_a_typesafe_key_is_used_before_cloudflare(monkeypatch):
+def test_every_route_jev_has_is_used_typesafe_first():
     import jev_bridge
-    from jev.client import call, call_typesafe
-    brain = jev_bridge.build({"typesafe_api_key": "apikey_x"}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
-    assert brain.asker.transport is call_typesafe and brain.asker.token == "apikey_x"
-    brain = jev_bridge.build({}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
-    assert brain.asker.transport is call
+    from jev.client import Routes, call, call_typesafe
+
+    both = jev_bridge.build({"typesafe_api_key": "apikey_x"}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert isinstance(both.asker.transport, Routes) and both.routes == ["TypeSafe", "Cloudflare"]
+    assert [(r.fn, r.token) for r in both.asker.transport.routes] == [(call_typesafe, "apikey_x"), (call, "tok")]
+    cf_only = jev_bridge.build({}, ("acct", "tok", ""), "/tmp/state.json", lambda *a: None)
+    assert cf_only.routes == ["Cloudflare"] and cf_only.asker.daily_budget == 5000
     assert jev_bridge.build({}, ("", "", ""), "/tmp/state.json", lambda *a: None) is None
+
+
+def test_an_old_options_file_keeps_its_budget_and_takes_the_new_defaults():
+    import jev_bridge
+
+    f2_3_8_0 = {"typesafe_api_key": "apikey_x", "jev_enabled": True, "jev_judges": "all",
+                "jev_daily_calls": 2000, "jev_flower_start": "", "jev_flower_days": 56}
+    brain = jev_bridge.build(f2_3_8_0, ("", "", ""), "/tmp/state.json", lambda *a: None)
+    assert brain.routes == ["TypeSafe"] and brain.asker.daily_budget == 2000
+    assert (brain.reask_max, brain.unsure_below, brain.strict_after, brain.strict_prob) == (2, 0.7, 3, 0.8)
+    assert (brain.asker.warn_pct, brain.asker.transport.tries) == (80, 3)
 
 
 # ------------------------------------------------------------------ second looks and the stricter gate
