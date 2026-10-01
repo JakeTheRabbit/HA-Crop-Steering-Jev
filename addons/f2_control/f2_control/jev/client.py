@@ -1,10 +1,12 @@
-"""Asking Jev (TypeSafe System One) through Cloudflare's AI REST API without ever making the loop wait.
+"""Asking Jev (TypeSafe System One) without ever making the loop wait, over every route the app has to it:
+TypeSafe's own API and Cloudflare's AI REST API.
 
 `Asker.submit()` queues a question set and returns at once; a single background worker calls Jev and
 stores the answers under the caller's key. The control loop only ever reads `Asker.result()`: an answer
 from an earlier pass, or None. Every failure (no credentials, budget spent, timeout, HTTP error, an
-envelope that doesn't parse) is recorded and yields no answer, so the caller carries on as the base
-engine would.
+envelope that doesn't parse, a question that waited too long) is recorded and yields no answer, so the
+caller carries on as the base engine would. `Routes` tries each route in turn, retrying a failure that may
+pass.
 """
 from __future__ import annotations
 
@@ -21,6 +23,9 @@ except ImportError:  # the lean test harness stubs it; the add-on image installs
 
 URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run"
 MODEL = "typesafe/jev"
+NO_REQUESTS = "requests not installed"
+NOT_JSON = "response is not JSON"
+NO_ANSWERS = "no answers in the response"
 
 
 def parse(payload):
@@ -38,7 +43,7 @@ def parse(payload):
 def call(account, token, state, questions, gateway=None, timeout=20.0):
     """One Jev evaluation -> (answers, usage, error). Never raises."""
     if requests is None:
-        return None, None, "requests not installed"
+        return None, None, NO_REQUESTS
     headers = {"Authorization": f"Bearer {token}"}
     if gateway:
         headers["cf-aig-gateway-id"] = gateway
@@ -52,9 +57,9 @@ def call(account, token, state, questions, gateway=None, timeout=20.0):
     try:
         answers, usage = parse(resp.json())
     except ValueError:
-        return None, None, "response is not JSON"
+        return None, None, NOT_JSON
     if answers is None:
-        return None, None, "no answers in the response"
+        return None, None, NO_ANSWERS
     return answers, usage, None
 
 
@@ -72,29 +77,74 @@ def parse_typesafe(payload):
 
 def call_typesafe(account, token, state, questions, gateway=None, timeout=20.0):
     """One Jev evaluation straight from TypeSafe with a TypeSafe API key (`token`; `account` and
-    `gateway` are unused) -> (answers, usage, error). Never raises. A 429 or 529 is retried once."""
+    `gateway` are unused) -> (answers, usage, error). Never raises. One try: Routes retries."""
     if requests is None:
-        return None, None, "requests not installed"
+        return None, None, NO_REQUESTS
     headers = {"Authorization": f"Bearer {token}"}
     body = {"model": TYPESAFE_MODEL, "state": state, "questions": questions}
-    resp = None
-    for attempt in range(2):
-        try:
-            resp = requests.post(TYPESAFE_URL, json=body, headers=headers, timeout=timeout)
-        except Exception as e:  # noqa: BLE001 - a network fault of any kind is a missing answer
-            return None, None, f"{type(e).__name__}: {e}"[:200]
-        if resp.status_code not in (429, 529) or attempt:
-            break
-        time.sleep(3.0)  # the background worker's own time: the control loop never waits
+    try:
+        resp = requests.post(TYPESAFE_URL, json=body, headers=headers, timeout=timeout)
+    except Exception as e:  # noqa: BLE001 - a network fault of any kind is a missing answer
+        return None, None, f"{type(e).__name__}: {e}"[:200]
     if resp.status_code != 200:
         return None, None, f"HTTP {resp.status_code}: {resp.text[:160]}"
     try:
         answers, usage = parse_typesafe(resp.json())
     except ValueError:
-        return None, None, "response is not JSON"
+        return None, None, NOT_JSON
     if answers is None:
-        return None, None, "no answers in the response"
+        return None, None, NO_ANSWERS
     return answers, usage, None
+
+
+def retryable(error):
+    """A rate limit, a server error or a network fault may pass, so it is worth another try. A refused key, a bad
+    request or a reply that does not parse will not pass by waiting."""
+    if error.startswith("HTTP "):
+        code = error[5:8]
+        return code == "429" or code.startswith("5")
+    return error not in (NO_REQUESTS, NOT_JSON, NO_ANSWERS)
+
+
+@dataclass
+class Route:
+    """One way to reach Jev: `fn` is `call` (Cloudflare /ai/run) or `call_typesafe` (TypeSafe direct)."""
+
+    name: str
+    fn: object
+    account: str
+    token: str
+    gateway: str | None = None
+
+
+class Routes:
+    """Jev's transport over every route it has to the same model, tried in order. A route gets `tries` tries while
+    its failure may pass (retryable), 2 s and then 4 s apart, and no try starts that could end more than `window_s`
+    after the route's first; any other failure moves straight on to the next route. It runs on the Asker's worker,
+    so the control loop never waits for it. Its usage says which route answered, whether that was a failover, and
+    how many retries it took."""
+
+    def __init__(self, routes, tries=3, window_s=60.0, sleep=time.sleep, clock=time.monotonic):
+        self.routes = list(routes)
+        self.tries, self.window_s, self.sleep, self.clock = max(1, int(tries)), float(window_s), sleep, clock
+
+    def __call__(self, account, token, state, questions, gateway=None, timeout=20.0):
+        errors, retries = [], 0
+        for i, r in enumerate(self.routes):
+            start = self.clock()
+            for attempt in range(self.tries):
+                answers, usage, error = r.fn(r.account, r.token, state, questions, gateway=r.gateway, timeout=timeout)
+                if error is None and answers:
+                    return answers, {**(usage or {}), "route": r.name, "failover": i > 0, "retries": retries}, None
+                error = error or NO_ANSWERS
+                wait = 2.0 * 2 ** attempt
+                if (attempt + 1 >= self.tries or not retryable(error)
+                        or self.clock() - start + wait + timeout > self.window_s):
+                    break
+                self.sleep(wait)
+                retries += 1
+            errors.append(f"{r.name}: {error}")
+        return None, None, "; ".join(errors)[:200]
 
 
 @dataclass
