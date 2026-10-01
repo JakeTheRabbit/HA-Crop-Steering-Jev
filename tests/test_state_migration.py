@@ -315,3 +315,43 @@ def test_the_anchor_flag_round_trips_and_junk_is_tolerated(tmp_path):
     assert (
         third.rooms[0].state[1]["last_shot_is_anchor"] is False
     )  # invalid metadata cannot establish that an old timestamp was an anchor
+
+
+def test_an_old_file_without_history_loads_with_it_empty(tmp_path):
+    """3.8.0 kept no plateau or night history: its file loads as it was, history empty."""
+    p = tmp_path / "state.json"
+    p.write_text(
+        json.dumps({"default": {"1": {"phase": "P2", "peak": 36.1, "shots": 9}}}),
+        encoding="utf-8",
+    )
+    c = _make([1], p)
+    c._load_state()
+    st = c.rooms[0].state[1]
+    assert (st["phase"], st["peak"], st["shots"]) == ("P2", 36.1, 9)
+    assert (st["plateau_hist"], st["night_hist"], st["night"]) == ([], [], None)
+
+
+def test_the_history_survives_a_restart_and_junk_in_it_is_dropped(tmp_path):
+    p = tmp_path / "state.json"
+    c = _make([1], p)
+    c._load_state()
+    plateau = {"date": "2026-10-01", "value": 36.0, "how": "P1 recovered", "shots": 6}
+    night = {
+        "off_at": "2026-10-01T22:00:00",
+        "off_vwc": 32.78,
+        "plateau": 36.0,
+        "day": "2026-10-01",
+        "on_at": None,
+        "on_vwc": None,
+        "on_shots": 0,
+        "shots": 0,
+        "end_at": None,
+        "end_vwc": None,
+    }
+    c.rooms[0].state[1].update(plateau_hist=[plateau, "junk"], night=night)
+    c._save_state()
+    c2 = _make([1], p)
+    c2._load_state()
+    st = c2.rooms[0].state[1]
+    assert st["plateau_hist"] == [plateau] and st["night_hist"] == []
+    assert st["night"] == night
