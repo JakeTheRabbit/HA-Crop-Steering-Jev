@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDemo, demoClock } from "./demo";
+import { joinRows } from "./day-timeline";
+import { createDemo, demoClock, demoDay } from "./demo";
 import { OperatorDemo } from "./operator-demo";
 import { RunDemo, demoHistoryWindow, demoTimeZone } from "./comparison-demo";
 import { buildComparisonTarget } from "./comparison-target";
@@ -11,7 +12,7 @@ import {
   dateInZone,
   daysBetween,
 } from "./comparison";
-import { discoverRooms } from "./model";
+import { buildRoom, discoverRooms } from "./model";
 import {
   initializeDemoLibrary,
   libraryKey,
@@ -21,6 +22,7 @@ import {
   prepareRecipeDraft,
 } from "./recipe-library";
 import type { GrowPlan, StrategyDocument } from "./operator-types";
+import { recordWindows, tankEntities, tankRecord } from "./tank-level";
 
 const now = Date.parse("2026-09-08T01:00:00Z");
 const timeZone = demoTimeZone();
@@ -188,6 +190,51 @@ describe("the demo keeps the clock", () => {
     };
     expect(demoClock(picked, at(17))["sensor.crop_steering_zone_1_phase"].state).toBe("P2");
     expect(demoClock(picked, at(23))["sensor.crop_steering_zone_1_phase"].state).toBe("P3");
+  });
+});
+
+describe("the demo's batch tank", () => {
+  // Four in the afternoon, in whatever time zone the test runs: Flower 2's lights came on at 10.
+  const at = new Date(2026, 8, 28, 16, 0).getTime();
+  const HOUR = 3_600_000;
+  const states = createDemo(at);
+  const read = tankEntities(buildRoom(states, discoverRooms(states)[0]), states);
+  const load = (hours: number) =>
+    tankRecord(
+      joinRows(
+        recordWindows(10, 22, hours, at).map((window) =>
+          demoDay(
+            states,
+            { entityIds: read.entityIds, attributeIds: read.attributeIds, ...window },
+            at,
+          ),
+        ),
+      ),
+      read.ids,
+      at - hours * HOUR,
+      at,
+    );
+  it("ends at the live level, refilled at its recorded last fill", () => {
+    expect(read.ids.level).toBe("sensor.demo_tank_level");
+    const record = load(24);
+    expect(record.level.at(-1)!.value).toBe(42);
+    const fill = Date.parse(states["sensor.demo_tank_last_fill"].state);
+    expect(record.fills).toEqual([fill]);
+    expect(record.filling).toEqual([{ start: fill - 20 * 60_000, end: fill, open: false }]);
+    expect(record.shots.length).toBeGreaterThan(10);
+  });
+  it("runs the pump through every shot, and only a fill raises the level", () => {
+    const record = load(168);
+    // The last fill and the batches three and six days before it.
+    expect(record.fills).toHaveLength(3);
+    for (const shot of record.shots)
+      expect(record.pump.some((run) => run.start <= shot.start && shot.end <= run.end)).toBe(true);
+    record.level.forEach((step, index) => {
+      expect(step.value).toBeGreaterThanOrEqual(0);
+      expect(step.value).toBeLessThanOrEqual(100);
+      if (index && step.value > record.level[index - 1].value)
+        expect(record.fills).toContain(step.start);
+    });
   });
 });
 

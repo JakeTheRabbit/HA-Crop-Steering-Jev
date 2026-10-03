@@ -1,4 +1,10 @@
-import { growDay, type TimelineRequest, type TimelineRow, type TimelineRows } from "./day-timeline";
+import {
+  earlierDays,
+  growDay,
+  type TimelineRequest,
+  type TimelineRow,
+  type TimelineRows,
+} from "./day-timeline";
 import type { EntityState, LogEvent, Series, States } from "./types";
 import type { CounterSample, WaterRecordRequest } from "./water-use";
 import { addDays, daysBetween } from "./comparison";
@@ -6,6 +12,7 @@ import { stockSensorId } from "./dosing";
 import { dateForDay, localDate } from "./grow-plan";
 import { numeric } from "./model";
 import { demoStock, stockAttributes, stockLinks } from "./stock-demo";
+import { TANK_KEYS } from "./tank-level";
 
 export function isDemoLocation(location: Pick<Location, "hostname" | "search">): boolean {
   return (
@@ -1165,6 +1172,99 @@ function tankHistory(
     };
   });
 }
+/** One demo zone's shots on the grow-day from lights-on `start`, shifted like its probe so they land
+ * where its readings jump: six P1 ramp shots from 1.5 h, then a P2 top-up every 75 minutes until P3,
+ * each grow-day's a little longer or shorter than the day before's. Flower 2's zone 2 waits out a
+ * feed-EC hold; Flower 1's zone 3 is disabled from 6 h. */
+function demoZoneDay(prefix: string, zone: number, start: number, p3: number) {
+  const vwc = `sensor.crop_steering_${prefix}vwc_zone_${zone}`;
+  const at = (hour: number) => start + seedOf(vwc) * 180_000 + hour * 3_600_000;
+  const hold = !prefix && zone === 2 ? [2.5, 2.7] : null;
+  const disabled = prefix && zone === 3 ? 6 : Infinity;
+  const drift = 1 + 0.12 * Math.sin(new Date(start).getDate() * 1.9 + zone);
+  const shots: { start: number; stop: number; text: string }[] = [];
+  const shot = (hour: number, seconds: number, text: string) =>
+    shots.push({ start: at(hour), stop: at(hour) + seconds * 1000, text });
+  for (let index = 0, hour = 1.5; index < 6; index++, hour += 1 / 3) {
+    if (hold && hour >= hold[0] && hour < hold[1]) hour = hold[1];
+    shot(hour, Math.round((90 + 15 * index) * drift), `P1 P1 ramp shot ${index + 1}/6 (demo)`);
+  }
+  for (let hour = 4.75; hour < Math.min(p3, disabled); hour += 1.25)
+    shot(hour, Math.round(150 * drift), "P2 P2 top-up (demo)");
+  return { vwc, at, hold, disabled, shots };
+}
+const BATCH_MS = 72 * 3_600_000;
+/** The demo batch tank over [from, to], from the shots of its last ten grow-days: the pump runs while
+ * a valve is open (started 3 s before it, as the controller primes it) and each shot draws the level
+ * down. Each fill (the recorded last fill and every three days before it, tankHistory's batches)
+ * puts back what the three days before it drew, after 20 minutes of filling. The level ends at its
+ * live reading. */
+function demoTank(
+  states: States,
+  config: EntityState,
+  p3: number,
+  from: number,
+  to: number,
+  now: number,
+): TimelineRows {
+  const mapped = (key: string) => String(config.attributes[key] ?? "");
+  const prefix = String(config.attributes.prefix ?? "");
+  const hour = (key: string) => numeric(states[`number.crop_steering_${prefix}lights_${key}_hour`]);
+  const today = growDay(hour("on"), hour("off"), now);
+  const last = Date.parse(states[mapped(TANK_KEYS.fill)]?.state ?? "");
+  const live = numeric(states[mapped(TANK_KEYS.level)]);
+  if (!today || !Number.isFinite(last) || live === null) return {};
+  const shots = [today, ...earlierDays(today, 10, () => ({ on: hour("on"), off: hour("off") }))]
+    .flatMap((day) =>
+      Array.from({ length: Number(config.attributes.num_zones) }, (_, index) =>
+        demoZoneDay(prefix, index + 1, day.start, p3).shots.filter((shot) => shot.start < now),
+      ).flat(),
+    )
+    .sort((a, b) => a.start - b.start);
+  /** Valve-open milliseconds between two times. */
+  const open = (start: number, end: number) =>
+    shots.reduce(
+      (sum, shot) => sum + Math.max(0, Math.min(shot.stop, end) - Math.max(shot.start, start)),
+      0,
+    );
+  const fills = [3, 2, 1, 0].map((back) => last - back * BATCH_MS);
+  // Percent of the tank per valve-open millisecond: a batch puts back about a third of it.
+  const rate = 36 / Math.max(1, open(last - BATCH_MS, last));
+  const level = (time: number) => {
+    let value = live + rate * open(time, now);
+    for (const fill of fills)
+      if (fill > time && fill <= now) value -= rate * open(fill - BATCH_MS, fill);
+    return String(Math.round(Math.min(100, Math.max(0, value)) * 10) / 10);
+  };
+  const pump: { start: number; stop: number }[] = [];
+  for (const shot of shots) {
+    const run = pump.at(-1);
+    if (run && shot.start - 3_000 <= run.stop) run.stop = Math.max(run.stop, shot.stop);
+    else pump.push({ start: shot.start - 3_000, stop: shot.stop });
+  }
+  const switched = (runs: { start: number; stop: number }[]): TimelineRow[] => [
+    { state: runs.some((run) => run.start <= from && from < run.stop) ? "on" : "off", time: from },
+    ...runs.flatMap((run) => [
+      ...(run.start > from ? [{ state: "on", time: run.start }] : []),
+      ...(run.stop > from ? [{ state: "off", time: run.stop }] : []),
+    ]),
+  ];
+  const iso = (time: number) => new Date(time).toISOString();
+  const before = fills.filter((fill) => fill <= from).at(-1);
+  return {
+    [mapped(TANK_KEYS.level)]: [from, ...shots.map((shot) => shot.stop), ...fills, to]
+      .filter((time, index) => !index || (time > from && time <= to))
+      .map((time) => ({ state: level(time), time })),
+    [mapped(TANK_KEYS.pump)]: switched(pump),
+    [mapped(TANK_KEYS.filling)]: switched(
+      fills.map((fill) => ({ start: fill - 1_200_000, stop: fill })),
+    ),
+    [mapped(TANK_KEYS.fill)]: [
+      ...(before === undefined ? [] : [{ state: iso(before), time: from }]),
+      ...fills.filter((fill) => fill > from).map((fill) => ({ state: iso(fill), time: fill })),
+    ],
+  };
+}
 /** A recorded grow-day for the day timeline, on the demo probes' own day shape (P0 dryback, a
  * six-shot P1 ramp, P2 top-ups every 75 minutes, P3 two hours before lights-off), each zone shifted
  * like its probe so its shots land where its readings jump. Flower 2's zone 2 waits out a feed-EC
@@ -1209,8 +1309,7 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
     const events: { time: number; zone: number; list: "fired" | "blocked"; text: string | null }[] =
       [];
     for (let zone = 1; zone <= Number(config.attributes.num_zones); zone++) {
-      const vwc = `sensor.crop_steering_${prefix}vwc_zone_${zone}`;
-      const at = (hour: number) => request.start + seedOf(vwc) * 180_000 + hour * 3_600_000;
+      const { vwc, at, hold, disabled, shots } = demoZoneDay(prefix, zone, request.start, p3);
       const phases = [
         [0.02, "P0"],
         [1.5, "P1"],
@@ -1225,28 +1324,11 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
           time: state === "P0" ? request.start + hour * 3_600_000 : at(hour),
         })),
       ]);
-      const hold = !prefix && zone === 2 ? [2.5, 2.7] : null;
-      const disabled = prefix && zone === 3 ? 6 : Infinity;
-      // Each grow-day's shots run a little longer or shorter than the day before's.
-      const drift = 1 + 0.12 * Math.sin(new Date(request.start).getDate() * 1.9 + zone);
-      const shots: { hour: number; seconds: number; text: string }[] = [];
-      for (let shot = 0, hour = 1.5; shot < 6; shot++, hour += 1 / 3) {
-        if (hold && hour >= hold[0] && hour < hold[1]) hour = hold[1];
-        shots.push({
-          hour,
-          seconds: Math.round((90 + 15 * shot) * drift),
-          text: `P1 P1 ramp shot ${shot + 1}/6 (demo)`,
-        });
-      }
-      for (let hour = 4.75; hour < Math.min(p3, disabled); hour += 1.25)
-        shots.push({ hour, seconds: Math.round(150 * drift), text: "P2 P2 top-up (demo)" });
       const valve: TimelineRow[] = [{ state: "off", time: request.start }];
-      for (const shot of shots) {
-        const start = at(shot.hour),
-          stop = start + shot.seconds * 1000;
+      for (const { start, stop, text } of shots) {
         valve.push({ state: "on", time: start }, { state: "off", time: stop });
         events.push(
-          { time: stop + 2_000, zone, list: "fired", text: shot.text },
+          { time: stop + 2_000, zone, list: "fired", text },
           { time: stop + 62_000, zone, list: "fired", text: null },
         );
       }
@@ -1311,6 +1393,12 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
       });
     }
     put(`sensor.crop_steering_${prefix}current_decision`, decision);
+    // The batch tank, for the tank chart, when it is asked for.
+    if (Object.values(TANK_KEYS).some((key) => wanted.has(String(config.attributes[key]))))
+      for (const [id, list] of Object.entries(
+        demoTank(states, config, p3, request.start, end, now),
+      ))
+        put(id, list);
   }
   return rows;
 }
