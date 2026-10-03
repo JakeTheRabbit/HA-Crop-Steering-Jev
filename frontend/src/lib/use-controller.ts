@@ -43,6 +43,7 @@ import {
   type LiveConnection,
 } from "./live";
 import { roomProbeIds } from "./probes";
+import { TANK_KEYS } from "./tank-level";
 import { historySamples, type WaterRecord, type WaterRecordRequest } from "./water-use";
 
 type Listener = () => void;
@@ -642,9 +643,15 @@ export class ControllerStore {
    * over REST standalone. Live updates extend it from there (day-timeline.ts appendLive). */
   timeline = async (request: TimelineRequest) => {
     const room = this.snapshot.room;
+    const mapped = descriptor(this.states, room.room)?.attributes;
     const allowed = new Set([
       ...room.entities.map((entity) => entity.entity_id),
       ...room.zones.flatMap((zone) => (zone.valveEntity ? [zone.valveEntity] : [])),
+      // The tank and pump its descriptor maps, charted on Equipment › Tank & pump.
+      ...Object.values(TANK_KEYS).flatMap((key) => {
+        const id = mapped?.[key];
+        return typeof id === "string" && id ? [id] : [];
+      }),
     ]);
     const ids = [...request.entityIds, ...request.attributeIds];
     if (!ids.length || ids.some((id) => !allowed.has(id)))
