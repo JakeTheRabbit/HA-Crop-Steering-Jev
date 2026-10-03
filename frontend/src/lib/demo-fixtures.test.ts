@@ -198,35 +198,50 @@ describe("the demo's batch tank", () => {
   const at = new Date(2026, 8, 28, 16, 0).getTime();
   const HOUR = 3_600_000;
   const states = createDemo(at);
-  const read = tankEntities(buildRoom(states, discoverRooms(states)[0]), states);
-  const load = (hours: number) =>
-    tankRecord(
-      joinRows(
-        recordWindows(10, 22, hours, at).map((window) =>
-          demoDay(
-            states,
-            { entityIds: read.entityIds, attributeIds: read.attributeIds, ...window },
-            at,
-          ),
+  const rooms = discoverRooms(states);
+  const load = (hours: number, room = rooms[0]) => {
+    const read = tankEntities(buildRoom(states, room), states);
+    const lights = (key: string) =>
+      Number(states[`number.crop_steering_${room.prefix}lights_${key}_hour`].state);
+    const rows = joinRows(
+      recordWindows(lights("on"), lights("off"), hours, at).map((window) =>
+        demoDay(
+          states,
+          { entityIds: read.entityIds, attributeIds: read.attributeIds, ...window },
+          at,
         ),
       ),
-      read.ids,
-      at - hours * HOUR,
-      at,
     );
-  it("ends at the live level, refilled at its recorded last fill", () => {
-    expect(read.ids.level).toBe("sensor.demo_tank_level");
-    const record = load(24);
-    expect(record.level.at(-1)!.value).toBe(42);
-    const fill = Date.parse(states["sensor.demo_tank_last_fill"].state);
-    expect(record.fills).toEqual([fill]);
-    expect(record.filling).toEqual([{ start: fill - 20 * 60_000, end: fill, open: false }]);
-    expect(record.shots.length).toBeGreaterThan(10);
+    return { read, record: tankRecord(rows, read.ids, at - hours * HOUR, at) };
+  };
+  it("was filled to 100 % at its recorded last fill, and its card reads where the chart ends", () => {
+    for (const room of rooms) {
+      const { read, record } = load(24, room);
+      expect(read.ids.level).toBe(`sensor.demo_${room.prefix}tank_level`);
+      expect(record.level.at(-1)!.value).toBe(Number(states[read.ids.level!].state));
+      const fill = Date.parse(states[read.ids.fill!].state);
+      expect(record.fills.at(-1)).toBe(fill);
+      expect(record.level.find((step) => step.start === fill)!.value).toBe(100);
+      expect(record.filling.at(-1)).toEqual({ start: fill - 20 * 60_000, end: fill, open: false });
+      expect(record.shots.length).toBeGreaterThan(10);
+    }
+    // The two rooms' tanks are two tanks.
+    expect(states["sensor.demo_tank_level"].state).not.toBe(
+      states["sensor.demo_f1_tank_level"].state,
+    );
+  });
+  it("is filled to 100 % once or twice a day, as F2's is, after running down to 25 % or less", () => {
+    const { record } = load(168);
+    expect(record.fills.length).toBeGreaterThanOrEqual(7);
+    expect(record.fills.length).toBeLessThanOrEqual(14);
+    for (const fill of record.fills) {
+      expect(record.level.find((step) => step.start === fill)!.value).toBe(100);
+      const before = record.level.filter((step) => step.start < fill).at(-1);
+      if (before) expect(before.value).toBeLessThanOrEqual(25);
+    }
   });
   it("runs the pump through every shot, and only a fill raises the level", () => {
-    const record = load(168);
-    // The last fill and the batches three and six days before it.
-    expect(record.fills).toHaveLength(3);
+    const { record } = load(168);
     for (const shot of record.shots)
       expect(record.pump.some((run) => run.start <= shot.start && shot.end <= run.end)).toBe(true);
     record.level.forEach((step, index) => {

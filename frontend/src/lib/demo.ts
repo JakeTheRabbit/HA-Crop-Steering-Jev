@@ -80,7 +80,6 @@ export function createDemo(now = Date.now()): States {
       setup_revision: 1,
     });
     put(`switch.demo_${prefix}pump`, index ? "off" : "on");
-    put(`sensor.demo_${prefix}tank_level`, index ? 72 : 42, { unit_of_measurement: "%" });
     put(`sensor.demo_${prefix}tank_ec`, index ? 2.8 : 3.06, { unit_of_measurement: "mS/cm" });
     put(`sensor.demo_${prefix}tank_ph`, index ? 5.8 : 5.66, { unit_of_measurement: "pH" });
     put(`sensor.demo_${prefix}tank_temperature`, index ? 19.2 : 17.6, {
@@ -119,6 +118,10 @@ export function createDemo(now = Date.now()): States {
     number(prefix, "max_shot_duration", 120, 5, 3600, 1, "s");
     number(prefix, "lights_on_hour", index ? 8 : 10, 0, 23, 1, "h");
     number(prefix, "lights_off_hour", index ? 20 : 22, 0, 23, 1, "h");
+    // The tank's level now, from the record its history is drawn from: the card and the chart agree.
+    put(`sensor.demo_${prefix}tank_level`, demoTankModel(states, prefix, now)!.level(now), {
+      unit_of_measurement: "%",
+    });
     number(prefix, "irrigation_ec_min", 2.3, 0, 6, 0.1, "mS/cm");
     number(prefix, "irrigation_ec_max", 3.5, 0, 8, 0.1, "mS/cm");
     number(prefix, "irrigation_ph_min", 5.5, 3, 9, 0.05, "pH");
@@ -1193,55 +1196,90 @@ function demoZoneDay(prefix: string, zone: number, start: number, p3: number) {
     shot(hour, Math.round(150 * drift), "P2 P2 top-up (demo)");
   return { vwc, at, hold, disabled, shots };
 }
-const BATCH_MS = 72 * 3_600_000;
-/** The demo batch tank over [from, to], from the shots of its last ten grow-days: the pump runs while
- * a valve is open (started 3 s before it, as the controller primes it) and each shot draws the level
- * down. Each fill (the recorded last fill and every three days before it, tankHistory's batches)
- * puts back what the three days before it drew, after 20 minutes of filling. The level ends at its
- * live reading. */
+const FILL_MS = 20 * 60_000;
+/** How low each demo cycle runs before its refill, in %, give or take the last shot's few: F2's
+ * own lows over a week ran 0 to 25. */
+const TANK_LOWS = [0, 15, 20, 1, 15, 0, 20, 0, 15, 2];
+/** The demo batch tank as F2's behaves: each fill takes 20 minutes and leaves it at 100 %, the
+ * pump draws it down while a shot runs (started 3 s before the valve, as the controller primes it;
+ * about 1.6 % a pump-minute in Flower 2, 1.3 % in Flower 1), and it is filled again once it has run
+ * low, to between 0 and 25 %: once or twice a day. The recorded last fill is the anchor; the fills
+ * before it are worked back from it through the shots of the ten grow-days before. A shot while
+ * the tank fills draws nothing. Null without a lights schedule or a recorded fill. */
+function demoTankModel(states: States, prefix: string, now: number) {
+  const config = states[`sensor.crop_steering_${prefix}engine_config`]?.attributes;
+  const hour = (key: string) => numeric(states[`number.crop_steering_${prefix}lights_${key}_hour`]);
+  const on = hour("on"),
+    off = hour("off");
+  const today = growDay(on, off, now);
+  const last = Date.parse(states[String(config?.[TANK_KEYS.fill] ?? "")]?.state ?? "");
+  if (!config || !today || on === null || off === null || !Number.isFinite(last)) return null;
+  const p3 = Math.max(4, ((off - on + 24) % 24 || 12) - 2);
+  const shots = [today, ...earlierDays(today, 10, () => ({ on, off }))]
+    .flatMap((day) =>
+      Array.from({ length: Number(config.num_zones) }, (_, index) =>
+        demoZoneDay(prefix, index + 1, day.start, p3).shots.filter((shot) => shot.start < now),
+      ).flat(),
+    )
+    .sort((a, b) => a.start - b.start);
+  const runs: { start: number; stop: number }[] = [];
+  for (const shot of shots) {
+    const run = runs.at(-1);
+    if (run && shot.start - 3_000 <= run.stop) run.stop = Math.max(run.stop, shot.stop);
+    else runs.push({ start: shot.start - 3_000, stop: shot.stop });
+  }
+  const rate = (prefix ? 1.3 : 1.6) / 60_000; // % of the tank per pump-millisecond
+  // Back from the recorded fill: each cycle's pump runs drew 100 % down to its low, and the run
+  // before them, the one that would have drawn it lower, ended the cycle before. That run left the
+  // tank low, so the fill started as it ended, as F2's is refilled, unless this cycle's first run
+  // came too soon after; then the fill ended just before that first run.
+  const fills = [last];
+  for (let cycle = 0; ; cycle++) {
+    let index = runs.length - 1;
+    while (index >= 0 && runs[index].stop > fills[cycle] - FILL_MS) index--;
+    let drawn = 0;
+    const need = (100 - TANK_LOWS[cycle % TANK_LOWS.length]) / rate;
+    const length = (run: { start: number; stop: number }) => run.stop - run.start;
+    while (index >= 0 && drawn + length(runs[index]) <= need) drawn += length(runs[index--]);
+    if (index < 0 || !drawn) break;
+    const first = runs[index + 1].start,
+      low = runs[index].stop;
+    fills.push(low + FILL_MS + 62_000 <= first ? low + FILL_MS + 2_000 : first - 120_000);
+  }
+  fills.reverse();
+  const draws = runs.filter(
+    (run) => !fills.some((fill) => run.start < fill && run.stop > fill - FILL_MS),
+  );
+  return {
+    runs,
+    fills,
+    draws,
+    /** The level at `time` in whole %, as F2's sensor reports it. */
+    level(time: number): number {
+      let index = -1;
+      while (index + 1 < fills.length && fills[index + 1] <= time) index++;
+      const from = index < 0 ? -Infinity : fills[index];
+      const until = Math.min(time, (fills[index + 1] ?? Infinity) - FILL_MS);
+      const drawn = draws.reduce(
+        (sum, run) => sum + Math.max(0, Math.min(run.stop, until) - Math.max(run.start, from)),
+        0,
+      );
+      return Math.round(Math.min(100, Math.max(0, 100 - rate * drawn)));
+    },
+  };
+}
+/** The demo batch tank's record over [from, to] (demoTankModel): its level, the pump, the tank
+ * filling and the last-fill record. */
 function demoTank(
   states: States,
   config: EntityState,
-  p3: number,
   from: number,
   to: number,
   now: number,
 ): TimelineRows {
   const mapped = (key: string) => String(config.attributes[key] ?? "");
-  const prefix = String(config.attributes.prefix ?? "");
-  const hour = (key: string) => numeric(states[`number.crop_steering_${prefix}lights_${key}_hour`]);
-  const today = growDay(hour("on"), hour("off"), now);
-  const last = Date.parse(states[mapped(TANK_KEYS.fill)]?.state ?? "");
-  const live = numeric(states[mapped(TANK_KEYS.level)]);
-  if (!today || !Number.isFinite(last) || live === null) return {};
-  const shots = [today, ...earlierDays(today, 10, () => ({ on: hour("on"), off: hour("off") }))]
-    .flatMap((day) =>
-      Array.from({ length: Number(config.attributes.num_zones) }, (_, index) =>
-        demoZoneDay(prefix, index + 1, day.start, p3).shots.filter((shot) => shot.start < now),
-      ).flat(),
-    )
-    .sort((a, b) => a.start - b.start);
-  /** Valve-open milliseconds between two times. */
-  const open = (start: number, end: number) =>
-    shots.reduce(
-      (sum, shot) => sum + Math.max(0, Math.min(shot.stop, end) - Math.max(shot.start, start)),
-      0,
-    );
-  const fills = [3, 2, 1, 0].map((back) => last - back * BATCH_MS);
-  // Percent of the tank per valve-open millisecond: a batch puts back about a third of it.
-  const rate = 36 / Math.max(1, open(last - BATCH_MS, last));
-  const level = (time: number) => {
-    let value = live + rate * open(time, now);
-    for (const fill of fills)
-      if (fill > time && fill <= now) value -= rate * open(fill - BATCH_MS, fill);
-    return String(Math.round(Math.min(100, Math.max(0, value)) * 10) / 10);
-  };
-  const pump: { start: number; stop: number }[] = [];
-  for (const shot of shots) {
-    const run = pump.at(-1);
-    if (run && shot.start - 3_000 <= run.stop) run.stop = Math.max(run.stop, shot.stop);
-    else pump.push({ start: shot.start - 3_000, stop: shot.stop });
-  }
+  const model = demoTankModel(states, String(config.attributes.prefix ?? ""), now);
+  if (!model) return {};
   const switched = (runs: { start: number; stop: number }[]): TimelineRow[] => [
     { state: runs.some((run) => run.start <= from && from < run.stop) ? "on" : "off", time: from },
     ...runs.flatMap((run) => [
@@ -1250,18 +1288,20 @@ function demoTank(
     ]),
   ];
   const iso = (time: number) => new Date(time).toISOString();
-  const before = fills.filter((fill) => fill <= from).at(-1);
+  const before = model.fills.filter((fill) => fill <= from).at(-1);
   return {
-    [mapped(TANK_KEYS.level)]: [from, ...shots.map((shot) => shot.stop), ...fills, to]
+    [mapped(TANK_KEYS.level)]: [from, ...model.draws.map((run) => run.stop), ...model.fills, to]
       .filter((time, index) => !index || (time > from && time <= to))
-      .map((time) => ({ state: level(time), time })),
-    [mapped(TANK_KEYS.pump)]: switched(pump),
+      .map((time) => ({ state: String(model.level(time)), time })),
+    [mapped(TANK_KEYS.pump)]: switched(model.runs),
     [mapped(TANK_KEYS.filling)]: switched(
-      fills.map((fill) => ({ start: fill - 1_200_000, stop: fill })),
+      model.fills.map((fill) => ({ start: fill - FILL_MS, stop: fill })),
     ),
     [mapped(TANK_KEYS.fill)]: [
       ...(before === undefined ? [] : [{ state: iso(before), time: from }]),
-      ...fills.filter((fill) => fill > from).map((fill) => ({ state: iso(fill), time: fill })),
+      ...model.fills
+        .filter((fill) => fill > from)
+        .map((fill) => ({ state: iso(fill), time: fill })),
     ],
   };
 }
@@ -1395,9 +1435,7 @@ export function demoDay(states: States, request: TimelineRequest, now = Date.now
     put(`sensor.crop_steering_${prefix}current_decision`, decision);
     // The batch tank, for the tank chart, when it is asked for.
     if (Object.values(TANK_KEYS).some((key) => wanted.has(String(config.attributes[key]))))
-      for (const [id, list] of Object.entries(
-        demoTank(states, config, p3, request.start, end, now),
-      ))
+      for (const [id, list] of Object.entries(demoTank(states, config, request.start, end, now)))
         put(id, list);
   }
   return rows;

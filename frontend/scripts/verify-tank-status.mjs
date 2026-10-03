@@ -88,7 +88,9 @@ try {
   await page.goto(`${origin}/dashboard.html?demo=1#/equipment/tank`);
   const tank = page.locator("[data-tank-status]");
   await tank.waitFor();
-  assert.equal(await tank.locator("[data-tank-level]").getAttribute("data-tank-level"), "42");
+  // The demo tank was filled to 100 % two hours ago and is being drawn down since.
+  const cardLevel = Number(await tank.locator("[data-tank-level]").getAttribute("data-tank-level"));
+  assert.ok(cardLevel > 25 && cardLevel < 100, `tank card level ${cardLevel}`);
   assert.equal(await tank.locator("[data-pump-state]").getAttribute("data-pump-state"), "on");
   assert.match(await tank.innerText(), /3.06 mS\/cm/);
   assert.match(await tank.innerText(), /5.66 pH/);
@@ -131,24 +133,26 @@ try {
   // Under the card, the tank's level over time with what moved it: the demo's recorded history.
   const level = await levelChart(page);
   const summary = () => level.locator(".tank-level-svg").getAttribute("aria-label");
-  assert.match(
-    await summary(),
-    /^Tank level over the last 24 h: latest 42%, lowest [\d.]+%, highest [\d.]+%\. \d+ shots, pump on \d[^,]*, 1 recorded fill\.$/,
+  // The chart ends where the card reads, after a fill to 100 % from a tank run low.
+  const day = (await summary()).match(
+    /^Tank level over the last 24 h: latest ([\d.]+)%, lowest ([\d.]+)%, highest 100%\. \d+ shots, pump on \d[^,]*, \d+ recorded fills?\.$/,
   );
+  assert.ok(day, `level summary: ${await summary()}`);
+  assert.equal(Number(day[1]), cardLevel, "the chart ends where the card reads");
+  assert.ok(Number(day[2]) <= 25, `the tank ran down to ${day[2]} % before its fill`);
   assert.ok(
     (await level.locator('[data-layer="level"]').getAttribute("d")).split("H").length > 10,
     "level line drawn",
   );
   assert.ok((await level.locator('[data-layer="shots"] circle').count()) > 5, "shots on the line");
   assert.ok((await level.locator('[data-run="pump"]').count()) > 10, "pump runs drawn");
-  assert.equal(
-    await level.locator('[data-run="filling"]').count(),
-    1,
-    "the filling before the fill",
+  assert.ok(
+    (await level.locator('[data-run="filling"]').count()) >= 1,
+    "the filling before a fill",
   );
-  // The recorded fill is the demo's last fill, two hours ago.
+  // The newest recorded fill is the demo's last fill, two hours ago.
   assert.equal(
-    await level.locator("[data-fill]").getAttribute("data-fill"),
+    await level.locator("[data-fill]").last().getAttribute("data-fill"),
     new Date(2026, 8, 28, 14, 0, 0).toISOString(),
   );
   // A shot says which zone, how long, and how much at the configured flow.
@@ -164,10 +168,10 @@ try {
   );
   await page.mouse.move(0, 0);
   await level.locator(".grow-tip").waitFor({ state: "hidden" });
-  // Every range: three days hold the last fill, seven the batches three and six days before it.
-  for (const [range, fills] of [
-    ["3 days", 1],
-    ["7 days", 3],
+  // Every range: one or two refills a day, each to 100 %, as F2's tank is filled.
+  for (const [range, days] of [
+    ["3 days", 3],
+    ["7 days", 7],
   ]) {
     await level.getByRole("button", { name: range, exact: true }).click();
     await page.waitForFunction(
@@ -178,7 +182,9 @@ try {
           ?.startsWith(label),
       `Tank level over the last ${range}:`,
     );
-    assert.equal(await level.locator("[data-fill]").count(), fills, `recorded fills over ${range}`);
+    const fills = await level.locator("[data-fill]").count();
+    assert.ok(fills >= days && fills <= 2 * days, `${fills} recorded fills over ${range}`);
+    assert.match(await summary(), /, highest 100%\./);
   }
   assert.match(
     await level.locator(".timeline-events summary").innerText(),
@@ -339,14 +345,17 @@ try {
 
   await page.goto(`${origin}/dashboard.html?demo=1&room=room%3Af1_#/equipment/tank`);
   await page.waitForFunction(
-    () => document.querySelector("[data-tank-level]")?.getAttribute("data-tank-level") === "72",
+    () => document.querySelector("[data-pump-state]")?.getAttribute("data-pump-state") === "off",
   );
-  assert.equal(await page.locator("[data-pump-state]").getAttribute("data-pump-state"), "off");
-  // Flower 1's level chart is its own tank's.
-  assert.match(
-    await (await levelChart(page)).locator(".tank-level-svg").getAttribute("aria-label"),
-    /^Tank level over the last 24 h: latest 72%, .* 1 recorded fill\.$/,
+  // Flower 1's card and level chart are its own tank's: another level, where its chart ends.
+  const f1Level = Number(await page.locator("[data-tank-level]").getAttribute("data-tank-level"));
+  assert.notEqual(f1Level, cardLevel, "Flower 1 reads its own tank");
+  const f1Day = (
+    await (await levelChart(page)).locator(".tank-level-svg").getAttribute("aria-label")
+  ).match(
+    /^Tank level over the last 24 h: latest ([\d.]+)%, .*, highest 100%\..* recorded fills?\.$/,
   );
+  assert.equal(Number(f1Day?.[1]), f1Level, "Flower 1's chart ends where its card reads");
   // Flower 1 maps no feed-water probe: no gate is drawn, and the panel says its limits hold nothing.
   await page.setViewportSize({ width: 1440, height: 1000 });
   sheet = await openHistory(page);
