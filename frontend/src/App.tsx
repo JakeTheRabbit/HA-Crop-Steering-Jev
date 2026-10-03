@@ -57,6 +57,7 @@ import { StockTanks } from "@/pages/stock";
 import { Dosing } from "@/pages/dosing";
 import { WaterUsePage } from "@/pages/water-use";
 import { TankStatus } from "@/components/tank-status";
+import { TankLevel } from "@/components/tank-level";
 
 const navigation = [
   { page: "today", label: SECTION_LABELS.today, icon: House },
@@ -368,11 +369,18 @@ export default function App() {
               <StockTanks key={pageKey} controller={controller} navigate={navigate} />
             )}
             {page === "equipment/tank" && (
-              <TankStatus
-                key={pageKey}
-                controller={controller}
-                onConfigure={() => navigate("equipment/setup")}
-              />
+              <>
+                <TankStatus
+                  key={pageKey}
+                  controller={controller}
+                  onConfigure={() => navigate("equipment/setup")}
+                />
+                <TankLevel
+                  key={`${pageKey}:level`}
+                  controller={controller}
+                  onConfigure={() => navigate("equipment/setup")}
+                />
+              </>
             )}
             {page === "equipment/dosing" && (
               <Dosing
