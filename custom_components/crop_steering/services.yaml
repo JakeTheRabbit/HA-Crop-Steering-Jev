@@ -357,7 +357,7 @@ stock_record_batch:
           mode: box
 stock_draw:
   name: Draw what was dosed
-  description: Take from the stock tanks linked to dosing pumps what a dose or a batch actually dosed. The controller app calls it after every dose; each key is counted once, so sending one again changes nothing. Tanks this room does not have are skipped. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations and the controller app are unaffected.
+  description: Take from stock tanks what a dose or a batch actually dosed. The controller app calls it after every dose; each key is counted once, so sending one again changes nothing. A tank linked to a dosing pump is left as it is, because what that pump runs draws it, whoever starts it. Tanks this room does not have are skipped. Needs a Home Assistant administrator when a signed-in user calls it, directly or through a script they start; automations and the controller app are unaffected.
   fields:
     room_id:
       required: true

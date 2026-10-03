@@ -249,6 +249,10 @@ async def async_setup_dosing(hass, entry):
     manager = DosingStore(hass, entry)
     await manager.async_init()
     hass.data.setdefault(DOMAIN, {}).setdefault("_dosing", {})[entry.entry_id] = manager
+    # The room's stock tanks, set up before it, follow the pumps linked to them (stock_api.py).
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    async_dispatcher_send(hass, f"{SIGNAL}_{entry.entry_id}")
 
     async def handle(call):
         if call.service == "dosing_request" and call.data.get("action") == "stop":

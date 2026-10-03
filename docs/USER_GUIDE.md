@@ -164,7 +164,7 @@ An older integration publishes only each zone's combined reading, which then sta
 
 ### Stock tanks
 
-**Next to run out** leads: the tank with the fewest batches left. Each tank shows its level against its low mark (amber within half again of it, red at it), with **Refilled**, **Set level** and the batches left. A tank linked to a dosing pump (in **Equipment › Dosing › Dosing setup**) says **Drawn by** that pump **as it doses**, with its recent draws: the controller takes what each dose actually dosed off it, and the tank's fills no longer count against it; its batches left are at the pump's recipe amount. **Record a batch** takes the recipe's doses off every tank; recent draws are one tap down. **Edit stock tanks** adds, renames and removes tanks.
+**Next to run out** leads: the tank with the fewest batches left. Each tank shows its level against its low mark (amber within half again of it, red at it), with **Refilled**, **Set level** and the batches left. A tank linked to a dosing pump (in **Equipment › Dosing › Dosing setup**) says **Drawn by** that pump **as it doses**, with its recent draws: Crop Steering takes what the pump actually ran off it, whoever started the dose (the controller, an automation, or someone at the doser), and the tank's fills no longer count against it; its batches left are at the pump's recipe amount. **Record a batch** takes the recipe's doses off every tank; recent draws are one tap down. **Edit stock tanks** adds, renames and removes tanks.
 
 ### Tank and pump
 
