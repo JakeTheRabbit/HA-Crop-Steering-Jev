@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDemo, demoClock } from "./demo";
+import { joinRows } from "./day-timeline";
+import { createDemo, demoClock, demoDay } from "./demo";
 import { OperatorDemo } from "./operator-demo";
 import { RunDemo, demoHistoryWindow, demoTimeZone } from "./comparison-demo";
 import { buildComparisonTarget } from "./comparison-target";
@@ -11,7 +12,7 @@ import {
   dateInZone,
   daysBetween,
 } from "./comparison";
-import { discoverRooms } from "./model";
+import { buildRoom, discoverRooms } from "./model";
 import {
   initializeDemoLibrary,
   libraryKey,
@@ -21,6 +22,7 @@ import {
   prepareRecipeDraft,
 } from "./recipe-library";
 import type { GrowPlan, StrategyDocument } from "./operator-types";
+import { recordWindows, tankEntities, tankRecord } from "./tank-level";
 
 const now = Date.parse("2026-09-08T01:00:00Z");
 const timeZone = demoTimeZone();
@@ -188,6 +190,66 @@ describe("the demo keeps the clock", () => {
     };
     expect(demoClock(picked, at(17))["sensor.crop_steering_zone_1_phase"].state).toBe("P2");
     expect(demoClock(picked, at(23))["sensor.crop_steering_zone_1_phase"].state).toBe("P3");
+  });
+});
+
+describe("the demo's batch tank", () => {
+  // Four in the afternoon, in whatever time zone the test runs: Flower 2's lights came on at 10.
+  const at = new Date(2026, 8, 28, 16, 0).getTime();
+  const HOUR = 3_600_000;
+  const states = createDemo(at);
+  const rooms = discoverRooms(states);
+  const load = (hours: number, room = rooms[0]) => {
+    const read = tankEntities(buildRoom(states, room), states);
+    const lights = (key: string) =>
+      Number(states[`number.crop_steering_${room.prefix}lights_${key}_hour`].state);
+    const rows = joinRows(
+      recordWindows(lights("on"), lights("off"), hours, at).map((window) =>
+        demoDay(
+          states,
+          { entityIds: read.entityIds, attributeIds: read.attributeIds, ...window },
+          at,
+        ),
+      ),
+    );
+    return { read, record: tankRecord(rows, read.ids, at - hours * HOUR, at) };
+  };
+  it("was filled to 100 % at its recorded last fill, and its card reads where the chart ends", () => {
+    for (const room of rooms) {
+      const { read, record } = load(24, room);
+      expect(read.ids.level).toBe(`sensor.demo_${room.prefix}tank_level`);
+      expect(record.level.at(-1)!.value).toBe(Number(states[read.ids.level!].state));
+      const fill = Date.parse(states[read.ids.fill!].state);
+      expect(record.fills.at(-1)).toBe(fill);
+      expect(record.level.find((step) => step.start === fill)!.value).toBe(100);
+      expect(record.filling.at(-1)).toEqual({ start: fill - 20 * 60_000, end: fill, open: false });
+      expect(record.shots.length).toBeGreaterThan(10);
+    }
+    // The two rooms' tanks are two tanks.
+    expect(states["sensor.demo_tank_level"].state).not.toBe(
+      states["sensor.demo_f1_tank_level"].state,
+    );
+  });
+  it("is filled to 100 % once or twice a day, as F2's is, after running down to 25 % or less", () => {
+    const { record } = load(168);
+    expect(record.fills.length).toBeGreaterThanOrEqual(7);
+    expect(record.fills.length).toBeLessThanOrEqual(14);
+    for (const fill of record.fills) {
+      expect(record.level.find((step) => step.start === fill)!.value).toBe(100);
+      const before = record.level.filter((step) => step.start < fill).at(-1);
+      if (before) expect(before.value).toBeLessThanOrEqual(25);
+    }
+  });
+  it("runs the pump through every shot, and only a fill raises the level", () => {
+    const { record } = load(168);
+    for (const shot of record.shots)
+      expect(record.pump.some((run) => run.start <= shot.start && shot.end <= run.end)).toBe(true);
+    record.level.forEach((step, index) => {
+      expect(step.value).toBeGreaterThanOrEqual(0);
+      expect(step.value).toBeLessThanOrEqual(100);
+      if (index && step.value > record.level[index - 1].value)
+        expect(record.fills).toContain(step.start);
+    });
   });
 });
 

@@ -635,6 +635,30 @@ describe("inside Home Assistant", () => {
     ).rejects.toThrow("at most one grow-day");
     store.stop();
   });
+  it("reads the tank and pump the selected room maps, and no other room's", async () => {
+    const { home, store } = await started();
+    const start = Date.now() - 3_600_000,
+      end = Date.now();
+    const timeline = store.getSnapshot().timeline;
+    const tank = {
+      entityIds: ["binary_sensor.demo_tank_filling", "sensor.demo_tank_level", "switch.demo_pump"],
+      attributeIds: ["sensor.demo_tank_last_fill"],
+      start,
+      end,
+    };
+    await expect(timeline(tank)).resolves.toEqual({});
+    // The last-fill record comes with its attributes: a date-and-time helper's timestamp.
+    expect(home.connection.sendMessagePromise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_ids: ["sensor.demo_tank_last_fill"],
+        no_attributes: false,
+      }),
+    );
+    await expect(
+      timeline({ entityIds: ["sensor.demo_f1_tank_level"], attributeIds: [], start, end }),
+    ).rejects.toThrow("History is limited to entities in the selected room.");
+    store.stop();
+  });
 });
 
 describe("recorder rows over the websocket", () => {
