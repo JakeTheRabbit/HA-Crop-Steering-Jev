@@ -1763,7 +1763,8 @@ class Controller:
         ec_rules = snap.ec if ec_rules is None else ec_rules
         auto_setpoints.new_day(learn, self._grow_day_start(room, now).isoformat(), snap.vwc)
         auto_setpoints.tick(learn, snap.vwc, st["phase"], now.timestamp(), lights_on,
-                            snap.dryback_rate, self._minutes_since_shot(st, now))
+                            snap.dryback_rate, self._minutes_since_shot(st, now),
+                            ceiling=min(p.p1_target, p.field_capacity))  # the engine's own P1 ceiling
         enabled = self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
         planned = bool(getattr(room, "strategy_required", False))
         jev_state = room.__dict__.setdefault("_jev_state", {})
