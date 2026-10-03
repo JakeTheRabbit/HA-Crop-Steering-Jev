@@ -37,7 +37,7 @@ Eight properties. Each one is concrete and checked by a test or a published numb
 | **Zones** | P1, P2 | hourly with lights on, when a zone's water per plant is under 70 % or over 140 % of the room's median zone (itself included; the other zone in a room of two) | why one zone differs (recipe, plants drinking less, wet spot, delivery fault, water not landing) | raises CS-702 with the likely cause | alert only |
 | **Stage** | P2 | once a grow-day, with lights on, when the flower day is known | is last night's dryback, the settled pore EC, and the stage's move-on signs where the owner's stage arc wants them for today | CS-705 advice; code itself states a steering mode that is not the stage's | advice only: never changes a setting |
 | **Alerts** | all | once per alert, again after 6 h | escalate / remind / quiet | whether its repeats push to a phone (every alert is always a card; its first raise always pushes) | pump and valve faults (CS-3xx), lost probes (CS-101 to 103), CS-207, CS-701, CS-703, CS-704, and dosing's CS-801, CS-803 and CS-806 always push |
-| **Setpoints** | P3 | once a grow-day, in the first 3 h after lights-off, while the room's **Auto setpoints** switch is on | tomorrow's maintenance watering: smaller shots / bigger shots / re-water later / re-water sooner / keep, from the day's water per plant against the room, the shots and how they held, pore EC against the stage's range (code states which way the EC and the room call for) | one notch on the zone's OWN number: P2 shot size ±0.5 % or P2 re-water threshold ±0.5 points | one notch a grow-day; inside a range around the operator's own value (shot ±1 %, never under 3 %; threshold 2 under to 1 over, 4 above the rescue floor, 2 under the ramp ceiling); an edit by hand always wins and re-centres the range; a P3 rescue shot within 30 h puts the old value back, pauses the zone 48 h and raises CS-404; the base engine's own learner never writes while this judge runs |
+| **Setpoints** | P3 | once a grow-day, in the first 3 h after lights-off, while the room's **Auto setpoints** switch is on | tomorrow's maintenance watering: smaller shots / bigger shots / re-water later / re-water sooner / keep, from the day's water per plant against the room, the shots and how they held, pore EC against the stage's range (code states which way the EC and the room call for) | one notch on the zone's OWN number: P2 shot size ±0.5 % or P2 re-water threshold ±0.5 points | one notch a grow-day; inside a range around the operator's own value (shot ±1 %, never under 3 %; threshold 2 under to 1 over, 4 above the rescue floor, 2 under the ramp ceiling); an edit by hand always wins and re-centres the range; a P3 rescue shot within 30 h puts the old value back, pauses the zone 48 h and raises CS-404; the base engine's own Auto Setpoints learner never writes these two, and keeps the P1 target and field capacity ([who writes which setpoint](#who-writes-which-setpoint)) |
 
 ## The owner's doctrine
 
@@ -63,6 +63,34 @@ The live runs drew the line between doctrine for Jev and doctrine for code. Told
 - **Probes:** the last usable probe is never set aside by Jev alone: it takes the council, the code-confirmed
   evidence, and it expires.
 
+## Who writes which setpoint
+
+With a room's **Auto setpoints** switch on and no armed grow plan, each of a zone's own numbers has exactly one
+automatic writer. With the switch off, or under a plan, neither writes anything.
+
+| Zone number | Written by | How |
+|---|---|---|
+| P2 shot size, P2 re-water threshold | Jev's Setpoints judge | One notch a night, inside a range around the operator's value (the Setpoints row above). |
+| P1 target, field capacity | The base engine's Auto Setpoints learner | From the peak the zone has shown it reaches. Up by at most 2 points a grow-day; down at once when a ramp stops lifting the probe. Field capacity stays 2 points over the P1 target. |
+| P3 rescue floor | The learner | Only to keep it 3 points under the judge's re-water threshold, when the ladder would otherwise invert. |
+
+The old hourly P2 check stays off while the Setpoints judge runs. Each zone's
+`sensor.crop_steering_<prefix>zone_N_auto_setpoints` lists these numbers in `managed` and names each one's writer
+in `managed_by`.
+
+Two runs of the learner shaped this. From 22 to 26 Sep 2026, writing every target alone, it took zone 3's P1
+target from 40.9 to 74.5, its field capacity from 42.9 to 76.5 and its re-water threshold from 37.4 to 69.6: each
+"reached" day raised the learned peak to whatever the extra ramp water achieved, and every target followed it.
+From 26 Sep it wrote nothing at all while the judge ran, so nobody wrote the P1 target: after a sump flood on
+29 Sep moved zone 2's probe up 15 to 20 points, its target sat at 29.5 under a probe reading 42 to 44 % at
+lights-on, every day started above the P1 ceiling, and P1 never ramped (4 Oct). So the learner keeps its own
+numbers under the judge, and a learned P1 target rises at most 2 points a grow-day above the ceiling (the lower of
+the P1 target and field capacity) its day began with. In a room without the judge, where the learner also owns the
+re-water threshold, it leaves the threshold where it is while the P1 target is held. One exception: a zone that
+enters P1 already at or above its ceiling has a stale target, not a learned one, and the learner may raise it the
+same day to the learned peak plus one point, never higher (in the setpoint supervisor's 6-point steps, a minute
+apart).
+
 ## Failing safe
 
 Jev is optional at every level: no Cloudflare credentials, `jev_enabled` off, a judge left out of `jev_judges`, the daily budget spent, Jev slow or down, or an answer that
@@ -77,7 +105,7 @@ Add-on options (the controller app):
 | `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Used when set. |
 | `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Or Jev through Cloudflare Workers AI: the account, a token with Workers AI access, and the AI Gateway (optional). With neither a TypeSafe key nor these, Jev is off. |
 | `jev_enabled` | on | Off runs the plain engine even with Cloudflare set. |
-| `jev_judges` | all | The judges that may act, e.g. `dawn,ramp,salt,dusk,probe,shot,night,zones,stage,setpoints,alerts`. Setpoints also needs the room's **Auto setpoints** switch on; while it runs, the base engine's own Auto Setpoints learner never writes. |
+| `jev_judges` | all | The judges that may act, e.g. `dawn,ramp,salt,dusk,probe,shot,night,zones,stage,setpoints,alerts`. Setpoints also needs the room's **Auto setpoints** switch on; while it runs, it owns the P2 shot size and re-water threshold, and the base engine's own Auto Setpoints learner the P1 target and field capacity. |
 | `jev_daily_calls` | 2000 | The day's call budget across rooms. |
 | `jev_flower_start` | empty | Each room's first day of 12/12: an input_datetime or a date, for every room or as `room=value` pairs, e.g. `default=input_datetime.f2_flip_date, f1=input_datetime.f1_flip_date`. |
 | `jev_flower_days` | 56 | The cultivar's flowering length; the finish is its last 14 days. |
