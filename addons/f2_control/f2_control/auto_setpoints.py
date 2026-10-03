@@ -226,8 +226,11 @@ def model(learn):
     return ct.ZoneModel(knee=learn["peak"], gain=learn["gain"], day_rate=learn["day_rate"], night_rate=learn["night_rate"])
 
 
-def wanted(learn, current, vwc, phase, plan_ctx):
+def wanted(learn, current, vwc, phase, plan_ctx, others=()):
     """suffix -> value this zone should hold now. {} until something has been learned.
+
+    `others`: setpoints another writer owns (Jev's Setpoints judge: the P2 shot size and re-water threshold). They
+    are never wanted here, so each lever has one writer, and the rescue floor's ladder guard reads their value.
 
     The ratchet guard (module docstring): up, the P1 target goes no higher than DAY_RISE_PTS over the ceiling its
     grow-day began with, or, stale, the learned peak + PROBE_STEP_PTS; field capacity follows the held target.
@@ -250,8 +253,8 @@ def wanted(learn, current, vwc, phase, plan_ctx):
     held, target = target > round(top, 1), min(target, round(top, 1))
     want = {"p1_target_vwc": target, "field_capacity": max(40.0, round(target + 2.0, 1))}
     m = model(learn)
-    if held:
-        pass  # the P2 threshold stays where it is (above)
+    if held or "p2_vwc_threshold" in others:
+        pass  # the P2 threshold stays where it is (above), or is another writer's
     elif m and plan_ctx:
         recipe = ct.Recipe(0.0, plan_ctx["dryback_pct"], plan_ctx["p0_wait_min"], plan_ctx["p1_shot_pct"],
                            plan_ctx["p1_gap_min"], current["p2_shot_size"])
