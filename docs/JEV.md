@@ -71,7 +71,7 @@ automatic writer. With the switch off, or under a plan, neither writes anything.
 | Zone number | Written by | How |
 |---|---|---|
 | P2 shot size, P2 re-water threshold | Jev's Setpoints judge | One notch a night, inside a range around the operator's value (the Setpoints row above). |
-| P1 target, field capacity | The base engine's Auto Setpoints learner | From the peak the zone has shown it reaches. Up by at most 2 points a grow-day; down at once when a ramp stops lifting the probe. Field capacity stays 2 points over the P1 target. |
+| P1 target, field capacity | The base engine's Auto Setpoints learner | From the peak the zone has shown it reaches. Up by at most 2 points a grow-day, and only once that day's ramp reached the target; down at once when a ramp stops lifting the probe. Field capacity stays 2 points over the P1 target. |
 | P3 rescue floor | The learner | Only to keep it 3 points under the judge's re-water threshold, when the ladder would otherwise invert. |
 
 The old hourly P2 check stays off while the Setpoints judge runs. Each zone's
@@ -84,12 +84,20 @@ target from 40.9 to 74.5, its field capacity from 42.9 to 76.5 and its re-water 
 From 26 Sep it wrote nothing at all while the judge ran, so nobody wrote the P1 target: after a sump flood on
 29 Sep moved zone 2's probe up 15 to 20 points, its target sat at 29.5 under a probe reading 42 to 44 % at
 lights-on, every day started above the P1 ceiling, and P1 never ramped (4 Oct). So the learner keeps its own
-numbers under the judge, and a learned P1 target rises at most 2 points a grow-day above the ceiling (the lower of
-the P1 target and field capacity) its day began with. In a room without the judge, where the learner also owns the
-re-water threshold, it leaves the threshold where it is while the P1 target is held. One exception: a zone that
-enters P1 already at or above its ceiling has a stale target, not a learned one, and the learner may raise it the
-same day to the learned peak plus one point, never higher (in the setpoint supervisor's 6-point steps, a minute
-apart).
+numbers under the judge, with two limits on raising the P1 target:
+
+- **Only after a ramp that reached it, 2 points at most.** A learned P1 target rises at most 2 points a grow-day
+  above the ceiling (the lower of the P1 target and field capacity) its day began with, and only once that day's
+  ramp has reached the target (or plateaued, and the plateau was believed). Until then, and all day after a ramp
+  that stalled, ended short or looked suspect, the target holds.
+- **A stale target catches up to the zone, not to the learned peak.** A zone that enters P1 already at or above its
+  ceiling has a stale target, not a learned one. The learner may raise it the same day to 2 points over the
+  reading P1 began at, and never above the learned peak plus one point (in the setpoint supervisor's 6-point
+  steps, a minute apart). Not straight to the learned peak: zone 3's was still the ratchet's 79.21 on 4 Oct, against
+  the operator's reset target of 41.
+
+In a room without the judge, where the learner also owns the re-water threshold, it leaves the threshold where it
+is while the P1 target is held.
 
 ## Failing safe
 
