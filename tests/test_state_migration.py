@@ -320,8 +320,8 @@ def test_the_anchor_flag_round_trips_and_junk_is_tolerated(tmp_path):
 def test_a_learned_zone_saved_before_the_ratchet_guard_loads_with_its_keys_empty(
     tmp_path,
 ):
-    """3.8.0's learner block has no day_ceiling or stale_target: everything it learned
-    loads as it was, and the guard starts counting from the first pass that runs."""
+    """3.8.0's learner block has no day_ceiling, p1_entry or stale_target: everything it
+    learned loads as it was, and the guard counts from the first pass that runs."""
     learned = {
         "peak": 65.54,
         "gain": 1.368,
@@ -340,4 +340,5 @@ def test_a_learned_zone_saved_before_the_ratchet_guard_loads_with_its_keys_empty
     c._load_state()
     learn = c.rooms[0].state[2]["learn"]
     assert {k: learn[k] for k in learned} == learned
-    assert learn["day_ceiling"] is None and learn["stale_target"] is None
+    assert learn["day_ceiling"] is None and learn["p1_entry"] is None
+    assert learn["stale_target"] is None

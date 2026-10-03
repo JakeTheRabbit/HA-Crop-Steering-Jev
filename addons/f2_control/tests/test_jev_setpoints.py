@@ -297,16 +297,25 @@ def _zone_2(auto="on", plan=False, numbers=Z2):
     return c, fake, room
 
 
-def _day(c, fake, room, entry_vwc=44.0, p2_passes=8):
-    """A grow-day through the controller's own pass, a minute apart: lights-on in P0, P1 entered at `entry_vwc`,
-    then P2."""
-    now = LIGHTS_ON
-    for phase, vwc, passes in (("P0", 44.0, 1), ("P1", entry_vwc, 1), ("P2", 52.0, p2_passes)):
-        room.state[1]["phase"] = phase
-        for _ in range(passes):
-            asr._Clock.current = now
-            asr._tick(c, fake, room, vwc, now)
-            now += timedelta(minutes=1)
+def _day(c, fake, room, entry_vwc=44.0, p2_passes=8, ramp=()):
+    """A grow-day through the controller's own pass, a minute apart: lights-on in P0, P1 entered at `entry_vwc`
+    with a 2 % ramp shot through the controller's own shot hook for each of `ramp` (what each retained, read 21
+    minutes on), then P2."""
+    now, vwc = LIGHTS_ON, entry_vwc
+    for phase, reading in (("P0", 44.0), ("P1", entry_vwc)):
+        room.state[1]["phase"], asr._Clock.current = phase, now
+        asr._tick(c, fake, room, reading, now)
+        now += timedelta(minutes=1)
+    for rise in ramp:
+        c._advance_shot_counters(room, 1, 2.0)
+        vwc, now = round(vwc + rise, 2), now + timedelta(minutes=21)
+        asr._Clock.current = now
+        asr._tick(c, fake, room, vwc, now)
+    room.state[1]["phase"] = "P2"
+    for _ in range(p2_passes):
+        asr._Clock.current = now
+        asr._tick(c, fake, room, 52.0, now)
+        now += timedelta(minutes=1)
 
 
 def _sent(fake, suffix=None):
@@ -326,17 +335,25 @@ def test_under_the_judge_the_learner_writes_the_p1_target_and_field_capacity_fro
     c, fake, room = _zone_2()
     assert jev_bridge.owns_setpoints(c)
     _day(c, fake, room)
-    # Lights-on: two points, as on any day. Then P1 was entered at 44 %, over its 31.5 % ceiling: the target was
-    # stale, so the same grow-day it goes to the learned peak 65.54 + 1, in the supervisor's 6-point steps.
-    assert _sent(fake, "p1_target_vwc") == [31.5, 37.5, 43.5, 49.5, 55.5, 61.5, 66.5]
-    assert _sent(fake, "field_capacity")[-1] == 68.5
-    assert any(" auto p1_target_vwc 61.5 -> 66.5" in line for line in c._activity)
+    # Lights-on: nothing has reached anything yet, so 29.5 holds. Then P1 began at 44 %, over its 29.5 % ceiling:
+    # the target was stale, so the same grow-day it goes to 2 over that reading, in the supervisor's 6-point
+    # steps. Not to the learned 65.54 + 1: a stale peak (zone 3's ratchet) must not be reached in a day.
+    assert _sent(fake, "p1_target_vwc") == [35.5, 41.5, 46.0]
+    assert _sent(fake, "field_capacity")[-1] == 48.0
+    assert any(" auto p1_target_vwc 41.5 -> 46" in line for line in c._activity)
 
 
-def test_after_the_operators_stopgap_zone_2_climbs_two_points_a_grow_day(ramp_clock):
+@pytest.mark.parametrize("ramp, written", [
+    ((2.1, 2.1), [50.0]),  # 44 -> 46.1 -> 48.2: it reached its 48 still taking water, so 2 more
+    ((2.1, 0.5), []),  # 44 -> 46.1 -> 46.6: it stopped taking water under 48, so 48 holds
+])
+def test_after_the_operators_stopgap_zone_2_climbs_two_points_only_after_a_ramp_that_reached_48(
+        ramp_clock, ramp, written):
     c, fake, room = _zone_2(numbers={**Z2, "number.crop_steering_zone_1_p1_target_vwc": ("48", {})})
-    _day(c, fake, room, entry_vwc=40.5)  # a little dryback in P0 from 42-44 %: under its 50 % ceiling, so it ramps
-    assert _sent(fake, "p1_target_vwc") == [50.0] and _sent(fake, "field_capacity") == [52.0]
+    _day(c, fake, room, entry_vwc=44.0, ramp=ramp)  # under its 48 ceiling: not stale, so it ramps
+    assert room.state[1]["learn"]["outcome"] == ("reached" if written else "short")
+    assert _sent(fake, "p1_target_vwc") == written
+    assert _sent(fake, "field_capacity") == [w + 2.0 for w in written]
 
 
 def test_the_learner_never_writes_the_judges_levers_even_to_keep_its_ladder(ramp_clock, monkeypatch):
