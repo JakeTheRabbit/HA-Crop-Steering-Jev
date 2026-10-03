@@ -49,9 +49,12 @@ const when = (iso: string | null) =>
 const SOURCES: Record<StockBatch["source"], string> = {
   fill: "Tank fill",
   manual: "By hand",
+  pump: "Pump ran",
   dose: "Dose",
   batch: "Batch",
 };
+/** The draws a linked tank's card lists: what its pump ran, and the doses reported to it before. */
+const PUMPED: readonly StockBatch["source"][] = ["pump", "dose", "batch"];
 /** A tank's dosing pump, and what it draws each batch or dose. */
 interface Link {
   pump: string;
@@ -511,6 +514,9 @@ export function StockTanks({
               .
             </>
           )}
+          {links.size
+            ? " A tank linked to a dosing pump is drawn by what the pump runs, whoever starts the dose."
+            : ""}
         </p>
       )}
       {!doc && !error && <p className="muted">Loading stock tanks…</p>}
@@ -534,9 +540,7 @@ export function StockTanks({
               dose={doc.doses[tank.id]}
               link={links.get(tank.id) ?? null}
               draws={doc.history.filter(
-                (entry) =>
-                  (entry.source === "dose" || entry.source === "batch") &&
-                  entry.draw_ml[tank.id] !== undefined,
+                (entry) => PUMPED.includes(entry.source) && entry.draw_ml[tank.id] !== undefined,
               )}
               busy={busy}
               onRefill={() => void act("stock_refill", { id: tank.id })}

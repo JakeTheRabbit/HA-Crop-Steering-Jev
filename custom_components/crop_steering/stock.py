@@ -6,6 +6,9 @@ mapped in Rooms & setup (`tank_last_fill_sensor`), or the operator recording one
 tank then loses its dose per batch: a fixed amount, or what a dose entity reads at that moment (a
 doser's dose-volume number), so the draw follows the doser's own setting.
 
+A tank linked to a dosing pump is drawn by what that pump runs instead (docs/DOSING.md, Stock
+tanks): the seconds its motor ran times its calibrated flow, whoever started it.
+
 The first fill time the integration ever sees is only a starting point: counting it would draw the
 stock down for a batch made before the tanks were set up.
 """
@@ -153,7 +156,9 @@ def dose_ml(tank: dict, reading: str | None) -> float:
 
 def draw(data: dict, doses: dict[str, float], at: str, source: str) -> dict:
     """One batch: every tank in `doses` loses its dose (never below empty), and the batch is logged.
-    A tank left out is not drawn: one linked to a dosing pump is drawn by its doses instead.
+    A tank left out is not drawn: one linked to a dosing pump is drawn by its pump's runs instead.
+    A batch that drew no tank at all is not logged: it would only push real draws out of the
+    history.
     """
     taken = {}
     for tank in data["tanks"]:
@@ -163,18 +168,20 @@ def draw(data: dict, doses: dict[str, float], at: str, source: str) -> dict:
         before = tank["level_l"]
         tank["level_l"] = round(max(0.0, before - ml / 1000), 4)
         taken[tank["id"]] = round((before - tank["level_l"]) * 1000, 1)
-    data["history"] = [
-        {"at": at, "source": source, "draw_ml": taken},
-        *data["history"],
-    ][:HISTORY]
+    if taken:
+        data["history"] = [
+            {"at": at, "source": source, "draw_ml": taken},
+            *data["history"],
+        ][:HISTORY]
     return data
 
 
-def draw_dosed(data: dict, draws, at: str, source: str, key: str, note=None):
-    """What the controller dosed out of stock tanks linked to its pumps (docs/DOSING.md, Stock
-    tanks): each tank named in `draws` loses its mL, never below empty, and the draw is logged with
-    its key -> (counted, skipped ids). A key already counted changes nothing (the controller sends a
-    draw again until it hears back), and an id that is not one of the room's tanks is skipped.
+def draw_dosed(data: dict, draws, at: str, source: str, key: str, note=None, leave=()):
+    """What was dosed out of stock tanks linked to pumps (docs/DOSING.md, Stock tanks): each tank
+    named in `draws` loses its mL, never below empty, and the draw is logged with its key ->
+    (counted, skipped ids). A key already counted changes nothing (the controller sends a draw again
+    until it hears back), an id that is not one of the room's tanks is skipped, and a tank in
+    `leave` is not drawn (its pump's own runs draw it).
     """
     if not isinstance(draws, dict):
         raise StockError("draws must map stock tank ids to mL")
@@ -197,7 +204,7 @@ def draw_dosed(data: dict, draws, at: str, source: str, key: str, note=None):
     taken = {}
     for tank_id, ml in amounts.items():
         tank = known.get(tank_id)
-        if tank is None:
+        if tank is None or tank_id in leave:
             continue
         before = tank["level_l"]
         tank["level_l"] = round(max(0.0, before - ml / 1000), 4)
@@ -210,6 +217,40 @@ def draw_dosed(data: dict, draws, at: str, source: str, key: str, note=None):
     data["history"] = [entry, *data["history"]][:HISTORY]
     data["draw_keys"] = [*keys, key][-DRAW_KEYS:]
     return True, skipped
+
+
+def running(pump: dict, read) -> list[str]:
+    """Which of a dosing pump's entities say its motor runs now (docs/DOSING.md, Stock tanks): its
+    power switch reading on (the motor's own switch on the firmwares Crop Steering drives), and its
+    dosing entity reading dosing (a binary sensor on; a sensor whose state starts with the pump's
+    dosing prefix). Empty while it does not run: unavailable, unknown or missing never says it
+    does. `read(entity_id)` is that entity's state, or None.
+    """
+    found = []
+    power, dosing = pump.get("power_entity"), pump.get("dosing_entity")
+    if power and str(read(power) or "").strip().lower() == "on":
+        found.append(power)
+    if dosing:
+        state = str(read(dosing) or "")
+        if dosing.startswith("binary_sensor."):
+            on = state.strip().lower() == "on"
+        else:
+            on = state.startswith(pump.get("dosing_prefix") or "Dosing")
+        if on:
+            found.append(dosing)
+    return found
+
+
+def pumped_ml(seconds: float, flow) -> float | None:
+    """What a pump moved running `seconds` at its calibrated flow (its flow entity's reading, in
+    mL/s), or None when that reads nothing usable."""
+    try:
+        rate = math.nan if isinstance(flow, bool) else float(flow)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rate) or rate <= 0:
+        return None
+    return max(0.0, seconds) * rate
 
 
 def refill(data: dict, tank_id: str, level_l: float | None, now: str) -> dict:

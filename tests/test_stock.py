@@ -62,7 +62,7 @@ def test_a_batch_draws_each_dose_and_never_below_empty():
 
 
 def test_a_batch_draws_only_the_tanks_it_is_given():
-    """A tank linked to a dosing pump is left out of a fill's draw: its doses draw it."""
+    """A tank linked to a dosing pump is left out of a fill's draw: its pump's runs draw it."""
     data = stock.empty()
     data["tanks"] = tanks(
         {"name": "Bloom", "capacity_l": 50, "dose_ml": 1800},
@@ -71,6 +71,10 @@ def test_a_batch_draws_only_the_tanks_it_is_given():
     stock.draw(data, {"cal": 250}, NOW, "fill")
     assert [t["level_l"] for t in data["tanks"]] == [50, 0.75]
     assert data["history"][0]["draw_ml"] == {"cal": 250.0}
+    # Every tank linked to a pump: the fill draws none, and is not logged. Stamped many times a
+    # day, empty entries would push the pumps' draws out of the history.
+    stock.draw(data, {}, NOW, "fill")
+    assert len(data["history"]) == 1
 
 
 def test_what_was_dosed_is_drawn_once_per_key_and_never_below_empty():
@@ -102,6 +106,72 @@ def test_what_was_dosed_is_drawn_once_per_key_and_never_below_empty():
             stock.draw_dosed(data, {"bloom": bad}, NOW, "dose", "k3")
     with pytest.raises(stock.StockError, match="map stock tank ids"):
         stock.draw_dosed(data, ["bloom"], NOW, "dose", "k3")
+
+
+def test_a_draw_leaves_the_tanks_their_pumps_draw():
+    data = stock.empty()
+    data["tanks"] = tanks(
+        {"name": "Bloom", "capacity_l": 50, "dose_ml": 1800},
+        {"name": "Cal", "capacity_l": 1, "dose_ml": 250},
+    )
+    leave = {"bloom": "bloom_pump"}
+    counted, skipped = stock.draw_dosed(
+        data, {"bloom": 25, "cal": 50}, NOW, "dose", "k1", leave=leave
+    )
+    assert (counted, skipped) == (True, [])
+    assert [t["level_l"] for t in data["tanks"]] == [50, 0.95]
+    assert data["history"][0]["draw_ml"] == {"cal": 50.0}
+    # Only a linked tank: nothing counted, and the key is not remembered.
+    assert stock.draw_dosed(data, {"bloom": 25}, NOW, "dose", "k2", leave=leave) == (
+        False,
+        [],
+    )
+    assert data["draw_keys"] == ["k1"]
+    with pytest.raises(stock.StockError, match="number of mL"):  # still checked
+        stock.draw_dosed(data, {"bloom": -1}, NOW, "dose", "k3", leave=leave)
+
+
+# The real firmware (a 5.1.x ESPHome peristaltic doser, Home Assistant history 27 Sep 2026): its
+# status reads "Running (Manual)" while a dose runs, its power switch reads on, and the setup's
+# dosing prefix is the default "Dosing".
+DOSER = {
+    "power_entity": "switch.doser_balance_pump_power",
+    "dosing_entity": "sensor.doser_balance_pump_status",
+    "dosing_prefix": "Dosing",
+}
+
+
+def test_a_pump_runs_while_its_power_or_its_dosing_entity_says_so():
+    def read(states):
+        return lambda entity: states.get(entity)
+
+    power, status = DOSER["power_entity"], DOSER["dosing_entity"]
+    assert stock.running(DOSER, read({power: "off", status: "Stopped"})) == []
+    # What the firmware reports during a dose: only the power switch matches.
+    assert stock.running(DOSER, read({power: "on", status: "Running (Manual)"})) == [
+        power
+    ]
+    # A firmware whose status starts with the prefix, or a binary sensor on.
+    assert stock.running(DOSER, read({power: "off", status: "Dosing 25 mL"})) == [
+        status
+    ]
+    binary = {**DOSER, "dosing_entity": "binary_sensor.doser_balance_dosing"}
+    on = {power: "on", "binary_sensor.doser_balance_dosing": "on"}
+    assert stock.running(binary, read(on)) == [
+        power,
+        "binary_sensor.doser_balance_dosing",
+    ]
+    # Unavailable, unknown and missing never say it runs.
+    for dead in ("unavailable", "unknown", None):
+        assert stock.running(DOSER, read({power: dead, status: dead})) == []
+
+
+def test_what_a_run_moved_is_its_seconds_times_its_flow():
+    # The firmware's own 300 mL dose of Balance: 27.129756 s at 11.061206817627 mL/s.
+    assert round(stock.pumped_ml(27.129756, "11.061206817627"), 1) == 300.1
+    assert stock.pumped_ml(-1, 11) == 0
+    for unusable in ("unavailable", None, "0", -5, float("nan"), True):
+        assert stock.pumped_ml(10, unusable) is None
 
 
 def test_only_the_last_hundred_draw_keys_are_kept():

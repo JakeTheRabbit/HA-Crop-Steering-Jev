@@ -4,8 +4,9 @@ Response-only services addressed by canonical room id, like the run and strategy
 is open to any signed-in user; changing a tank, recording a refill or a batch needs an
 administrator. A batch is counted when the room's mapped tank last-fill entity moves to a newer
 time, or when the operator records one; a room whose tanks run low gets a Repairs card. A tank
-linked to a dosing pump is drawn by what that pump doses instead (stock_draw, docs/DOSING.md), and
-neither way of counting a batch draws it.
+linked to a dosing pump is drawn by what that pump runs instead, followed here on the pump's own
+entities whoever starts it (docs/DOSING.md, Stock tanks): neither way of counting a batch draws it,
+and nor does the controller's report of a dose (stock_draw).
 """
 
 from __future__ import annotations
@@ -33,8 +34,12 @@ SIGNAL = f"{DOMAIN}_stock_changed"
 ISSUE = "stock_low"
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _utcnow().isoformat()
 
 
 def _valid(value) -> dict:
@@ -74,6 +79,10 @@ class StockStore:
         self._lock = asyncio.Lock()
         self.data = stock.empty()
         self.error = None
+        self._pumps = {}  # pump id -> its setup, for each pump linked to a stock tank
+        self._runs = {}  # pump id -> {"since", "flow"} while that pump is seen running
+        self._watching = ()  # the pump entities followed
+        self._unwatch = None
 
     @property
     def fill_entity(self) -> str | None:
@@ -100,38 +109,179 @@ class StockStore:
             )
 
     def start(self):
-        """Count batches from the fill entity and raise the low-stock card. Returns the unsubscribe
-        for the listener, or None when no fill entity is mapped."""
+        """Count batches from the fill entity, draw each tank linked to a dosing pump by what that
+        pump runs, and raise the low-stock card. Returns the unsubscribe for all of it, or None
+        when the stored tanks could not be loaded."""
         self._alert()
-        entity = self.fill_entity
-        if not entity or self.error:
+        if self.error:
             return None
         from homeassistant.core import callback
+        from homeassistant.helpers.dispatcher import async_dispatcher_connect
         from homeassistant.helpers.event import async_track_state_change_event
 
-        # The fill time at start-up is a starting point, not a batch (stock.new_batch).
-        current = self.hass.states.get(entity)
-        self.hass.async_create_task(self._fill(current.state if current else None))
+        from .dosing_api import SIGNAL as DOSING_SIGNAL
 
         @callback
-        def changed(event):
-            state = event.data.get("new_state")
-            self.hass.async_create_task(self._fill(state.state if state else None))
+        def rewatch(*_):
+            self._watch()
 
-        return async_track_state_change_event(self.hass, [entity], changed)
+        # Which pumps are linked is the room's dosing setup: followed again whenever it is saved.
+        stops = [
+            async_dispatcher_connect(
+                self.hass, f"{DOSING_SIGNAL}_{self.entry.entry_id}", rewatch
+            )
+        ]
+        entity = self.fill_entity
+        if entity:
+            # The fill time at start-up is a starting point, not a batch (stock.new_batch).
+            current = self.hass.states.get(entity)
+            self.hass.async_create_task(self._fill(current.state if current else None))
 
-    def linked(self) -> dict[str, str]:
-        """Stock tank id -> the dosing pump it is linked to, from the room's dosing setup."""
+            @callback
+            def changed(event):
+                state = event.data.get("new_state")
+                self.hass.async_create_task(self._fill(state.state if state else None))
+
+            stops.append(async_track_state_change_event(self.hass, [entity], changed))
+        self._watch()
+
+        def stop():
+            for unsubscribe in stops:
+                unsubscribe()
+            if self._unwatch is not None:
+                self._unwatch()
+                self._unwatch = None
+
+        return stop
+
+    def _dosing_pumps(self) -> list[dict]:
+        """The room's dosing pumps that are linked to a stock tank, from its dosing setup."""
         dosing = (
             self.hass.data.get(DOMAIN, {}).get("_dosing", {}).get(self.entry.entry_id)
         )
         if dosing is None or dosing.error:
-            return {}
-        return {
-            pump["stock_tank"]: pump["id"]
-            for pump in dosing.data.get("pumps", [])
-            if pump.get("stock_tank")
+            return []
+        return [pump for pump in dosing.data.get("pumps", []) if pump.get("stock_tank")]
+
+    def linked(self) -> dict[str, str]:
+        """Stock tank id -> the dosing pump it is linked to, from the room's dosing setup."""
+        return {pump["stock_tank"]: pump["id"] for pump in self._dosing_pumps()}
+
+    def _read(self, entity):
+        state = self.hass.states.get(entity) if entity else None
+        return state.state if state is not None else None
+
+    def _watch(self):
+        """Follow the pumps linked to stock tanks (docs/DOSING.md, Stock tanks): their power and
+        dosing entities, as the dosing setup names them. A pump already running when it is first
+        followed (a reload in the middle of a dose) has run since its entity last changed. A pump
+        no longer linked is no longer followed, and a run it had going is not drawn."""
+        from homeassistant.core import callback
+        from homeassistant.helpers.event import async_track_state_change_event
+
+        self._pumps = {pump["id"]: pump for pump in self._dosing_pumps()}
+        self._runs = {
+            pump: run for pump, run in self._runs.items() if pump in self._pumps
         }
+        entities = tuple(
+            sorted(
+                {
+                    entity
+                    for pump in self._pumps.values()
+                    for entity in (pump.get("power_entity"), pump.get("dosing_entity"))
+                    if entity
+                }
+            )
+        )
+        if entities != self._watching:
+            if self._unwatch is not None:
+                self._unwatch()
+            self._watching, self._unwatch = entities, None
+            if entities:
+
+                @callback
+                def changed(event):
+                    self._changed(event.data.get("new_state"))
+
+                self._unwatch = async_track_state_change_event(
+                    self.hass, list(entities), changed
+                )
+        for pump_id, pump in self._pumps.items():
+            on = stock.running(pump, self._read)
+            if on and pump_id not in self._runs:
+                changed_at = [
+                    getattr(self.hass.states.get(entity), "last_changed", None)
+                    for entity in on
+                ]
+                self._runs[pump_id] = {
+                    "since": min([t for t in changed_at if t] or [_utcnow()]),
+                    "flow": self._read(pump.get("flow_entity")),
+                }
+
+    def _changed(self, new_state):
+        """A followed entity changed: a linked pump that now runs begins a run, and one that no
+        longer does (stopped, unavailable or gone) ends its run, at the moment the entity changed;
+        what it ran is drawn from its stock tank."""
+        at = getattr(new_state, "last_changed", None) or _utcnow()
+        for pump_id, pump in self._pumps.items():
+            on = bool(stock.running(pump, self._read))
+            run = self._runs.get(pump_id)
+            if on and run is None:
+                self._runs[pump_id] = {
+                    "since": at,
+                    "flow": self._read(pump.get("flow_entity")),
+                }
+            elif run is not None and not on:
+                del self._runs[pump_id]
+                self.hass.async_create_task(self._draw_run(pump, run, at))
+
+    async def _draw_run(self, pump, run, end):
+        """A linked pump stopped: the seconds it ran times its calibrated flow (read as it started,
+        or as it stopped when it could not be read then) come off its stock tank, never below
+        empty, logged as "pump" under a key of the pump and the moment it started, so the same
+        run is never drawn twice."""
+        seconds = (end - run["since"]).total_seconds()
+        flow = run["flow"]
+        if stock.pumped_ml(seconds, flow) is None:
+            flow = self._read(pump.get("flow_entity"))
+        ml = stock.pumped_ml(seconds, flow)
+        tank = pump["stock_tank"]
+        if ml is None:
+            _LOGGER.warning(
+                "Stock tanks for %s: %s ran %.1f s, but its flow (%s) reads nothing usable, "
+                "so nothing was drawn from stock tank %s",
+                self.room_id,
+                pump.get("name"),
+                seconds,
+                pump.get("flow_entity"),
+                tank,
+            )
+            return
+        ml = round(ml, 1)
+        if ml <= 0:
+            return
+        async with self._lock:
+            if self.error:
+                return
+            draft = deepcopy(self.data)
+            counted, _ = stock.draw_dosed(
+                draft,
+                {tank: ml},
+                end.isoformat(),
+                "pump",
+                f"pump:{pump['id']}:{run['since'].isoformat()}",
+                f"{pump.get('name')} ran {seconds:.1f} s at {float(flow):g} mL/s",
+            )
+            if counted:
+                await self._commit(draft)
+                _LOGGER.info(
+                    "Stock tanks for %s: %s ran %.1f s, %g mL drawn from %s",
+                    self.room_id,
+                    pump.get("name"),
+                    seconds,
+                    ml,
+                    tank,
+                )
 
     def doses(self) -> dict[str, float]:
         """What one batch takes from each tank right now, in mL."""
@@ -215,7 +365,9 @@ class StockStore:
             return response
 
     async def draw(self, data):
-        """stock_draw: what the controller dosed out of linked tanks, counted once per key. No
+        """stock_draw: what the controller dosed out of linked tanks, counted once per key. A tank
+        still linked to a pump is left as it is: what that pump runs draws it (_watch), whoever
+        starts the dose, so the controller's report of the same dose never counts it twice. No
         expected revision: the controller cannot know it, and the key makes a repeat harmless.
         """
         async with self._lock:
@@ -223,6 +375,7 @@ class StockStore:
                 raise ValueError(self.error)
             key = data.get("key")
             duplicate = key in self.data["draw_keys"]
+            linked = self.linked()
             draft = deepcopy(self.data)
             counted, skipped = stock.draw_dosed(
                 draft,
@@ -231,6 +384,7 @@ class StockStore:
                 data.get("source"),
                 key,
                 data.get("note"),
+                linked,
             )
             if counted:
                 await self._commit(draft)
@@ -239,6 +393,12 @@ class StockStore:
                 "counted": counted,
                 "duplicate": duplicate,
                 "skipped": skipped,
+                # Its own tanks it left to their pumps' runs.
+                "linked": sorted(
+                    tank
+                    for tank in data.get("draws")
+                    if tank in linked and tank not in skipped
+                ),
             }
 
     async def _commit(self, draft):
