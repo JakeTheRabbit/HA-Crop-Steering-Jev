@@ -15,9 +15,11 @@ export interface StockTank {
 }
 export interface StockBatch {
   at: string;
-  /** fill: counted from the tank's last fill; manual: recorded by hand; dose and batch: what a
-   * linked dosing pump dosed, drawn by the controller (stock_draw) under its `key`. */
-  source: "fill" | "manual" | "dose" | "batch";
+  /** fill: counted from the tank's last fill; manual: recorded by hand; pump: what a linked dosing
+   * pump ran, whoever started it, drawn by the integration under its `key`; dose and batch: a
+   * dose reported through stock_draw, which takes only tanks no pump is linked to (and every tank
+   * before the integration watched the pumps). */
+  source: "fill" | "manual" | "pump" | "dose" | "batch";
   draw_ml: Record<string, number>;
   key?: string;
 }

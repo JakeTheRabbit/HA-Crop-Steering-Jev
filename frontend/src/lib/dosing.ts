@@ -25,8 +25,8 @@ export interface DosingPump {
   flow_entity: string;
   max_ml: number;
   restore_volume: boolean;
-  /** The id of the room's stock tank this pump doses from, or null: the controller draws each
-   * dose off it (stock_draw). */
+  /** The id of the room's stock tank this pump doses from, or null: the integration draws what the
+   * pump runs off it, whoever starts the dose. */
   stock_tank: string | null;
 }
 export interface RecipeLine {

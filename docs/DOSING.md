@@ -229,8 +229,9 @@ take more than 20 minutes. The watchdog is set from these doses.
   `hold_entity` that does not read off at the end holds the rooms like any other switch (Holding).
 - The whole batch has a watchdog: the 10-minute wait for a shot + fill timeout + premix + postmix +
   every dose's deadline (each capped at 21 minutes) + 10 min.
-- Stamping `filled_at_entity` is what the stock tanks count batches by, so a stock tank whose per-batch
-  dose points at the same recipe number is drawn down by exactly what was dosed.
+- Stamping `filled_at_entity` is what the stock tanks no pump is linked to count batches by, so such
+  a stock tank whose per-batch dose points at the same recipe number is drawn down by exactly what
+  was dosed. A tank linked to a pump is drawn by the pump's runs (Stock tanks, below).
 
 ### Holding: dosing hardware that does not read off
 
@@ -331,40 +332,65 @@ tank. CS-801, CS-803 and CS-806 always push to a phone, whatever Jev's Alerts ju
 
 A pump may be linked to one of the room's stock tanks (`stock_tank`: the id of a tank in the room's
 stock store, `crop_steering.stock.<entry_id>`, or null). A stock tank is linked to at most one pump,
-and its level then follows what that pump has actually dosed:
+and its level then follows what that pump actually runs, whoever starts it: the controller, a Home
+Assistant automation or script pressing the pump's start, a button on the doser, or a hand on its
+power switch. The integration watches the pump itself (`stock_api.py`), and that is the only thing
+that draws a linked tank:
 
-- When a dose ends, the controller draws it from the pump's stock tank: "finished" → the requested
-  mL; "ended early", "ran past its time" or "stopped" → the requested mL or the seconds from the
-  start press to its end (to the moment its stop or cut was sent) × the flow, whichever is less;
-  "not confirmed" → nothing, and the result says so ("not confirmed; nothing drawn from its stock
-  tank"). The doses of a batch draw the same way, one by one.
-- It draws through `crop_steering.stock_draw` with the key `<prefix>:<pump>:<the dose's
-  started_at>`, asking for the service's answer (`?return_response`), once the dose or batch has
-  ended. Draws not yet taken are kept in `/data/dosing_state.json` and sent again (every 2 s, and
-  every 30 s while a dose or batch runs, each with a 2 s timeout), so a draw survives Home Assistant
-  being down or a restart; the key means it is never counted twice. A draw is dropped, kept in the
-  room's history (a `draw` entry) and alerted once (**CS-807**) when the answer names its tank as one
-  the room does not have (`skipped`), when Home Assistant refuses it (HTTP 4xx: sending it again
-  changes nothing), and when it has not been taken 24 hours after the dose.
-- The stock store's fill-based batch draw (a newer time on the room's tank last-fill entity takes
-  each tank's per-batch dose) skips the tanks linked to a pump: their doses draw them, so a batch
-  that stamps `filled_at_entity` never counts them twice. A batch recorded by hand
-  (`crop_steering.stock_record_batch`) skips them the same way, so a batch the controller made and
-  someone also records by hand is never counted twice on them either; its answer lists the linked
-  tanks it skipped (`skipped`).
+- **A run.** The pump runs while its `power_entity` reads on (the motor's own switch on these
+  firmwares) or its `dosing_entity` reads dosing (a binary sensor on; a sensor whose state starts
+  with `dosing_prefix`). Either is enough, because firmwares differ: on a 5.1.x ESPHome peristaltic
+  doser, Home Assistant's history shows a dose button pressed by an automation turning the power
+  switch on and the status to "Running (Manual)", which the default prefix "Dosing" never matches,
+  for 27.13 s, then off and "Stopped" within a few milliseconds of each other. The run ends when
+  neither reads running any more: off, idle, unavailable, unknown or gone.
+- **What it draws.** When a run ends, the seconds it ran times the pump's `flow_entity` reading
+  (mL/s, read as it started, or as it ended when it could not be read then) come off the tank,
+  never below 0, with a history entry `{at, source: "pump", draw_ml, key, note}` (the note says
+  how long it ran and at what flow) and a new revision. The firmware times a dose from the same
+  calibrated flow, so this is the dose it was set to give: on that doser, 27.13 s at 11.0612 mL/s
+  is 300.1 mL of the 300 mL its volume number held. It is also what a dose stopped part way, or a
+  run by hand, actually moved. A flow that reads nothing usable draws nothing, and the integration
+  logs a warning. The run is timed by when Home Assistant saw its states change.
+- **Once.** A run is drawn when it ends, under the key `pump:<pump>:<when it started>`, so the
+  same run is never drawn twice. A room reloaded in the middle of a run finds the pump running and
+  takes the run from when its entity last changed: the whole run, once. When Home Assistant itself
+  restarts in the middle of a run, only what it sees once it is back is drawn (a doser that comes
+  back still running is drawn from then): what ran while it was down is not seen, and never
+  guessed at.
+- **The controller's reports.** When a dose ends, the controller still reports what it dosed to
+  `crop_steering.stock_draw` (below): "finished" → the requested mL; "ended early", "ran past its
+  time" or "stopped" → the requested mL or the seconds from the start press to its end × the flow,
+  whichever is less; "not confirmed" → nothing. It sends that with the key `<prefix>:<pump>:<the
+  dose's started_at>`, asking for the service's answer (`?return_response`), once the dose or batch
+  has ended, and keeps a report not yet taken in `/data/dosing_state.json`, sending it again every
+  2 s (every 30 s while a dose or batch runs, each with a 2 s timeout). The integration leaves a
+  linked tank in a report as it is, because the pump's run already drew it, and lists it in the
+  answer's `linked`. So a dose is counted once whoever reports it, and the controller's own results
+  ("not confirmed; nothing drawn from its stock tank") say what it reported, not what the tank
+  lost. A report is dropped, kept in the room's history (a `draw` entry) and alerted once
+  (**CS-807**) when the answer names its tank as one the room does not have (`skipped`), when Home
+  Assistant refuses it (HTTP 4xx: sending it again changes nothing), and when it has not been taken
+  24 hours after the dose.
+- **Fills and batches by hand.** The stock store's fill-based batch draw (a newer time on the
+  room's tank last-fill entity takes each tank's per-batch dose) skips the tanks linked to a pump,
+  so a batch that stamps `filled_at_entity` never counts them twice, and a fill that draws no tank
+  at all is not logged (a fill entity stamped many times a day would push the pumps' draws out of
+  the history). A batch recorded by hand (`crop_steering.stock_record_batch`) skips them the same
+  way; its answer lists the linked tanks it skipped (`skipped`).
 - `sensor.crop_steering_<prefix>stock_low` gives each entry of its `tanks` attribute an `id`, and a
   `pump`: the id of the pump linked to it, or null.
 
 | Service | Who | Data | Response |
 |---|---|---|---|
-| `crop_steering.stock_draw` | admin; automations and the controller app (Home Assistant's Supervisor user) too, as for `stock_record_batch` | `room_id, key, draws: {tank_id: ml}, source ("dose" \| "batch"), note?` | the `stock_get` answer, with `counted`, `duplicate` and `skipped` (the tank ids it does not know) |
+| `crop_steering.stock_draw` | admin; automations and the controller app (Home Assistant's Supervisor user) too, as for `stock_record_batch` | `room_id, key, draws: {tank_id: ml}, source ("dose" \| "batch"), note?` | the `stock_get` answer, with `counted`, `duplicate`, `skipped` (the tank ids it does not know) and `linked` (its tanks linked to a pump, left to the pump's runs) |
 
-`stock_draw` is idempotent on `key` (the stock document keeps the last 100 keys). It takes
-ml / 1000 from each named tank's `level_l` (never below 0), appends a history entry
-`{at, source, draw_ml, key}` and commits a new revision, which raises the low-stock Repairs card
-(CS-608) as usual. Unknown tank ids are skipped and listed in the response. It answers only when
-asked (`SupportsResponse.OPTIONAL`): the controller asks, over REST (`?return_response`); a call
-without asking (an older controller) is taken all the same.
+`stock_draw` is idempotent on `key` (the stock document keeps the last 100 keys, those of the
+pumps' runs among them). It takes ml / 1000 from each named tank no pump is linked to (never below
+0), appends a history entry `{at, source, draw_ml, key}` and commits a new revision, which raises
+the low-stock Repairs card (CS-608) as usual. Unknown tank ids are skipped and listed in the
+response. It answers only when asked (`SupportsResponse.OPTIONAL`): the controller asks, over REST
+(`?return_response`); a call without asking (an older controller) is taken all the same.
 
 ## The page (Equipment › Dosing)
 
