@@ -229,7 +229,7 @@ The buttons open the right screen; Home Assistant still asks you to confirm each
 | Change a value Jev manages | Type your own value in Plan › Targets. It becomes the new centre of Jev's range. |
 | Stop one kind of decision | App option `jev_judges`: list the ones to keep, such as `dawn,ramp,salt,probe,shot,night,zones,stage,setpoints,alerts` (everything except `dusk`, the Day end question). |
 | Switch Jev off completely | App option `jev_enabled` off, then restart the app. The controller runs as the original. |
-| Cap what it can spend | App option `jev_daily_calls` (2,000 by default). Once the day's calls are spent, the rest of that day's decisions are the plain engine's. |
+| Cap what it can spend | App option `jev_daily_calls` (5,000 by default; CS-706 at 80 %). Once the day's calls are spent, the rest of that day's decisions are the plain engine's. |
 
 ## What it costs
 

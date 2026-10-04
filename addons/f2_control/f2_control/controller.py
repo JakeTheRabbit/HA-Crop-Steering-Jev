@@ -2663,10 +2663,10 @@ class Controller:
         return room is not None and room.slug in slugs
 
     def _jev_alert(self, room, zone, judge, alert):
-        """An alert one of Jev's judges raised (docs/JEV.md). Only these codes exist: a judge can never
-        raise anything the error-code list does not explain."""
-        key, code = f"jev_{judge}_{room.slug}_z{zone}", alert.get("code")
-        title, message = alert.get("title", ""), alert.get("message", "")
+        """An alert one of Jev's judges, or Jev's runtime, raised (docs/JEV.md). Only these codes exist: a judge can
+        never raise anything the error-code list does not explain. `zone` None is a room-wide alert."""
+        key = f"jev_{judge}_{room.slug}" + ("" if zone is None else f"_z{zone}")
+        code, title, message = alert.get("code"), alert.get("title", ""), alert.get("message", "")
         if code == "CS-701":
             self._alert(key, "CS-701", title, message, room=room, zone=zone)
         elif code == "CS-702":
@@ -2675,6 +2675,10 @@ class Controller:
             self._alert(key, "CS-703", title, message, room=room, zone=zone)
         elif code == "CS-705":
             self._alert(key, "CS-705", title, message, room=room, zone=zone)
+        elif code == "CS-706":
+            self._alert(key, "CS-706", title, message, room=room, zone=zone)
+        elif code == "CS-707":
+            self._alert(key, "CS-707", title, message, room=room, zone=zone)
         else:
             log("jev alert refused: not in the error-code list", judge, code)
 
