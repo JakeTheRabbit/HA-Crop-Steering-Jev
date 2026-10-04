@@ -151,7 +151,7 @@ interface Lane {
   rescue: number | null;
 }
 /** Earlier grow-days as loaded: per zone, each day's trace, yesterday first (null where there is
- * nothing to compare), and the room's setup revision as each day began. */
+ * nothing to draw), and the room's setup revision as each day began. */
 interface Earlier {
   key: string;
   traces: Map<number, (DayTrace | null)[]>;
@@ -482,8 +482,10 @@ function buildLane(
     planned,
   );
   const traces = earlier?.traces.get(zone.id) ?? [];
+  // Yesterday is drawn whatever happened; a day the room spent partly switched off is kept out
+  // of the typical day and the dry-down rates.
   const yesterday = traces[0] ?? null;
-  const past = traces.filter((trace): trace is DayTrace => trace !== null);
+  const past = traces.filter((trace): trace is DayTrace => trace !== null && !trace.roomOff);
   const today = smoothRecorded(points).map((point) => ({ ...point, hour: hourOf(point.time) }));
   // The rest of the day from the latest reading, on the zone's own dry-down (today and the three
   // grow-days before), by the rules the plan graph's projected day runs. Nothing is claimed for
