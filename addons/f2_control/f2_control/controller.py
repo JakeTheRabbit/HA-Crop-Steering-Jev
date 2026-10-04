@@ -35,6 +35,7 @@ import dosing_runner
 import jev_bridge
 import jev_policy
 import setpoint_supervisor
+import zone_history
 from strategy_runtime import parse_snapshot, parameter_override, strategy_block
 
 from crop_steering_engine import (
@@ -835,6 +836,7 @@ class Controller:
             "water_history": None,
             "water_history_legacy_excluded_l": 0.0,
             "learn": auto_setpoints.fresh(),
+            **zone_history.fresh(),
         }
 
     def _apply_saved_zone(self, fresh, d):
@@ -901,6 +903,7 @@ class Controller:
                 s["water_history_legacy_excluded_l"] = excluded
         except (TypeError, ValueError):
             pass
+        s.update(zone_history.restore(d))
         return s
 
     def _read_state_file(self):
@@ -1255,6 +1258,9 @@ class Controller:
             "last_phase_change": lpc.isoformat() if isinstance(lpc, datetime) else None,
             "last_ec_steer": les.isoformat() if isinstance(les, datetime) else None,
             "last_daily_reset": ldr.isoformat() if isinstance(ldr, date) else None,
+            "plateau_hist": s.get("plateau_hist") or [],
+            "night_hist": s.get("night_hist") or [],
+            "night": s.get("night"),
         }
 
     def _save_state(self):
@@ -1751,7 +1757,8 @@ class Controller:
     # ---------- auto setpoints (the engine still fires every shot) ----------
     def _auto_tick(self, room, zone, snap, p, lights_on, now):
         """Learn this zone from its own shots every loop. Rewrite its targets only when the room's
-        opt-in switch is on, only on its own per-zone numbers, and never while a grow plan owns the room."""
+        opt-in switch is on, only on its own per-zone numbers, never while a grow plan owns the room,
+        and never one that Jev's Setpoints judge owns."""
         st = room.state[zone]
         if not isinstance(st.get("learn"), dict):
             st["learn"] = auto_setpoints.fresh()
@@ -1763,19 +1770,20 @@ class Controller:
         ec_rules = snap.ec if ec_rules is None else ec_rules
         auto_setpoints.new_day(learn, self._grow_day_start(room, now).isoformat(), snap.vwc)
         auto_setpoints.tick(learn, snap.vwc, st["phase"], now.timestamp(), lights_on,
-                            snap.dryback_rate, self._minutes_since_shot(st, now))
+                            snap.dryback_rate, self._minutes_since_shot(st, now),
+                            ceiling=min(p.p1_target, p.field_capacity))  # the engine's own P1 ceiling
         enabled = self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
         planned = bool(getattr(room, "strategy_required", False))
         jev_state = room.__dict__.setdefault("_jev_state", {})
         jev = jev_state.get(zone, "ok") if (self._cf[0] and self._cf[1]) else "disabled"
-        # With Jev's Setpoints judge running, the switch hands the zone's setpoints to it (jev_bridge): this
-        # learner still learns and reports, but never writes and never consults the old per-hour judge, so a
-        # zone never has two writers (26 Sep 2026: this learner walked zone 1's shot to 1 %).
-        if jev_bridge.owns_setpoints(self):
+        # Each lever has one writer. With Jev's Setpoints judge running, the P2 shot size and re-water threshold
+        # are its own (jev_bridge) and this learner writes the rest, never consulting the old per-hour judge
+        # (26 Sep 2026: that judge walked zone 1's shot to 1 %). Writing nothing at all under the judge left
+        # nobody on the P1 target: zone 2 sat at 29.5 under a probe reading 44 % and never ramped (4 Oct 2026).
+        judged = jev_bridge.judge_levers(self)
+        if judged:
             jev = "disabled"
-            writes = False
-        else:
-            writes = enabled and not planned
+        writes = enabled and not planned
         was = learn["outcome"]
         outcome = auto_setpoints.ramp_outcome(learn, st["phase"])
         if outcome != was:
@@ -1829,7 +1837,7 @@ class Controller:
                 p1_shot_pct=p.p1_initial, p1_gap_min=p.p1_time_between_min,
                 start_vwc=learn["ramp_start"] if learn["ramp_start"] is not None else snap.vwc,
             )
-            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx)
+            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged)
             for suffix, value, _why in setpoint_supervisor.writes(current, want):
                 self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
             if st["phase"] == "P1" and learn["outcome"] == "plateau":
@@ -1840,14 +1848,17 @@ class Controller:
         state, attrs = auto_setpoints.status(learn, enabled)
         if enabled and planned:
             state, attrs["frozen_reason"] = "frozen", "an armed grow plan owns this room's targets"
-        suffixes = auto_setpoints.MANAGED + (auto_setpoints.JEV_MANAGED if jev != "disabled" else ())
-        if jev_bridge.owns_setpoints(self):
-            attrs["managed_by"] = "Jev's Setpoints judge (P2 shot size and re-water threshold, one notch a night)"
+        who = dict.fromkeys(auto_setpoints.MANAGED, "Auto setpoints learner")
+        who["p3_emergency_vwc_threshold"] += ", only to keep it 3 points under the re-water threshold"
+        who.update(dict.fromkeys(judged, "Jev's Setpoints judge, one notch a night"))
+        if jev != "disabled":  # the old per-hour judge, which only ever runs without the Setpoints judge
+            who.update(dict.fromkeys(auto_setpoints.JEV_MANAGED, "Jev's hourly P2 check"))
+        number = f"number.crop_steering_{room.prefix}zone_{zone}_"
         attrs.update(
             jev=jev, jev_last=learn["jev"]["last"], jev_changed_today=learn["jev"]["changed"],
             working_peak_adjust=learn["peak_adj"],
             updated=now.isoformat(), engine="f2-control", friendly_name=f"Zone {zone} auto setpoints",
-            managed=[f"number.crop_steering_{room.prefix}zone_{zone}_{s}" for s in suffixes],
+            managed=[number + s for s in who], managed_by={number + s: w for s, w in who.items()},
         )
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
 
@@ -2772,6 +2783,16 @@ class Controller:
         if not isinstance(st.get("learn"), dict):
             st["learn"] = auto_setpoints.fresh()
         auto_setpoints.shot(st["learn"], st.get("phase"), size_pct, st.get("last_vwc"), now.timestamp())
+        first = st.get("phase") == "P1" and st["shots"] == 0
+        try:  # the day's first shot closes the night: the VWC it started from is what the zone landed on
+            record = zone_history.shot(st, vwc_before=st.get("last_vwc"), now=now, day=day, first=first)
+            if record is not None:
+                words = zone_history.night_words(record)
+                tag = "" if room.prefix == "" else f"{room.slug} "
+                self._activity.insert(0, f"{now.strftime('%H:%M')} {tag}Z{zone} {words}"[:120])
+                log(f"[{room.slug}] Z{zone} {words}")
+        except Exception as e:  # a record is never worth a delivered shot the counters miss
+            log("zone history error", room.slug, zone, e)
         st["shots"] += 1
         st["last_shot"] = now
         st["last_shot_is_anchor"] = False  # water was delivered: this one is an irrigation
@@ -2782,6 +2803,16 @@ class Controller:
                 jev_bridge.shot_counted(room, zone, delivered_l)
             except Exception as e:
                 log("jev shot record error", room.slug, zone, e)
+
+    def _record_phase(self, room, zone, st, was, new, now, how):
+        """Keep the zone's history on a phase change by anyone (the engine, a Jev judge, the operator's Set Phase):
+        P1 handing over to P2 is the day's plateau. A history error never stops the phase change."""
+        try:
+            entry = zone_history.phase_changed(st, was, new, day=self._grow_day_start(room, now).isoformat(), how=how)
+            if entry is not None:
+                log(f"[{room.slug}] Z{zone} plateau {entry['value']:.2f} after {entry['shots']} shots: {entry['how']}")
+        except Exception as e:
+            log("zone history error", room.slug, zone, e)
 
     # ---------- hardware (sync; this process does one thing) ----------
     @staticmethod
@@ -3784,6 +3815,7 @@ class Controller:
         was = st["phase"]
         if wanted == was:
             return
+        self._record_phase(room, zone, st, was, wanted, now, "set by hand")
         if wanted == "P0":
             st["peak"] = 0.0
         if wanted == "P1":
@@ -3879,6 +3911,7 @@ class Controller:
             room._was_lights_on if room._was_lights_on is not None else lights_on
         )
         lights_just_on = lights_on and was_off
+        lights_just_off = room._was_lights_on is True and not lights_on
         snaps, decisions, healthy, blind, params = {}, {}, [], [], {}
         for zone in room.zones:
             st = room.state[zone]
@@ -3892,6 +3925,16 @@ class Controller:
                 st["ec_integral"], st["ec_prev_err"] = 0.0, 0.0
             snap, p = self._snapshot(room, zone, now, lights_on, lights_just_on)
             params[zone] = p
+            if lights_just_off or lights_just_on:  # the night's two readings (zone_history), kept across a restart
+                try:
+                    vwc = snap.vwc if snap is not None else None
+                    if lights_just_off:
+                        zone_history.lights_off(st, vwc, now, self._grow_day_start(room, now).isoformat())
+                    else:
+                        zone_history.lights_on(st, vwc, now)
+                    self._save_state()
+                except Exception as e:  # a record never stops the room being decided and watered
+                    log("zone history error", room.slug, zone, e)
             jev_dirs = {}
             distrusted = room.__dict__.setdefault("_jev_distrusted", {})
             distrusted.pop(zone, None)
@@ -3942,6 +3985,7 @@ class Controller:
             if new_phase != st["phase"]:
                 # decide()'s reason leads with why the phase moved ("lights-off -> P3 | ..."): the push says it.
                 self._notify_event("phase", room, zone, st["phase"], new_phase, str(reason).split(" | ")[0])
+                self._record_phase(room, zone, st, st["phase"], new_phase, now, str(reason).split(" | ")[0])
                 if new_phase == "P0":
                     st["daily_vol"], st["shots"], st["peak"] = 0.0, 0, snap.vwc
                     st["ec_offset"], st["last_ec_steer"] = 0.0, None
