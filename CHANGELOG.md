@@ -9,6 +9,66 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.9.0] - 2026-10-05
+
+Pair: **controller 3.9.0**. Class **C3**. Eight pull requests, merged into `testing` together at the owner's
+request ("complete and merge all the pull requests"): three controller changes (#31 each zone's plateau and
+nights, #32 Jev's availability, #34 one writer per setpoint with a ratchet guard), one integration change (#35
+stock tanks drawn from what their pumps run), three dashboard changes (#28, #29, #33) and the dryback planner's
+design (#30). That is more than the one C2 or C3 change a candidate normally carries (docs/RELEASING.md, step
+3); the owner chose to release them together, and the release audit records it.
+
+### 🌱 In plain English
+
+- **Zones get their P1 targets kept up to date again.** Since 26 September, in a room where Jev manages
+  setpoints, nothing moved a zone's P1 target or field capacity. F2 zone 2's probe read 15 to 20 points higher
+  after the 29 September sump flood, so every morning started above its ramp target and P1 never ramped. Now
+  Jev keeps the P2 shot size and re-water point, and the Auto setpoints learner keeps the P1 target and field
+  capacity, with two brakes so it cannot ratchet a zone up again: a target rises at most 2 points a day, and only
+  after that day's ramp reached it; a zone that starts its ramp above its target goes to 2 points over where the
+  ramp began, never straight to an old learned peak.
+- **Jev is there more often.** When TypeSafe fails, Jev retries, then asks through Cloudflare (once its account
+  and token are set in the app). An unsure answer gets a second look with more evidence. A judge whose calls keep
+  not working out for a zone acts there only when it is sure twice in a row. The daily budget defaults to 5,000
+  calls, with a warning at 80 %; a box keeps the budget it already has until its owner changes it.
+- **Each zone remembers its plateau and its nights.** Every morning the app's log and the activity feed say how
+  each zone landed overnight: where P1 ended, how fast it dried at night and how far it dropped in P0. No
+  watering decision changes; the dryback planner will use this.
+- **Stock tanks go down when their pump runs.** A stock tank linked to a dosing pump now loses what that pump
+  actually pumped, whoever started it. What was pumped before the update was never taken off, so after updating,
+  read each linked tank's level off its side once and save it with **Set level**.
+- **Charts.** Equipment › Tank & pump has a chart of the tank's level over 24 hours, 3 days or 7 days with every
+  shot, pump run and fill on it. On the zone chart each key entry switches its layer on and off, a cursor bar
+  shows where a reading is taken, the reading sits under the chart, and yesterday's line is drawn even on a day
+  the room was switched off for a while.
+
+### 🔧 Technical notes
+
+- Controller (#34): `auto_setpoints` ratchet guard (learner keys `day_ceiling`, `p1_entry`, `stale_target`; a
+  stale target goes to `min(p1_entry + 2, learned peak + 1)`, otherwise up at most 2 over the grow-day's ceiling
+  after a `reached` or believed `plateau` outcome) and the lever split (`jev_bridge.judge_levers`: with the
+  Setpoints judge running, the learner writes the P1 target, field capacity and rescue floor, never
+  `p2_shot_size` or `p2_vwc_threshold`). `zone_N_auto_setpoints.managed_by` is now a map of entity to writer.
+- Controller (#31): per-zone plateau and night history in the state file, logged each morning as
+  "Zn night: landed ...". `decide()` and its inputs are unchanged. A history that loads with wrong types is
+  dropped, and the hooks never block a decision, a shot count or a phase change.
+- Controller (#32): Jev routes (TypeSafe direct, then Cloudflare `/ai/run`), 3 tries within 60 s per route on a
+  429, a 5xx or a timeout; questions older than 5 minutes dropped unasked; second looks under 0.7 or on split
+  phrasings (up to 2); the stricter gate after 3 calls in a row that did not work out (two agreeing calls at 0.8),
+  read from the ledger; CS-706 (budget at 80 %) and CS-707 (a judge on the stricter gate). New options
+  `jev_budget_warn_pct`, `jev_retries`, `jev_reask_max`, `jev_unsure_below`, `jev_strict_after`,
+  `jev_strict_prob`; `jev_daily_calls` defaults to 5000.
+- Integration (#35): `StockStore` follows each linked pump's power and dosing entities and draws seconds run x
+  calibrated flow once per run (key `pump:<id>:<start>`); `stock_draw` leaves pump-linked tanks alone (new
+  `linked` answer field); a fill that draws no tank is no longer logged.
+- Dashboard (#28, #29, #33): `dayTrace` keeps a day the room was switched off during (marked `roomOff`); chart
+  layer toggles, cursor bar, readout line and stored chart preferences; the Tank & pump level chart
+  (`tank-level.tsx`), with `controller.timeline` allowing the selected room's tank and pump entities. Bundles
+  rebuilt.
+- Docs (#30): the dryback planner and Jev line-steering design, its roadmap, and the plans for steps 1 and 2.
+- State file: three history keys (#31) and three learner keys (#34). A 3.8.0 file loads with all of them empty;
+  3.8.0 ignores them after a rollback (the history is lost, nothing else).
+
 ## [3.8.0] - 2026-09-30
 
 Pair: **controller 3.8.0**. Class **C3**. One pull request: #26, critical alerts for tables backing up: moisture

@@ -28,7 +28,7 @@ PROBE_STALE_SECONDS = 20 * 60
 
 
 # Software version - single source of truth
-SOFTWARE_VERSION = "3.8.0"
+SOFTWARE_VERSION = "3.9.0"
 
 # Crop steering phases (P0-P3 only, Manual removed)
 PHASES = ["P0", "P1", "P2", "P3"]

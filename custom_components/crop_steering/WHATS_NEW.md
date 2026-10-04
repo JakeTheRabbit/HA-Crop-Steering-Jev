@@ -19,6 +19,14 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.9.0 - 2026-10-05
+
+- Each zone's P1 target and field capacity are kept up to date again, rising at most 2 points a day and only after a morning ramp reached them.
+- Jev answers more often: it retries, asks another way when the first fails, and takes a second look when it is unsure.
+- A stock tank linked to a dosing pump now goes down by what the pump pumps. After updating, read each tank's level and press Set level once.
+- Tank & pump has a chart of the tank level over a day, 3 days or a week, with every shot, pump run and fill. Tap the zone chart's key to hide a line.
+- Bug fixes and improvements.
+
 ## 3.8.0 - 2026-09-30
 
 - A critical alert when a zone's moisture rises with no water going in: its table isn't draining.
