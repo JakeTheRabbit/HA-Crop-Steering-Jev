@@ -48,7 +48,13 @@ options:
   typesafe_api_key: ""
   jev_enabled: true
   jev_judges: all
-  jev_daily_calls: 2000
+  jev_daily_calls: 5000
+  jev_budget_warn_pct: 80
+  jev_retries: 3
+  jev_reask_max: 2
+  jev_unsure_below: 0.7
+  jev_strict_after: 3
+  jev_strict_prob: 0.8
   jev_flower_start: ""
   jev_flower_days: 56
 schema:
@@ -76,5 +82,11 @@ schema:
   jev_enabled: bool?
   jev_judges: str?
   jev_daily_calls: int?
+  jev_budget_warn_pct: int?
+  jev_retries: int?
+  jev_reask_max: int?
+  jev_unsure_below: float?
+  jev_strict_after: int?
+  jev_strict_prob: float?
   jev_flower_start: str?
   jev_flower_days: int?

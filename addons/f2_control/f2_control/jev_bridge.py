@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timedelta
 
 from jev.brain import Brain
-from jev.client import Asker, call_typesafe
+from jev.client import Asker, Route, Routes, call, call_typesafe
 from jev.context import Shot, ZoneContext, ZoneHistory, response, words_response
 from jev.doctrine import stage_intent
 from jev.judges.dawn import DawnJudge
@@ -41,26 +41,41 @@ def judges():
             ZonesJudge(), StageJudge(), SetpointsJudge()]
 
 
-def build(options, cf, state_path, log):
-    """The brain, or None when Jev is off (no TypeSafe key and no Cloudflare credentials, or
-    `jev_enabled` false). A TypeSafe API key is used when set; otherwise Cloudflare's Workers AI."""
+def routes(options, cf):
+    """Every route Jev has, in the order they are tried: TypeSafe direct when its key is set, then Cloudflare's
+    /ai/run when its account and token are."""
     account, token, gateway = cf
+    found = []
     typesafe = str(options.get("typesafe_api_key") or "").strip()
-    if options.get("jev_enabled", True) is False or not (typesafe or (account and token)):
+    if typesafe:
+        found.append(Route("TypeSafe", call_typesafe, "typesafe", typesafe))
+    if account and token:
+        found.append(Route("Cloudflare", call, account, token, gateway or None))
+    return found
+
+
+def build(options, cf, state_path, log):
+    """The brain, or None when Jev is off (no route: no TypeSafe key and no Cloudflare credentials; or `jev_enabled`
+    false). Every route it has is used, TypeSafe first, each retried while a failure may pass (jev.client.Routes)."""
+    found = routes(options, cf)
+    if options.get("jev_enabled", True) is False or not found:
         return None
     wanted = str(options.get("jev_judges") or "all").replace(" ", "")
     allowed = set(ALL) if wanted in ("", "all") else set(wanted.split(",")) & set(ALL)
-    budget = int(options.get("jev_daily_calls", 2000))
-    if typesafe:
-        asker = Asker("typesafe", typesafe, None, daily_budget=budget, transport=call_typesafe)
-        via = "TypeSafe"
-    else:
-        asker = Asker(account, token, gateway or None, daily_budget=budget)
-        via = "Cloudflare Workers AI"
+    first = found[0]
+    asker = Asker(first.account, first.token, first.gateway, daily_budget=int(options.get("jev_daily_calls", 5000)),
+                  transport=Routes(found, tries=int(options.get("jev_retries", 3))),
+                  warn_pct=float(options.get("jev_budget_warn_pct", 80)))
     data = os.path.dirname(state_path) or "."
     ledger = Ledger(os.path.join(data, "jev_ledger.jsonl"))
-    log(f"jev: on via {via}, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
-    brain = Brain(asker, ledger, judges(), allowed=allowed, log=log)
+    names = [r.name for r in found]
+    log(f"jev: on via {' then '.join(names)}, judges {', '.join(sorted(allowed))}, {asker.daily_budget} calls a day")
+    brain = Brain(asker, ledger, judges(), allowed=allowed, log=log,
+                  reask_max=int(options.get("jev_reask_max", 2)),
+                  unsure_below=float(options.get("jev_unsure_below", 0.7)),
+                  strict_after=int(options.get("jev_strict_after", 3)),
+                  strict_prob=float(options.get("jev_strict_prob", 0.8)))
+    brain.routes = names
     brain.journal = Journal(os.path.join(data, "jev_journal.jsonl"))
     brain.setpoints = SetpointMemory(os.path.join(data, "jev_setpoints.json"))
     brain.usage_path = os.path.join(data, "jev_usage.json")
@@ -143,9 +158,15 @@ def tick(c, room, zone, snap, p, now, lights_on):
 
 # ---------- the Setpoints judge's side (docs/JEV.md) ----------
 def owns_setpoints(c):
-    """True when Jev's Setpoints judge runs, so the base engine's own Auto Setpoints learner must not write."""
+    """True when Jev's Setpoints judge runs: it then owns each zone's P2 shot size and re-water threshold."""
     brain = getattr(c, "jev", None)
     return brain is not None and any(j.name == "setpoints" for j in getattr(brain, "judges", ()))
+
+
+def judge_levers(c):
+    """The zone numbers the Setpoints judge writes, or () when it does not run. The base engine's own Auto Setpoints
+    learner writes the others (controller._auto_tick), so each lever has exactly one writer."""
+    return (SHOT, THRESHOLD) if owns_setpoints(c) else ()
 
 
 def _zone_number(c, room, zone, suffix):
@@ -267,6 +288,7 @@ def advance(c, room, zone, snap, d, now):
     """Move the zone forward one phase as Jev judged, with the bookkeeping the engine does itself."""
     st = room.state[zone]
     was, st["phase"] = st["phase"], d.value
+    c._record_phase(room, zone, st, was, d.value, now, f"Jev's {d.judge} judge: {d.why}")
     st["last_phase_change"] = now
     if d.value == "P1":
         st["shots"] = 0
@@ -356,7 +378,7 @@ def triaged(c, room, zone, key, code, title, push, why):
                  "result": "acted", "reason": str(title)[:120]})
 
 
-USAGE_KEYS = ("day", "calls", "errors", "input_tokens", "last_error")
+USAGE_KEYS = ("day", "calls", "errors", "input_tokens", "last_error", "retries", "failovers", "reasks", "warned")
 
 
 def restore_usage(asker, path):
@@ -408,8 +430,30 @@ def setpoints_published(c, room, zone, now, managed):
     }
 
 
+def runtime_alerts(c, room):
+    """CS-706 once a day when Jev's calls reach the warning share of the budget, and CS-707 when one of this room's
+    zones has a judge go on the stricter gate (Brain.events)."""
+    brain, asker = c.jev, c.jev.asker
+    if asker.take_warning():
+        c._jev_alert(room, None, "budget", {
+            "code": "CS-706", "title": "Jev has used most of today's calls",
+            "message": (f"Jev has made {asker.stats.get('calls')} of its {asker.daily_budget} calls today, across "
+                        "every room. Once they are spent, the engine's own rules decide until midnight. Raise "
+                        "jev_daily_calls in the app's options if this happens on an ordinary day.")})
+    mine = [e for e in brain.events if e[1] == room.slug]
+    brain.events = [e for e in brain.events if e[1] != room.slug]
+    for _kind, _room, zone, judge in mine:
+        c._jev_alert(room, zone, judge, {
+            "code": "CS-707", "title": "Jev is on the stricter gate for this zone",
+            "message": (f"Jev's {judge} judge made {brain.strict_after} calls in a row for this zone that did not "
+                        f"work out. Until two in a row do, it acts only when both phrasings agree at "
+                        f"{brain.strict_prob:g} or more and a second look gives the same answer. Jev keeps judging; "
+                        "whenever it is not sure enough, the engine's own rules act.")})
+
+
 def publish(c, room, now, ha_set):
     brain = c.jev
+    runtime_alerts(c, room)
     s = brain.asker.stats
     managed = None
     if owns_setpoints(c):
@@ -418,15 +462,19 @@ def publish(c, room, now, ha_set):
     for zone in room.zones:
         status = brain.zone_status(room.slug, zone)
         acting = sorted(n for n, v in status.items() if v.get("directive") and not str(v.get("why", "")).startswith("refused"))
-        attrs = {"judges": status, "friendly_name": f"Zone {zone} Jev", "engine": "f2-control"}
+        strict = sorted(j for (r, z, j), on in brain.strict.items() if on and r == room.slug and z == zone)
+        attrs = {"judges": status, "strict": strict, "friendly_name": f"Zone {zone} Jev", "engine": "f2-control"}
         sp = setpoints_published(c, room, zone, now, managed)
         if sp is not None:
             attrs["setpoints"] = sp
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_jev", ", ".join(acting) or "watching", attrs)
     save_usage(brain)
     ha_set(f"sensor.crop_steering_{room.prefix}jev", "error" if s.get("last_error") and not s.get("last_call") else "on",
-           {"calls_today": s.get("calls"), "input_tokens_today": s.get("input_tokens"),
-            "errors_today": s.get("errors"), "last_error": s.get("last_error"),
+           {"calls_today": s.get("calls"), "daily_budget": brain.asker.daily_budget,
+            "input_tokens_today": s.get("input_tokens"), "errors_today": s.get("errors"),
+            "last_error": s.get("last_error"), "retries_today": s.get("retries"),
+            "failovers_today": s.get("failovers"), "reasks_today": s.get("reasks"),
+            "routes": list(getattr(brain, "routes", [])), "last_route": s.get("route"),
             "judges": sorted(j.name for j in brain.judges), "judge_errors": dict(brain.errors),
             "stage": stage_info(c, room, now), "friendly_name": "Jev", "engine": "f2-control"})
     journal = getattr(brain, "journal", None)
