@@ -44,6 +44,7 @@ class Judge:
     needs_probe = True  # asked only while the zone has a usable probe
     outcome_after_min = None  # when set, an admitted directive is checked this long after
     questions: dict = {}  # {question: [phrasing, phrasing]}
+    deciding: tuple = ()  # the questions decide() rests on, for the second look and the stricter gate; () = all
 
     def due(self, ctx, last_asked):
         if ctx.phase not in self.phases or (self.needs_probe and ctx.snap is None):
@@ -64,6 +65,16 @@ class Judge:
     def outcome(self, entry, ctx):
         """(what happened, good?) for a ledger entry whose check is due, or None to wait."""
         return None
+
+    def more_evidence(self, ctx, verdicts) -> dict:
+        """What a second look adds when the last answer was unsure: that answer, and the sibling zones. A judge with
+        more to show (the last few days, the doctrine) adds to it."""
+        return {
+            "why_again": "your last answer was unsure, or your two readings of it disagreed: look again with this",
+            "your_last_answer": {q: {"answer": v.label, "p": v.prob, "agreed": v.agreed}
+                                 for q, v in verdicts.items() if v is not None},
+            "sibling_zones": dict(ctx.siblings or {}),
+        }
 
     def directive(self, ctx, kind, value, why):
         return Directive(self.name, kind, value, why, ctx.now + timedelta(minutes=self.max_age_min))

@@ -128,8 +128,38 @@ configuration:
   jev_daily_calls:
     name: Jev calls a day
     description: >-
-      The most calls Jev gets in a day across every room (default 2000). Once spent,
+      The most calls Jev gets in a day across every room (default 5000). Once spent,
       the engine decides alone until midnight.
+  jev_budget_warn_pct:
+    name: Warn at this share of Jev's calls (%)
+    description: >-
+      When the day's calls reach this share of the budget above (default 80), the app
+      raises CS-706, once that day.
+  jev_retries:
+    name: Tries per Jev route
+    description: >-
+      How many times each route to Jev is tried while it is busy, failing or slow
+      (default 3), inside 60 seconds. A refused key moves straight on to the next route.
+  jev_reask_max:
+    name: Second looks when Jev is unsure
+    description: >-
+      When an answer that did not act is under the sureness below, or its two phrasings
+      disagree, Jev is asked again with more evidence, up to this many times (default 2).
+      Then the engine decides.
+  jev_unsure_below:
+    name: Jev is unsure below
+    description: >-
+      An answer with a probability under this (default 0.7) is unsure, and is asked again.
+  jev_strict_after:
+    name: Bad calls before the stricter gate
+    description: >-
+      After this many of a judge's calls in a row did not work out for a zone (default 3),
+      that judge acts there only when it is very sure and a second look agrees, until two
+      calls in a row work. The app raises CS-707.
+  jev_strict_prob:
+    name: Sureness on the stricter gate
+    description: >-
+      How sure an answer must be to act on the stricter gate (default 0.8).
   jev_flower_start:
     name: Flower start (Jev's stage arc)
     description: >-

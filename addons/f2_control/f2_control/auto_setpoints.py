@@ -15,6 +15,13 @@ should be, from how the probe actually behaved:
   * A "plateau" is only believed if the ramp really climbed and did not stall far under a peak the
     zone has held before. Anything else is a delivery or probe problem: nothing is learned, nothing
     is rewritten, and the reason is published.
+  * Up, a P1 target moves at most DAY_RISE_PTS a grow-day above the ceiling the day began with, and
+    only once that day's ramp reached it (or plateaued, believed). On 22-26 Sep 2026 every "reached"
+    day raised zone 3's peak to what the extra ramp water achieved and its target followed, 40.9 to
+    74.5 in four days. Down is never held back (the P1 fail-over). A target the zone entered P1 at or
+    above was stale, not learned (zone 2, 4 Oct 2026: 29.5 under a probe reading 44): it may go the
+    same day to DAY_RISE_PTS over the reading P1 began at, never above the learned peak +
+    PROBE_STEP_PTS. Never straight to that peak: zone 3's was still the ratchet's 79.21.
 
 `learn` is a plain JSON-safe dict so it persists in the controller's state file.
 """
@@ -30,6 +37,7 @@ WEAK_FRACTION = 0.3  # ...and so is one under this share of what the zone's lear
 MIN_CLIMB_PTS = 2.0  # a believable ramp climbs at least this much before it flattens
 SUSPECT_DROP_PTS = 3.0  # stalling this far under a known peak is not saturation
 PROBE_STEP_PTS = 1.0  # how much higher to aim when probing for a better peak
+DAY_RISE_PTS = 2.0  # the most a P1 target rises in one grow-day, above where it was (the ratchet guard, see wanted)
 HOLD_DAYS = 3  # days to hold a plateau peak before probing above it again
 ALPHA = 0.3  # EWMA weight of a new sample
 MIN_RATE_SAMPLES = 30  # quiet minutes a photoperiod (or night) must contribute before its mean counts
@@ -51,7 +59,7 @@ def fresh():
             "day_acc": [0.0, 0], "night_acc": [0.0, 0],
             "hold_days": 0, "day": None, "ramp_start": None, "ramp": [], "pending": None,
             "outcome": "pending", "stalled_at": None, "last_change": "", "prev_peak": None, "prev_hold": 0,
-            "veto": None}
+            "veto": None, "day_ceiling": None, "p1_entry": None, "stale_target": None}
 
 
 def restore(saved):
@@ -61,9 +69,11 @@ def restore(saved):
         return base
     try:
         out = copy.deepcopy({k: saved.get(k, v) for k, v in base.items()})
-        for k in _NUMBERS + ("ramp_start", "stalled_at", "prev_peak"):
+        for k in _NUMBERS + ("ramp_start", "stalled_at", "prev_peak", "day_ceiling", "p1_entry"):
             if out[k] is not None:
                 out[k] = float(out[k])
+        # stale only with the reading P1 began at, and only when saved as such: junk never lifts a target
+        out["stale_target"] = None if out["p1_entry"] is None else out["stale_target"] is True
         for k in ("day_n", "night_n", "hold_days", "prev_hold"):
             out[k] = int(out[k])
         if not isinstance(out["ramp"], list) or not all(
@@ -93,7 +103,8 @@ def new_day(learn, grow_day, vwc):
     """Idempotent per grow-day: a fresh ramp record, and one day off any plateau hold."""
     if learn["day"] == grow_day:
         return
-    learn.update(day=grow_day, ramp_start=vwc, ramp=[], pending=None, outcome="pending", stalled_at=None, veto=None)
+    learn.update(day=grow_day, ramp_start=vwc, ramp=[], pending=None, outcome="pending", stalled_at=None, veto=None,
+                 day_ceiling=None, p1_entry=None, stale_target=None)
     learn["hold_days"] = max(0, learn["hold_days"] - 1)
     for rate, n, acc in (("day_rate", "day_n", "day_acc"), ("night_rate", "night_n", "night_acc")):
         total, count = learn[acc]
@@ -131,13 +142,22 @@ def shot(learn, phase, size_pct, pre_vwc, ts):
     learn["pending"] = {"t": ts, "pre": pre_vwc, "pct": size_pct, "ramp": phase in ("P0", "P1")}
 
 
-def tick(learn, vwc, phase, ts, lights_on, dryback_rate, minutes_since_shot):
-    """Settle the last shot once it is old enough, and sample the dryback rate when the zone is quiet."""
+def tick(learn, vwc, phase, ts, lights_on, dryback_rate, minutes_since_shot, ceiling=None):
+    """Settle the last shot once it is old enough, and sample the dryback rate when the zone is quiet.
+
+    `ceiling` is the engine's P1 ceiling now, the lower of the P1 target and field capacity. The ratchet guard in
+    wanted() counts from the one the grow-day began with, and notes the reading P1 began at (the first look at
+    P1, before any ramp shot) and whether that was at or above the ceiling of the moment."""
     if learn["pending"] and ts - learn["pending"]["t"] >= SETTLE_MIN * 60.0:
         _settle(learn, vwc)
     if minutes_since_shot >= QUIET_MIN and dryback_rate and 0.02 <= dryback_rate <= 5.0:
         acc = learn["day_acc" if lights_on else "night_acc"]
         acc[0], acc[1] = acc[0] + dryback_rate, acc[1] + 1
+    if ceiling is not None:
+        if learn["day_ceiling"] is None:
+            learn["day_ceiling"] = ceiling
+        if phase == "P1" and learn["p1_entry"] is None and not learn["ramp"] and not learn["pending"]:
+            learn.update(p1_entry=vwc, stale_target=vwc >= ceiling)
 
 
 def ramp_outcome(learn, phase):
@@ -208,8 +228,18 @@ def model(learn):
     return ct.ZoneModel(knee=learn["peak"], gain=learn["gain"], day_rate=learn["day_rate"], night_rate=learn["night_rate"])
 
 
-def wanted(learn, current, vwc, phase, plan_ctx):
+def wanted(learn, current, vwc, phase, plan_ctx, others=()):
     """suffix -> value this zone should hold now. {} until something has been learned.
+
+    `others`: setpoints another writer owns (Jev's Setpoints judge: the P2 shot size and re-water threshold). They
+    are never wanted here, so each lever has one writer, and the rescue floor's ladder guard reads their value.
+
+    The ratchet guard (module docstring): up, the P1 target goes no higher than the ceiling its grow-day began
+    with, plus DAY_RISE_PTS once the day's ramp reached it or plateaued (believed); stale, no higher than
+    DAY_RISE_PTS over the reading P1 began at, nor the learned peak + PROBE_STEP_PTS. Field capacity follows the
+    held target. While the target is held under what was learned, the P2 threshold stays where it is: its band
+    hangs off the learned peak, which the target cannot follow yet, and following it was the other half of
+    zone 3's ratchet.
 
     plan_ctx (optional, needs a complete model) adds the through-the-day schedule of the P2 threshold:
     {lights_on_h, lights_off_h, minutes_since_lights_on, shots_today, dryback_pct, p0_wait_min,
@@ -218,9 +248,18 @@ def wanted(learn, current, vwc, phase, plan_ctx):
     target = p1_target(learn, vwc, phase)
     if target is None:
         return {}
+    if learn["stale_target"]:
+        top = min(learn["p1_entry"] + DAY_RISE_PTS, learn["peak"] + PROBE_STEP_PTS)
+    elif learn["day_ceiling"] is not None:  # a stalled, short or suspect ramp, or none yet: the target holds
+        top = learn["day_ceiling"] + (DAY_RISE_PTS if learn["outcome"] in ("reached", "plateau") else 0.0)
+    else:
+        top = target
+    held, target = target > round(top, 1), min(target, round(top, 1))
     want = {"p1_target_vwc": target, "field_capacity": max(40.0, round(target + 2.0, 1))}
     m = model(learn)
-    if m and plan_ctx:
+    if held or "p2_vwc_threshold" in others:
+        pass  # the P2 threshold stays where it is (above), or is another writer's
+    elif m and plan_ctx:
         recipe = ct.Recipe(0.0, plan_ctx["dryback_pct"], plan_ctx["p0_wait_min"], plan_ctx["p1_shot_pct"],
                            plan_ctx["p1_gap_min"], current["p2_shot_size"])
         plan = ct.plan_day(m, recipe, plan_ctx["lights_on_h"], plan_ctx["lights_off_h"], plan_ctx["start_vwc"])

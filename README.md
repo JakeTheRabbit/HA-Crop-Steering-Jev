@@ -175,9 +175,9 @@ Setpoints is the one question whose answer changes a number, so it has its own s
 - **Fenced in around your value**: the shot size stays within 1 % of the value you set, and never goes under 3 %. The re-water point stays between 2 points under and 1 point over your value, at least 4 points above the rescue level and 2 under the peak target. However many nights in a row it moves, it cannot leave that range.
 - **You always win**: change either value yourself and your number becomes the new centre of the range.
 - **It backs off by itself**: if a rescue shot fires within 30 hours of a Jev change, the old value goes back, Jev leaves that zone's setpoints alone for 48 hours, and alert CS-404 tells you.
-- **One tuner at a time**: while Jev manages setpoints, the original engine's own Auto Setpoints learner never writes.
+- **One tuner per setting**: Jev moves only the P2 shot size and re-water point. The same switch lets the original engine's own Auto Setpoints learner keep each zone's P1 target and field capacity at the peak the zone has shown it can reach: at most 2 points higher a day, and only after that day's ramp reached the target (a target the zone already starts its ramp above goes to 2 points over where the ramp began). Neither touches the other's settings.
 
-Why so careful: on 26 September 2026 the original learner, running on its own, walked one zone's shots from 3 % down to 1 % (30-second shots every 96 seconds) and ratcheted another zone's targets up over four days. The range around your own value is what stops that happening again.
+Why so careful: on 26 September 2026 the original learner, running on its own, walked one zone's shots from 3 % down to 1 % (30-second shots every 96 seconds) and ratcheted another zone's targets up over four days. The range around your own value is what stops the first happening again, and the 2-points-a-day limit the second.
 
 ## Install
 
@@ -229,7 +229,7 @@ The buttons open the right screen; Home Assistant still asks you to confirm each
 | Change a value Jev manages | Type your own value in Plan › Targets. It becomes the new centre of Jev's range. |
 | Stop one kind of decision | App option `jev_judges`: list the ones to keep, such as `dawn,ramp,salt,probe,shot,night,zones,stage,setpoints,alerts` (everything except `dusk`, the Day end question). |
 | Switch Jev off completely | App option `jev_enabled` off, then restart the app. The controller runs as the original. |
-| Cap what it can spend | App option `jev_daily_calls` (2,000 by default). Once the day's calls are spent, the rest of that day's decisions are the plain engine's. |
+| Cap what it can spend | App option `jev_daily_calls` (5,000 by default; CS-706 at 80 %). Once the day's calls are spent, the rest of that day's decisions are the plain engine's. |
 
 ## What it costs
 

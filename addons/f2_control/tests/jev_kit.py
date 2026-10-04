@@ -88,5 +88,19 @@ class FakeTransport:
         return dict(self.answers or {}), {"input_tokens": 900}, None
 
 
+class ScriptedTransport(FakeTransport):
+    """Answers each call with the next of `answers` in turn; the last one repeats."""
+
+    def __init__(self, *answers):
+        super().__init__(answers[0] if answers else None)
+        self.script = list(answers)
+
+    def __call__(self, account, token, state, questions, gateway=None, timeout=20.0):
+        if self.script:
+            self.answers = self.script.pop(0)
+        return super().__call__(account, token, state, questions, gateway, timeout)
+
+
+
 def replace(s, **over):
     return dataclasses.replace(s, **over)

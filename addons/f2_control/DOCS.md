@@ -10,13 +10,14 @@ Use **Equipment › Setup** for mapping and per-zone sizing. Keep engines off wh
 
 ## Jev
 
-Jev is an AI decision model the controller asks when a decision needs judgement rather than a fixed number: when the morning ramp starts and when it is done, whether a probe is telling the truth, whether a shot landed, why pore EC moved, when the day's watering stops, why one zone drinks differently, which alerts deserve a phone push, and, with the room's **Auto setpoints** switch on, whether tomorrow's P2 shots should be a notch smaller or bigger or start a notch later or sooner. Code checks every answer against hard limits first. Jev never switches equipment, never stops a safety action, and nothing waits for it. Without a key this app is the plain engine.
+Jev is an AI decision model the controller asks when a decision needs judgement rather than a fixed number: when the morning ramp starts and when it is done, whether a probe is telling the truth, whether a shot landed, why pore EC moved, when the day's watering stops, why one zone drinks differently, which alerts deserve a phone push, and, with the room's **Auto setpoints** switch on, whether tomorrow's P2 shots should be a notch smaller or bigger or start a notch later or sooner. The same switch lets this app's own learner keep each zone's P1 target and field capacity at the peak the zone has shown it can reach, at most 2 points higher a day and only after the day's ramp reached the target; Jev never moves those. Code checks every answer against hard limits first. Jev never switches equipment, never stops a safety action, and nothing waits for it. Without a key this app is the plain engine.
 
-- `typesafe_api_key`: a TypeSafe API key (`apikey_...`). Used when set.
-- `cf_account_id` and `cf_api_token`, with `cf_gateway_id` optional: or Jev through Cloudflare Workers AI. The token needs the **Workers AI** permission: dash.cloudflare.com, My Profile, API Tokens, Create Token, Workers AI template.
+- `typesafe_api_key`: a TypeSafe API key (`apikey_...`). Tried first when set.
+- `cf_account_id` and `cf_api_token`, with `cf_gateway_id` optional: or Jev through Cloudflare Workers AI (with a TypeSafe key as well, Cloudflare is the second route). The token needs the **Workers AI** permission: dash.cloudflare.com, My Profile, API Tokens, Create Token, Workers AI template.
 - `jev_enabled`: off runs the plain engine even with a key set.
 - `jev_judges`: the judges that may act, `all` or a list such as `dawn,ramp,salt,dusk,probe,shot,night,zones,stage,setpoints,alerts`.
-- `jev_daily_calls`: the day's call budget across rooms (2000).
+- `jev_daily_calls`: the day's call budget across rooms (5000); `jev_budget_warn_pct` raises CS-706 at 80 % of it.
+- `jev_retries`, `jev_reask_max`, `jev_unsure_below`, `jev_strict_after`, `jev_strict_prob`: how hard the app tries to reach Jev (3 tries per route), how often it asks again when Jev is unsure (twice, under 0.7), and when a judge goes on the stricter gate (3 bad calls in a row; then it needs 0.8 and an agreeing second look).
 - `jev_flower_start`: each room's first day of 12/12, as a date or an input_datetime, for every room or as `room=value` pairs, so Jev knows today's stage.
 - `jev_flower_days`: the cultivar's flowering length (56).
 
