@@ -3,6 +3,8 @@ import {
   athenaDryback,
   axisRange,
   bandStatus,
+  CHART_LAYERS,
+  parseChartPrefs,
   dayScales,
   EC_AXIS,
   hourTicks,
@@ -276,5 +278,35 @@ describe("the clock and the lines", () => {
     expect(d.match(/M/g)).toHaveLength(2);
     expect(d.match(/C/g)).toHaveLength(2);
     expect(d.startsWith("M0.0 10.0C")).toBe(true);
+  });
+});
+
+describe("the chart's choices remembered in a browser", () => {
+  it("defaults: yesterday, every layer, readings under the chart", () => {
+    for (const stored of [null, "", "not json", "null", "42", '"text"', "[]"])
+      expect(parseChartPrefs(stored)).toEqual({ compare: "yesterday", hidden: [], readout: "below" });
+  });
+  it("keeps what was chosen, drops what it does not know", () => {
+    expect(
+      parseChartPrefs(
+        JSON.stringify({ compare: "typical", hidden: ["ec", "jev", "nonsense", 7], readout: "over" }),
+      ),
+    ).toEqual({ compare: "typical", hidden: ["ec", "jev"], readout: "over" });
+    // An older browser stored the comparison alone.
+    expect(parseChartPrefs(JSON.stringify({ compare: "none" }))).toEqual({
+      compare: "none",
+      hidden: [],
+      readout: "below",
+    });
+    expect(parseChartPrefs(JSON.stringify({ hidden: "ec", readout: "sideways" }))).toEqual({
+      compare: "yesterday",
+      hidden: [],
+      readout: "below",
+    });
+  });
+  it("every key entry is a layer that can be switched off, in the key's order", () => {
+    expect(parseChartPrefs(JSON.stringify({ hidden: [...CHART_LAYERS].reverse() })).hidden).toEqual([
+      ...CHART_LAYERS,
+    ]);
   });
 });
