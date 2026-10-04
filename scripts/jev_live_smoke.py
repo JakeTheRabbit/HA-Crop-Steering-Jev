@@ -19,7 +19,7 @@ sys.path[:0] = [str(ROOT / "addons/f2_control/f2_control"), str(ROOT / "addons/f
 
 import jev_kit as K  # noqa: E402
 from jev import council  # noqa: E402
-from jev.client import Asker, call_typesafe  # noqa: E402
+from jev.client import Asker, Route, Routes, call_typesafe  # noqa: E402
 from jev.context import Shot, ZoneHistory  # noqa: E402
 from jev.doctrine import stage_intent  # noqa: E402
 from jev.envelope import admit  # noqa: E402
@@ -228,7 +228,8 @@ def main():
     key = os.environ.get("JEV_TYPESAFE_KEY")
     account, token = os.environ.get("JEV_CF_ACCOUNT"), os.environ.get("JEV_CF_TOKEN")
     if key:
-        asker = Asker("typesafe", key, None, threaded=False, timeout=60, transport=call_typesafe)
+        asker = Asker("typesafe", key, None, threaded=False, timeout=60,
+                      transport=Routes([Route("TypeSafe", call_typesafe, "typesafe", key)]))
     elif account and token:
         asker = Asker(account, token, os.environ.get("JEV_CF_GATEWAY") or None, threaded=False, timeout=60)
     else:

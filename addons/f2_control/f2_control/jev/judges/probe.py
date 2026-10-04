@@ -50,6 +50,7 @@ class ProbeJudge(Judge):
     name = "probe"
     cadence_min = 30.0
     max_age_min = 90.0
+    deciding = ("tracking",)  # `mode` only names the fault once `tracking` says the probe is off
     questions = QUESTIONS
 
     def due(self, ctx, last_asked):

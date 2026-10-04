@@ -390,9 +390,12 @@ export interface DayTrace {
   /** The zone's VWC in ten-minute medians, by hours since that day's own lights-on. */
   points: RecordedPoint[];
   shots: Shot[];
+  /** The room was switched off at some point that day: its line is still drawn, but it is kept
+   * out of the typical day and the zone's dry-down rates. */
+  roomOff?: boolean;
 }
-/** One earlier grow-day of a zone, to compare today with. Null when there is nothing to compare:
- * under two readings, or the room was switched off during it. */
+/** One earlier grow-day of a zone, to compare today with. Null when there is nothing to draw:
+ * under two readings. A room switched off during it still draws its line, marked `roomOff`. */
 export function dayTrace(
   rows: TimelineRows,
   ids: { vwc: string | null; valve: string | null; active: string | null },
@@ -409,9 +412,9 @@ export function dayTrace(
   const points = smoothRecorded(readings(ids.vwc ? rows[ids.vwc] : [], day.start, day.end)).map(
     (point) => ({ ...point, hour: (point.time - day.start) / 3_600_000 }),
   );
-  if (off || points.length < 2) return null;
+  if (points.length < 2) return null;
   const shots = ids.valve ? valveShots(rows[ids.valve], [], zoneId, day.start, day.end) : [];
-  return { day, points, shots };
+  return off ? { day, points, shots, roomOff: true } : { day, points, shots };
 }
 
 /** The room's setup revision in force at `time`, from its descriptor's recorded attributes. A
@@ -428,7 +431,7 @@ export function revisionAt(rows: TimelineRow[] = [], time: number): number | nul
 
 /** The week before `day` as the room lived it, from the rows of `earlierEntities`: each grow-day
  * cut at the lights-on recorded in force then (`hours` where none was recorded), every zone's
- * trace of each day (null where there is nothing to compare), and the setup revision as each day
+ * trace of each day (null where there is nothing to draw), and the setup revision as each day
  * began. */
 export function earlierTraces(
   rows: TimelineRows,
