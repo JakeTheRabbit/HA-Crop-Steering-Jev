@@ -143,9 +143,15 @@ def tick(c, room, zone, snap, p, now, lights_on):
 
 # ---------- the Setpoints judge's side (docs/JEV.md) ----------
 def owns_setpoints(c):
-    """True when Jev's Setpoints judge runs, so the base engine's own Auto Setpoints learner must not write."""
+    """True when Jev's Setpoints judge runs: it then owns each zone's P2 shot size and re-water threshold."""
     brain = getattr(c, "jev", None)
     return brain is not None and any(j.name == "setpoints" for j in getattr(brain, "judges", ()))
+
+
+def judge_levers(c):
+    """The zone numbers the Setpoints judge writes, or () when it does not run. The base engine's own Auto Setpoints
+    learner writes the others (controller._auto_tick), so each lever has exactly one writer."""
+    return (SHOT, THRESHOLD) if owns_setpoints(c) else ()
 
 
 def _zone_number(c, room, zone, suffix):

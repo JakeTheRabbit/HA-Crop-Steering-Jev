@@ -229,7 +229,7 @@ async def test_a_3_8_0_state_file_loads_with_its_history_empty_and_nothing_moves
 ):
     """3.8.0 kept no plateau or night history (tests_ha/fixtures/state_3_8_0_mid_grow.json).
     The new controller loads that file exactly as it was, starts the history empty, and writing
-    it back changes nothing else."""
+    it back changes nothing else but the ratchet guard's three learner keys, saved empty."""
     await _upgrade(hass, "entry_2_17_wizard.json")
     seed = fixture("state_3_8_0_mid_grow.json")["state"]
     hass.states.async_set(KILL, "on")
@@ -254,7 +254,12 @@ async def test_a_3_8_0_state_file_loads_with_its_history_empty_and_nothing_moves
         written = dict(saved["default"][zone])
         kept = (written.pop("plateau_hist"), written.pop("night_hist"), written.pop("night"))
         assert kept == ([], [], None)
-        assert written == seed["default"][zone]
+        learn = dict(written.pop("learn"))
+        guard = (learn.pop("day_ceiling"), learn.pop("p1_entry"), learn.pop("stale_target"))
+        assert guard == (None, None, None)
+        old = dict(seed["default"][zone])
+        assert learn == old.pop("learn")
+        assert written == old
 
 
 # ------------------------------------------------------------------ an env-file era install

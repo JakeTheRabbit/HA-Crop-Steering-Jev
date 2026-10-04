@@ -317,6 +317,33 @@ def test_the_anchor_flag_round_trips_and_junk_is_tolerated(tmp_path):
     )  # invalid metadata cannot establish that an old timestamp was an anchor
 
 
+def test_a_learned_zone_saved_before_the_ratchet_guard_loads_with_its_keys_empty(
+    tmp_path,
+):
+    """3.8.0's learner block has no day_ceiling, p1_entry or stale_target: everything it
+    learned loads as it was, and the guard counts from the first pass that runs."""
+    learned = {
+        "peak": 65.54,
+        "gain": 1.368,
+        "day_rate": 1.621,
+        "night_rate": 0.815,
+        "day_n": 8,
+        "night_n": 8,
+        "hold_days": 0,
+        "day": "2026-10-03",
+        "outcome": "reached",
+        "ramp": [{"pct": 2.0, "rise": 1.8, "settled": 47.9, "flat": False}],
+    }
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps({"default": {"2": {"learn": learned}}}), encoding="utf-8")
+    c = _make([2], p)
+    c._load_state()
+    learn = c.rooms[0].state[2]["learn"]
+    assert {k: learn[k] for k in learned} == learned
+    assert learn["day_ceiling"] is None and learn["p1_entry"] is None
+    assert learn["stale_target"] is None
+
+
 def test_an_old_file_without_history_loads_with_it_empty(tmp_path):
     """3.8.0 kept no plateau or night history: its file loads as it was, history empty."""
     p = tmp_path / "state.json"

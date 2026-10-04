@@ -1757,7 +1757,8 @@ class Controller:
     # ---------- auto setpoints (the engine still fires every shot) ----------
     def _auto_tick(self, room, zone, snap, p, lights_on, now):
         """Learn this zone from its own shots every loop. Rewrite its targets only when the room's
-        opt-in switch is on, only on its own per-zone numbers, and never while a grow plan owns the room."""
+        opt-in switch is on, only on its own per-zone numbers, never while a grow plan owns the room,
+        and never one that Jev's Setpoints judge owns."""
         st = room.state[zone]
         if not isinstance(st.get("learn"), dict):
             st["learn"] = auto_setpoints.fresh()
@@ -1769,19 +1770,20 @@ class Controller:
         ec_rules = snap.ec if ec_rules is None else ec_rules
         auto_setpoints.new_day(learn, self._grow_day_start(room, now).isoformat(), snap.vwc)
         auto_setpoints.tick(learn, snap.vwc, st["phase"], now.timestamp(), lights_on,
-                            snap.dryback_rate, self._minutes_since_shot(st, now))
+                            snap.dryback_rate, self._minutes_since_shot(st, now),
+                            ceiling=min(p.p1_target, p.field_capacity))  # the engine's own P1 ceiling
         enabled = self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
         planned = bool(getattr(room, "strategy_required", False))
         jev_state = room.__dict__.setdefault("_jev_state", {})
         jev = jev_state.get(zone, "ok") if (self._cf[0] and self._cf[1]) else "disabled"
-        # With Jev's Setpoints judge running, the switch hands the zone's setpoints to it (jev_bridge): this
-        # learner still learns and reports, but never writes and never consults the old per-hour judge, so a
-        # zone never has two writers (26 Sep 2026: this learner walked zone 1's shot to 1 %).
-        if jev_bridge.owns_setpoints(self):
+        # Each lever has one writer. With Jev's Setpoints judge running, the P2 shot size and re-water threshold
+        # are its own (jev_bridge) and this learner writes the rest, never consulting the old per-hour judge
+        # (26 Sep 2026: that judge walked zone 1's shot to 1 %). Writing nothing at all under the judge left
+        # nobody on the P1 target: zone 2 sat at 29.5 under a probe reading 44 % and never ramped (4 Oct 2026).
+        judged = jev_bridge.judge_levers(self)
+        if judged:
             jev = "disabled"
-            writes = False
-        else:
-            writes = enabled and not planned
+        writes = enabled and not planned
         was = learn["outcome"]
         outcome = auto_setpoints.ramp_outcome(learn, st["phase"])
         if outcome != was:
@@ -1835,7 +1837,7 @@ class Controller:
                 p1_shot_pct=p.p1_initial, p1_gap_min=p.p1_time_between_min,
                 start_vwc=learn["ramp_start"] if learn["ramp_start"] is not None else snap.vwc,
             )
-            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx)
+            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged)
             for suffix, value, _why in setpoint_supervisor.writes(current, want):
                 self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
             if st["phase"] == "P1" and learn["outcome"] == "plateau":
@@ -1846,14 +1848,17 @@ class Controller:
         state, attrs = auto_setpoints.status(learn, enabled)
         if enabled and planned:
             state, attrs["frozen_reason"] = "frozen", "an armed grow plan owns this room's targets"
-        suffixes = auto_setpoints.MANAGED + (auto_setpoints.JEV_MANAGED if jev != "disabled" else ())
-        if jev_bridge.owns_setpoints(self):
-            attrs["managed_by"] = "Jev's Setpoints judge (P2 shot size and re-water threshold, one notch a night)"
+        who = dict.fromkeys(auto_setpoints.MANAGED, "Auto setpoints learner")
+        who["p3_emergency_vwc_threshold"] += ", only to keep it 3 points under the re-water threshold"
+        who.update(dict.fromkeys(judged, "Jev's Setpoints judge, one notch a night"))
+        if jev != "disabled":  # the old per-hour judge, which only ever runs without the Setpoints judge
+            who.update(dict.fromkeys(auto_setpoints.JEV_MANAGED, "Jev's hourly P2 check"))
+        number = f"number.crop_steering_{room.prefix}zone_{zone}_"
         attrs.update(
             jev=jev, jev_last=learn["jev"]["last"], jev_changed_today=learn["jev"]["changed"],
             working_peak_adjust=learn["peak_adj"],
             updated=now.isoformat(), engine="f2-control", friendly_name=f"Zone {zone} auto setpoints",
-            managed=[f"number.crop_steering_{room.prefix}zone_{zone}_{s}" for s in suffixes],
+            managed=[number + s for s in who], managed_by={number + s: w for s, w in who.items()},
         )
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
 
