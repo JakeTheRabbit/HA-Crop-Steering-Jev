@@ -182,7 +182,7 @@ interface Earlier {
  * page is open. */
 const earlierLoads = new Map<string, Promise<TimelineRows>>();
 /** Runs `tasks` two at a time; no more start once one has failed. */
-async function inPairs<T>(tasks: (() => Promise<T>)[]): Promise<T[]> {
+export async function inPairs<T>(tasks: (() => Promise<T>)[]): Promise<T[]> {
   const results: T[] = [];
   let next = 0;
   const worker = async () => {
