@@ -99,3 +99,57 @@ async def test_with_nobody_set_up_the_controller_pushes_to_its_option_as_before(
     assert [(dom, svc) for dom, svc, _d in fake.calls if dom == "notify"] == [
         ("notify", "mobile_app_old_phone")
     ]
+
+
+async def test_jevs_own_alerts_reach_the_phone_that_ticks_jev(
+    hass, hass_admin_user, controller_for, monkeypatch
+):
+    """CS-706 (most of the day's calls used) and CS-707 (a zone on the stricter gate) are in the
+    jev kind: the phone that ticks Jev gets both, the tablet that ticks only emergencies and
+    hardware gets neither."""
+    await _install(hass)
+    staff = await _staff(hass)
+    received, doc = await _set_up(hass, hass_admin_user, staff)
+    phone, tablet = doc["config"]["recipients"]
+    await _call(
+        hass,
+        hass_admin_user,
+        "notify_save",
+        expected_revision=1,
+        recipients=[{**phone, "kinds": ["jev"]}, tablet],
+    )
+    await hass.async_block_till_done()
+    c, fake, _clock = controller_for({"notify_service": "notify/mobile_app_old_phone"})
+    import controller
+
+    def answered(domain, service, data, timeout=12):
+        fake.calls.append((domain, service, dict(data)))
+        return 200, {"sent_to": [STAFF_PHONE], "error": None}
+
+    monkeypatch.setattr(controller, "ha_service_response", answered)
+    room = c.rooms[0]
+    c._jev_alert(
+        room,
+        1,
+        "ramp",
+        {"code": "CS-707", "title": "Jev is on the stricter gate", "message": "Bad run."},
+    )
+    c._jev_alert(
+        room,
+        None,
+        "budget",
+        {"code": "CS-706", "title": "Jev has used most of today's calls", "message": "4000."},
+    )
+    strict, budget = _asked(fake)
+    assert (strict["code"], strict["key"], budget["code"], budget["key"]) == (
+        "CS-707",
+        "jev_ramp_default_z1",
+        "CS-706",
+        "jev_budget_default",
+    )
+    for asked, words in ((strict, "Bad run."), (budget, "4000.")):
+        answer = await hass.services.async_call(
+            DOMAIN, "notify", asked, blocking=True, return_response=True
+        )
+        assert answer == {"sent_to": [STAFF_PHONE], "error": None}
+        assert received[STAFF_PHONE][-1]["message"].startswith(words)

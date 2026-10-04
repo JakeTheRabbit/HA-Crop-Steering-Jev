@@ -334,6 +334,46 @@ export function smoothPath(
     .join("");
 }
 
+/** What the chart compares today with. */
+export type Compare = "yesterday" | "typical" | "none";
+/** The chart's layers, one per entry in its key, each of which can be switched off. */
+export const CHART_LAYERS = [
+  "vwc",
+  "ec",
+  "shots",
+  "fc",
+  "band",
+  "rescue",
+  "jev",
+  "compare",
+] as const;
+export type ChartLayer = (typeof CHART_LAYERS)[number];
+/** Where a reading of the chart shows: in a line under it, or floating over it by the pointer. */
+export type Readout = "below" | "over";
+export interface ChartPrefs {
+  compare: Compare;
+  hidden: ChartLayer[];
+  readout: Readout;
+}
+/** The chart's choices as remembered in a browser, from what was stored (anything unreadable or
+ * unknown falls back to the defaults: compare with yesterday, every layer shown, readings below). */
+export function parseChartPrefs(stored: string | null): ChartPrefs {
+  let saved: Record<string, unknown> = {};
+  try {
+    const value: unknown = JSON.parse(stored ?? "null");
+    if (value && typeof value === "object") saved = value as Record<string, unknown>;
+  } catch {
+    /* unreadable: the defaults */
+  }
+  return {
+    compare: saved.compare === "typical" || saved.compare === "none" ? saved.compare : "yesterday",
+    hidden: Array.isArray(saved.hidden)
+      ? CHART_LAYERS.filter((layer) => (saved.hidden as unknown[]).includes(layer))
+      : [],
+    readout: saved.readout === "over" ? "over" : "below",
+  };
+}
+
 /** The reading at `time`, read between the readings either side when they are close enough. */
 export function valueAtTime(
   points: readonly Reading[],

@@ -230,9 +230,10 @@ def _auto(learn):
         au.new_day(learn, f"day{ctx['minute'] // 1440}", ctx["vwc"])
         if ctx["shot"]:
             au.shot(learn, ctx["phase"], ctx["shot"], ctx["vwc"], ts)
-        au.tick(learn, ctx["vwc"], ctx["phase"], ts, ctx["lights_on"], ctx["dryback_rate"], ctx["minutes_since_shot"])
-        au.ramp_outcome(learn, ctx["phase"])
         sp = ctx["setpoints"]
+        au.tick(learn, ctx["vwc"], ctx["phase"], ts, ctx["lights_on"], ctx["dryback_rate"], ctx["minutes_since_shot"],
+                ceiling=min(sp["p1_target_vwc"], sp["field_capacity"]))
+        au.ramp_outcome(learn, ctx["phase"])
         current = {k: sp[k] for k in ("p1_target_vwc", "field_capacity", "p2_vwc_threshold",
                                       "p3_emergency_vwc_threshold", "p2_shot_size")}
         out = ss.writes(current, au.wanted(learn, current, ctx["vwc"], ctx["phase"], None))

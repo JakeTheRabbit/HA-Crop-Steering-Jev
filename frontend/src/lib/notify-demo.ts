@@ -76,7 +76,7 @@ export const DEMO_KINDS: NotifyKind[] = [
     id: "jev",
     name: "Jev",
     detail: "Jev's advice, and Jev moving a zone's P2 shot size or re-water point (a push only).",
-    codes: ["CS-501", "CS-702", "CS-705", "CS-404"],
+    codes: ["CS-501", "CS-702", "CS-705", "CS-706", "CS-707", "CS-404"],
     events: ["jev_setpoint"],
   },
   {
