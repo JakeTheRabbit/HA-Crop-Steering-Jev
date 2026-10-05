@@ -350,6 +350,9 @@ CRITICAL_CODES = frozenset({"CS-201", "CS-202", "CS-203", "CS-204", "CS-207", "C
 # filling from a stopped sump, 28 Sep 21:19 and 29 Sep 12:09) and nothing else. Cleared after BACKUP_CLEAR_MIN
 # without a rise.
 BACKUP_RISE_PTS, BACKUP_WINDOW_MIN, BACKUP_GRACE_MIN, BACKUP_CLEAR_MIN = 3.0, 60.0, 45.0, 60.0
+# Field capacity follows the sensor (_follow_fc). When the sensor moves it by this many points or more, the P1 target,
+# the P2 re-water threshold and the rescue (P3 emergency) floor move with it; a smaller move is field capacity only.
+FC_SHIFT_MIN = 1.0
 # CS-311: the sump pump a room drains to (option sump_power_sensor) drawing no power for SUMP_SILENT_H while the
 # room is on. F2's ran every 1 to 1.5 hours, day and night, 22-28 Sep 2026 (its longest gap 2.37 h) and then not
 # at all for 41.6 h: its tables backed up. Checked every SUMP_CHECK_MIN from Home Assistant's history, as a run
@@ -1837,9 +1840,13 @@ class Controller:
                 p1_shot_pct=p.p1_initial, p1_gap_min=p.p1_time_between_min,
                 start_vwc=learn["ramp_start"] if learn["ramp_start"] is not None else snap.vwc,
             )
-            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged)
-            for suffix, value, _why in setpoint_supervisor.writes(current, want):
-                self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
+            if self._follow_fc(room, zone, p, now):
+                pass  # field capacity (and what sits under it) moved this pass; the learner acts on the next one
+            else:
+                want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged,
+                                             full=self._fc_seen(st))
+                for suffix, value, _why in setpoint_supervisor.writes(current, want):
+                    self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
             if st["phase"] == "P1" and learn["outcome"] == "plateau":
                 gate = auto_setpoints.p1_ec_gate(ec_rules, p.ec_target_p1, p.ec_target_p2)
                 if gate is not None:  # let the hand-over through; see p1_ec_gate
@@ -1861,6 +1868,71 @@ class Controller:
             managed=[number + s for s in who], managed_by={number + s: w for s, w in who.items()},
         )
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
+
+    def _fc_seen(self, st):
+        """The zone's measured full level (auto_setpoints.measured_full). Until a whole grow-day has been tracked (the
+        update that brings this in, at night, sees only the night's readings), the plateau its last grow-day recorded
+        stands in for the grow-day before: the sensor's own reading either way."""
+        learn = st.get("learn") if isinstance(st.get("learn"), dict) else None
+        seen = auto_setpoints.measured_full(learn) if learn else None
+        if learn is None or learn.get("full_prev") is None:
+            hist = [e for e in st.get("plateau_hist") or [] if isinstance(e, dict) and e.get("value")]
+            seed = float(hist[-1]["value"]) if hist else None
+            if seed is not None:
+                seen = seed if seen is None else max(seen, seed)
+        return seen
+
+    def _follow_fc(self, room, zone, p, now):
+        """Field capacity follows the sensor, and what sits under it moves with it -> True when anything was written.
+
+        The owner, 6 Oct 2026: "the FC needs to increase as the sensor does", "the p2 dryback and shit needs to move
+        as well to be in line with the new FC", "the rescue floor should increase too", "the system needs to do this
+        shit automatically". Field capacity is auto_setpoints.field_capacity: the zone's measured full level, never
+        under the P1 target + 2. When the measured level (not that floor) moves it by FC_SHIFT_MIN or more, the P1
+        target, the P2 re-water threshold and the rescue floor move by the same points, so the gaps chosen under full
+        are kept. The learner's brake moves with them (its day ceiling and P1 entry), so it does not pull the target
+        back, and the target never goes above the peak the learner has seen nor within 2 of field capacity. Jev's
+        Setpoints judge takes a moved threshold as the new centre of its range (jev_bridge). A move that would invert
+        the ladder (rescue + 3 <= threshold < P1 target <= field capacity) moves field capacity only. Runs for every
+        zone, its probe trusted or not, under the room's Auto setpoints switch and never while a grow plan owns it."""
+        if not self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False):
+            return False
+        if getattr(room, "strategy_required", False):
+            return False
+        st = room.state[zone]
+        seen = self._fc_seen(st)
+        if seen is None or seen < p.p1_target + 2.05:
+            return False  # the sensor is not above the target + 2: nothing to follow, the learner keeps field capacity
+        fc = auto_setpoints.field_capacity(p.p1_target, seen)
+        delta = round(fc - p.field_capacity, 1)
+        if abs(delta) < 0.1:
+            return False
+        learn = st["learn"] if isinstance(st.get("learn"), dict) else {}
+        writes = [("field_capacity", p.field_capacity, fc)]
+        thr = self._zone_num(room, zone, "p2_vwc_threshold", None, optional=True)
+        ladder = thr is not None and p.p3_emergency_floor + 3.0 <= thr < p.p1_target <= p.field_capacity
+        if seen >= p.p1_target + 2.05 and abs(delta) >= FC_SHIFT_MIN and ladder:  # never "repairs" a ladder
+            bounds = setpoint_supervisor.BOUNDS
+            peak = learn.get("peak")
+            target = p.p1_target + delta
+            if peak is not None:
+                target = min(target, peak + learn.get("peak_adj", 0.0))
+            target = round(max(bounds["p1_target_vwc"][0], min(fc - 2.0, target)), 1)
+            new_thr = round(max(bounds["p2_vwc_threshold"][0], min(target - 2.0, thr + delta)), 1)
+            rescue = round(max(bounds["p3_emergency_vwc_threshold"][0],
+                               min(new_thr - 3.0, p.p3_emergency_floor + delta)), 1)
+            if (rescue + 3.0 <= new_thr < target <= fc and new_thr <= bounds["p2_vwc_threshold"][1]
+                    and rescue <= bounds["p3_emergency_vwc_threshold"][1] and target <= bounds["p1_target_vwc"][1]):
+                writes += [("p1_target_vwc", p.p1_target, target), ("p2_vwc_threshold", thr, new_thr),
+                           ("p3_emergency_vwc_threshold", p.p3_emergency_floor, rescue)]
+                moved = target - p.p1_target
+                for key in ("day_ceiling", "p1_entry"):  # the brake counts from the moved scale
+                    if learn.get(key) is not None:
+                        learn[key] = round(learn[key] + moved, 2)
+        for suffix, old, value in writes:
+            if abs(value - old) >= 0.05:
+                self._auto_write(room, zone, suffix, old, value, learn, now, by="auto (field capacity)")
+        return True
 
     def _auto_write(self, room, zone, suffix, old, value, learn, now, by="auto"):
         entity = f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}"
@@ -3935,6 +4007,14 @@ class Controller:
                     self._save_state()
                 except Exception as e:  # a record never stops the room being decided and watered
                     log("zone history error", room.slug, zone, e)
+            if snap is not None:  # field capacity follows the sensor, read before any judge sets the probe aside
+                try:
+                    if not isinstance(st.get("learn"), dict):
+                        st["learn"] = auto_setpoints.fresh()
+                    auto_setpoints.track_full(st["learn"], self._grow_day_start(room, now).isoformat(), snap.vwc,
+                                              self._minutes_since_shot(st, now))
+                except Exception as e:
+                    log("field capacity tracking error", room.slug, zone, e)
             jev_dirs = {}
             distrusted = room.__dict__.setdefault("_jev_distrusted", {})
             distrusted.pop(zone, None)
@@ -4067,6 +4147,10 @@ class Controller:
         for zone, p in blind:
             st = room.state[zone]
             self._publish_waiting_for(room, zone, None, p, now)  # no probe: nothing to compare
+            try:  # field capacity follows the sensor even while the zone waters without it
+                self._follow_fc(room, zone, p, now)
+            except Exception as e:
+                log("field capacity error", room.slug, zone, e)
             # A dead probe must NOT freeze the daily cycle: still honour the time-based
             # phase forces (lights-off -> P3, P3 -> P0 at the new photoperiod). Only the
             # VWC-driven transitions are paused while blind.

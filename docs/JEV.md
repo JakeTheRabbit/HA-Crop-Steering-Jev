@@ -71,7 +71,7 @@ automatic writer. With the switch off, or under a plan, neither writes anything.
 | Zone number | Written by | How |
 |---|---|---|
 | P2 shot size, P2 re-water threshold | Jev's Setpoints judge | One notch a night, inside a range around the operator's value (the Setpoints row above). |
-| P1 target, field capacity | The base engine's Auto Setpoints learner | From the peak the zone has shown it reaches. Up by at most 2 points a grow-day, and only once that day's ramp reached the target; down at once when a ramp stops lifting the probe. Field capacity stays 2 points over the P1 target. |
+| P1 target, field capacity | The base engine's Auto Setpoints learner | The P1 target from the peak the zone has shown it reaches. Up by at most 2 points a grow-day, and only once that day's ramp reached the target; down at once when a ramp stops lifting the probe. Field capacity follows the sensor: the zone's highest reading 20 minutes or more after a shot, today or yesterday, never under the P1 target + 2, also while the zone waters without its probe. When the probe moves it by a point or more, the P1 target, the re-water threshold and the rescue floor move by the same points (the threshold's move re-centres the Setpoints judge's range). |
 | P3 rescue floor | The learner | Only to keep it 3 points under the judge's re-water threshold, when the ladder would otherwise invert. |
 
 The old hourly P2 check stays off while the Setpoints judge runs. Each zone's

@@ -59,7 +59,8 @@ def fresh():
             "day_acc": [0.0, 0], "night_acc": [0.0, 0],
             "hold_days": 0, "day": None, "ramp_start": None, "ramp": [], "pending": None,
             "outcome": "pending", "stalled_at": None, "last_change": "", "prev_peak": None, "prev_hold": 0,
-            "veto": None, "day_ceiling": None, "p1_entry": None, "stale_target": None}
+            "veto": None, "day_ceiling": None, "p1_entry": None, "stale_target": None,
+            "full_date": None, "full_day": None, "full_prev": None}
 
 
 def restore(saved):
@@ -69,9 +70,10 @@ def restore(saved):
         return base
     try:
         out = copy.deepcopy({k: saved.get(k, v) for k, v in base.items()})
-        for k in _NUMBERS + ("ramp_start", "stalled_at", "prev_peak", "day_ceiling", "p1_entry"):
+        for k in _NUMBERS + ("ramp_start", "stalled_at", "prev_peak", "day_ceiling", "p1_entry", "full_day", "full_prev"):
             if out[k] is not None:
                 out[k] = float(out[k])
+        out["full_date"] = out["full_date"] if isinstance(out["full_date"], str) else None
         # stale only with the reading P1 began at, and only when saved as such: junk never lifts a target
         out["stale_target"] = None if out["p1_entry"] is None else out["stale_target"] is True
         for k in ("day_n", "night_n", "hold_days", "prev_hold"):
@@ -219,6 +221,34 @@ def working_peak(learn):
     return learn["peak"] + learn["peak_adj"]
 
 
+def track_full(learn, grow_day, vwc, minutes_since_shot):
+    """Keep the zone's measured full level: the highest reading of this grow-day taken SETTLE_MIN or more after its
+    last shot (past the free-water spike), and that of the grow-day before. Fed from the probe every loop, whether or
+    not a judge trusts it: field capacity follows the sensor (6 Oct 2026)."""
+    if learn["full_date"] != grow_day:
+        if learn["full_day"] is not None:
+            learn["full_prev"] = learn["full_day"]
+        learn.update(full_date=grow_day, full_day=None)
+    if vwc is not None and 0.0 < vwc <= 100.0 and minutes_since_shot >= SETTLE_MIN:
+        learn["full_day"] = vwc if learn["full_day"] is None else max(learn["full_day"], vwc)
+
+
+def measured_full(learn):
+    """The highest settled reading of this grow-day or the one before, or None: the substrate full, as this probe
+    reads it. Up the same day the sensor reads higher, down after two lower days."""
+    seen = [v for v in (learn["full_day"], learn["full_prev"]) if v is not None]
+    return max(seen) if seen else None
+
+
+def field_capacity(target, seen):
+    """Field capacity follows the sensor's measured full level, never under the P1 target + 2. Unlike the target it
+    is not held back: it describes the substrate as this probe reads it, and it waters nothing by itself (the ramp
+    stops at the lower of target and field capacity). 5 Oct 2026: F2 zone 2 settled at 63-68 after every shot
+    against a field capacity of 54 (its target 52 + 2)."""
+    fc = target + 2.0 if seen is None else max(target + 2.0, seen)
+    return min(90.0, max(40.0, round(fc, 1)))
+
+
 def model(learn):
     """ZoneModel once the ceiling, gain and both dryback rates are learned; else None."""
     if None in (learn["peak"], learn["gain"], learn["day_rate"], learn["night_rate"]):
@@ -228,7 +258,7 @@ def model(learn):
     return ct.ZoneModel(knee=learn["peak"], gain=learn["gain"], day_rate=learn["day_rate"], night_rate=learn["night_rate"])
 
 
-def wanted(learn, current, vwc, phase, plan_ctx, others=()):
+def wanted(learn, current, vwc, phase, plan_ctx, others=(), full=None):
     """suffix -> value this zone should hold now. {} until something has been learned.
 
     `others`: setpoints another writer owns (Jev's Setpoints judge: the P2 shot size and re-water threshold). They
@@ -237,7 +267,8 @@ def wanted(learn, current, vwc, phase, plan_ctx, others=()):
     The ratchet guard (module docstring): up, the P1 target goes no higher than the ceiling its grow-day began
     with, plus DAY_RISE_PTS once the day's ramp reached it or plateaued (believed); stale, no higher than
     DAY_RISE_PTS over the reading P1 began at, nor the learned peak + PROBE_STEP_PTS. Field capacity follows the
-    held target. While the target is held under what was learned, the P2 threshold stays where it is: its band
+    sensor (field_capacity: `full`, else measured_full), never under the held target + 2. While the target is held
+    under what was learned, the P2 threshold stays where it is: its band
     hangs off the learned peak, which the target cannot follow yet, and following it was the other half of
     zone 3's ratchet.
 
@@ -255,7 +286,8 @@ def wanted(learn, current, vwc, phase, plan_ctx, others=()):
     else:
         top = target
     held, target = target > round(top, 1), min(target, round(top, 1))
-    want = {"p1_target_vwc": target, "field_capacity": max(40.0, round(target + 2.0, 1))}
+    seen = full if full is not None else measured_full(learn)
+    want = {"p1_target_vwc": target, "field_capacity": field_capacity(target, seen)}
     m = model(learn)
     if held or "p2_vwc_threshold" in others:
         pass  # the P2 threshold stays where it is (above), or is another writer's
