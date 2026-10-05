@@ -31,7 +31,7 @@ def kind_of(result):
         (dict(phase="P2", vwc=40, minutes_since_shot=30), {}),
         (dict(phase="P2", vwc=55, ec=10, feed_ec=3), {}),
     ],
-    ids=["p0_ec_flush", "p1_ramp", "p1_flush", "p2_rescue", "p2_dilute", "p2_topup", "flush_high_ec"],
+    ids=["p0_ec_flush", "p1_ramp", "p1_extra", "p2_rescue", "p2_dilute", "p2_topup", "flush_high_ec"],
 )
 def test_a_held_zone_is_not_steered(snap, params):
     assert decide(S(**snap), P(**params))[2] is True  # steered when the plan is fine

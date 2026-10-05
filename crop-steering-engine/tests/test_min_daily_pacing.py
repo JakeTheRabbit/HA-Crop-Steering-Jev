@@ -62,31 +62,44 @@ def test_the_drown_ceiling_and_the_spacing_still_hold_it():
 
 def _day(probe_vwc, start_phase, ec=5.0):
     """A day from lights-on to lights-off, a minute at a time, with the probe stuck at `probe_vwc`: returns the
-    (minute, kind, litres) of each shot and the phase at each minute."""
+    (minute, kind, litres) of each shot, the phase at each minute and the (minute, phase, reason) of each move.
+    It feeds the P1 rule as the controller does: its state starts again on the way into P1, `reached` latches
+    on every tick in P1 at the ceiling, and each P1 shot records the peak before its water, counting as an extra
+    shot once `reached` is set."""
     p = P(min_daily_volume=FLOOR)
+    ceiling = min(p.p1_target, p.field_capacity)
     phase, phase_min, since, shots, daily = start_phase, 0.0, 600.0, 0, 0.0
-    fired, phases = [], []
+    reached, before, extra = False, None, 0
+    fired, phases, moves = [], [], []
     for m in range(12 * 60):
+        if phase == "P1" and probe_vwc >= ceiling:
+            reached = True
         s = at(m / 60.0, vwc=probe_vwc, peak_vwc=probe_vwc, ec=ec, ec_smooth=ec, phase=phase,
                phase_minutes=phase_min, minutes_since_shot=since, shot_count=shots, daily_vol=daily,
-               lights_just_on=m == 0)
+               lights_just_on=m == 0, p1_reached=reached, p1_peak_before_shot=before, p1_extra_shots=extra)
         new_phase, _thr, fire, size, reason = decide(s, p)
         if new_phase != phase:
+            moves.append((m, new_phase, reason))
             phase, phase_min = new_phase, 0.0
-            shots = 0 if new_phase == "P1" else shots
+            if new_phase == "P1":
+                shots, reached, before, extra = 0, False, None, 0
         phases.append(phase)
         if fire:
             litres = size * LITRES_PER_PCT
             fired.append((m, reason.kind, litres))
+            if phase == "P1":
+                before = s.peak_vwc  # the peak before this shot's water went in
+                if reached:
+                    extra += 1
             daily, since, shots = daily + litres, 0.0, shots + 1
         else:
             since += 1.0
         phase_min += 1.0
-    return fired, phases
+    return fired, phases, moves
 
 
 def test_a_probe_stuck_wet_still_gets_the_whole_minimum_spread_evenly_over_the_day():
-    fired, phases = _day(probe_vwc=55, start_phase="P2")  # above the re-water point: never a top-up
+    fired, phases, _moves = _day(probe_vwc=55, start_phase="P2")  # above the re-water point: never a top-up
     assert {kind for _m, kind, _l in fired} == {"min_daily"}
     assert sum(litres for _m, _k, litres in fired) >= FLOOR
     times = [m for m, _k, _l in fired]
@@ -97,6 +110,14 @@ def test_a_probe_stuck_wet_still_gets_the_whole_minimum_spread_evenly_over_the_d
 
 
 def test_a_zone_starting_in_p0_waits_out_the_dryback_then_catches_up():
-    fired, phases = _day(probe_vwc=62, start_phase="P0")  # P0 times out at 45 min; P1 is at its ceiling
+    fired, phases, moves = _day(probe_vwc=62, start_phase="P0")  # P0 times out at 45 min; P1 is at its ceiling
     assert fired[0][0] >= 45 and all(phases[m] != "P0" for m, _k, _l in fired)
-    assert sum(litres for _m, _k, litres in fired) >= FLOOR and fired[-1][0] <= 9 * 60
+    # behind the line after the dryback, the floor catches up in P1
+    assert any(k == "min_daily" and phases[m] == "P1" for m, k, _l in fired)
+    # P1 ends by the rise rule (a stuck probe's peak cannot rise), not at max shots
+    assert next(why for _m, to, why in moves if to == "P2").startswith("P1 full")
+    # the rest is the floor's, spread through P2: all of it by 19:00 and nothing past it but the last floor shot,
+    # where a P1 run to its maximum shots would pour well over the minimum
+    assert all(k == "min_daily" for m, k, _l in fired if phases[m] == "P2")
+    total = sum(litres for _m, _k, litres in fired)
+    assert FLOOR <= total < FLOOR + P().p2_shot_size * LITRES_PER_PCT and fired[-1][0] <= 9 * 60
