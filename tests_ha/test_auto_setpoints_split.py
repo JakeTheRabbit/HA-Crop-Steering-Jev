@@ -1,23 +1,19 @@
-"""Auto Setpoints under Jev's Setpoints judge, in a real Home Assistant, with the real controller.
+"""The zone's setpoints follow its own highest readings, in a real Home Assistant, with the real controller.
 
-4 Oct 2026, F2 zone 2: controller 3.8.0's learner wrote nothing at all once the judge ran, so nothing
-wrote the P1 target. It sat at 29.5 from 26 Sep while the probe, moved up 15-20 points by a sump
-flood, read 42-44 % at lights-on, and P1 never ramped. Each lever now has one writer: the judge its
-P2 shot size and re-water threshold, the learner the P1 target and field capacity (and the rescue
-floor only to keep it 3 points under the threshold). Upward, the learner moves a target at most 2
-points a grow-day, and only once that day's ramp reached it (zone 3's ratchet, 22-26 Sep). A target
-the zone entered P1 already above goes, the same day, to 2 points over the reading P1 began at.
+6 Oct 2026, the owner: the P1 target is the highest VWC of the grow-day before, field capacity rises as the sensor
+does, and the re-water threshold and the rescue floor move with field capacity. No 2-points-a-day limit. Jev's
+Setpoints judge keeps its P2 shot size (and centres its range on the moved threshold); the learner writes neither
+the P1 target nor field capacity.
 
-It starts from a seeded old install (tests_ha/fixtures/entry_3_8_learned_tent.json): the state file
-controller 3.8.0 wrote, whose learner block has none of the guard's keys. Every number the
-controller writes over REST is replayed into the real entity, so it must be one Home Assistant
-accepts, under the id the integration registered.
+It starts from a seeded old install (tests_ha/fixtures/entry_3_8_learned_tent.json): the state file controller 3.8.0
+wrote, with none of the new keys. Every number the controller writes is replayed into the real entity, so it must be
+one Home Assistant accepts, under the id the integration registered.
 """
 
 import functools
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 
 from test_recreated_room_controller import _see
@@ -31,7 +27,7 @@ SENSOR = "sensor.crop_steering_zone_1_auto_setpoints"
 
 
 class _Clock(datetime):
-    """The controller's wall clock, pinned to 4 Oct: its shot hook stamps each shot with it."""
+    """The controller's wall clock, pinned to 6 Oct."""
 
     current = None
 
@@ -54,110 +50,51 @@ async def _learned_tent(hass, controller_for, monkeypatch):
     assert jev_bridge.owns_setpoints(c)
     room = c.rooms[0]
     assert room._setup_pending is None  # 3.8.0's state file is carried straight on
-    c._refresh_lights(room)  # the room's 10:00 to 22:00, as every loop reads it
+    c._refresh_lights(room)
     monkeypatch.setattr(controller, "datetime", _Clock)
     return c, fake, room, seed
-
-
-async def _day(hass, c, fake, room, entry_vwc, ramp=()):
-    """4 Oct through the controller's own learner pass, a minute apart: lights-on in P0, P1 begun at
-    `entry_vwc` with a 2 % ramp shot through the controller's own shot hook for each of `ramp` (what
-    each retained, read 21 minutes on), then P2. What it writes reaches the real entity before the
-    next pass reads it. Returns (phase, entity, value) for every write."""
-    now, sent, vwc = datetime(2026, 10, 4, 10, 0), [], entry_vwc
-
-    async def one_pass(phase, reading):
-        room.state[1]["phase"], _Clock.current = phase, now
-        fake.calls.clear()
-        snap = SimpleNamespace(vwc=reading, ec=5.36, dryback_rate=0.0)
-        c._auto_tick(room, 1, snap, c._params(room, 1), True, now)
-        for domain, service, data in fake.calls:
-            if (domain, service) == ("number", "set_value"):
-                sent.append((phase, data["entity_id"], data["value"]))
-                await hass.services.async_call(domain, service, data, blocking=True)
-        _see(hass, fake)
-
-    for phase, reading in (("P0", 44.0), ("P1", entry_vwc)):
-        await one_pass(phase, reading)
-        now += timedelta(minutes=1)
-    for rise in ramp:
-        c._advance_shot_counters(room, 1, 2.0)
-        vwc, now = round(vwc + rise, 2), now + timedelta(minutes=21)
-        await one_pass("P1", vwc)
-    for _ in range(8):
-        now += timedelta(minutes=1)
-        await one_pass("P2", 52.0)
-    return sent
 
 
 def _value(hass, suffix):
     return float(hass.states.get(NUMBER + suffix).state)
 
 
-def _written(sent, suffix):
-    return [value for _phase, entity, value in sent if entity == NUMBER + suffix]
-
-
-async def test_a_stale_p1_target_goes_two_over_where_p1_began_and_the_judges_levers_are_left_alone(
+async def test_the_p1_target_and_field_capacity_follow_the_highest_reading_and_the_ladder_moves_with_them(
     hass, controller_for, monkeypatch
 ):
     c, fake, room, seed = await _learned_tent(hass, controller_for, monkeypatch)
-    learn = room.state[1]["learn"]
-    # All that 3.8.0 had learned, and none of the guard's keys.
-    assert learn["peak"] == 65.54 and learn["outcome"] == "reached"
-    assert learn["day_ceiling"] is None and learn["p1_entry"] is None
+    st = room.state[1]
+    assert st["peak_prev"] is None  # an old install: the grow-day in progress stands in for the day before
+    before = {s: _value(hass, s) for s in ("p1_target_vwc", "field_capacity", "p2_vwc_threshold",
+                                           "p3_emergency_vwc_threshold", "p2_shot_size")}
+    assert before == {"p1_target_vwc": 29.5, "field_capacity": 50.0, "p2_vwc_threshold": 27.5,
+                      "p3_emergency_vwc_threshold": 20.0, "p2_shot_size": 6.0}
 
-    sent = await _day(hass, c, fake, room, entry_vwc=44.0)
+    st["peak"] = 71.48  # F2 zone 2's highest reading of 5 Oct
+    _Clock.current = now = datetime(2026, 10, 6, 5, 0)
+    st["phase"] = "P3"
+    fake.calls.clear()
+    c._auto_tick(room, 1, SimpleNamespace(vwc=39.3, ec=5.1, dryback_rate=0.0), c._params(room, 1), False, now)
+    sent = [(d["entity_id"], d["value"]) for dom, svc, d in fake.calls if (dom, svc) == ("number", "set_value")]
+    for entity, value in sent:  # into the real entities: Home Assistant must accept every one
+        await hass.services.async_call("number", "set_value", {"entity_id": entity, "value": value}, blocking=True)
+    _see(hass, fake)
 
-    # Lights-on: 29.5 holds, nothing has reached anything yet. P1 began at 44 %, over its 29.5 %
-    # ceiling: stale, so the same day it goes to 44 + 2, in the supervisor's 6-point steps. Not to
-    # the learned 65.54 + 1: a stale learned peak (zone 3's ratchet) must not be reached in a day.
-    assert _written(sent, "p1_target_vwc") == [35.5, 41.5, 46.0]
-    assert {entity for _phase, entity, _value in sent} == {
-        NUMBER + "p1_target_vwc",
-        NUMBER + "field_capacity",
-    }
-    assert _value(hass, "p1_target_vwc") == 46.0
-    assert _value(hass, "field_capacity") == 48.0
-    # The judge's levers, and the rescue floor that already sits 3 under the judge's threshold.
-    assert _value(hass, "p2_vwc_threshold") == 27.5
-    assert _value(hass, "p2_shot_size") == 6.0
-    assert _value(hass, "p3_emergency_vwc_threshold") == 20.0
+    # 50 -> 71.5 is 21.5 points: no 2-point limit, and the re-water threshold and the rescue floor move the same
+    assert sorted(sent) == sorted([(NUMBER + "field_capacity", 71.5), (NUMBER + "p1_target_vwc", 71.5),
+                                   (NUMBER + "p2_vwc_threshold", 49.0), (NUMBER + "p3_emergency_vwc_threshold", 41.5)])
+    after = {s: _value(hass, s) for s in before}
+    assert after == {"p1_target_vwc": 71.5, "field_capacity": 71.5, "p2_vwc_threshold": 49.0,
+                     "p3_emergency_vwc_threshold": 41.5, "p2_shot_size": 6.0}  # the judge's shot size untouched
 
-    judge = "Jev's Setpoints judge, one notch a night"
     owners = fake.sets[SENSOR][1]["managed_by"]
-    assert owners[NUMBER + "p1_target_vwc"] == "Auto setpoints learner"
-    assert {owners[NUMBER + s] for s in ("p2_vwc_threshold", "p2_shot_size")} == {judge}
+    assert owners[NUMBER + "p1_target_vwc"] == "the zone's highest reading of the grow-day before"
+    assert owners[NUMBER + "field_capacity"] == "the zone's highest reading of this grow-day or the one before"
+    assert owners[NUMBER + "p2_shot_size"] == "Jev's Setpoints judge, one notch a night"
 
     c._save_state()
     saved = json.loads(open(os.environ["F2_STATE_PATH"], encoding="utf-8").read())
-    learned = saved["default"]["1"]["learn"]
-    assert learned["peak"] == 65.54 and learned["day_ceiling"] == 29.5
-    assert learned["p1_entry"] == 44.0 and learned["stale_target"] is True
+    zone = saved["default"]["1"]
+    assert zone["peak"] == 71.48 and zone["peak_prev"] is None
+    assert not {"day_ceiling", "p1_entry", "stale_target"} & set(zone["learn"])  # the 2-point limit is gone
     assert saved["default"]["_setup"] == seed["controller_saved"]["default"]["_setup"]
-
-
-async def test_after_the_stopgap_the_target_holds_until_a_ramp_reaches_it_then_rises_two(
-    hass, controller_for, monkeypatch
-):
-    c, fake, room, _seed = await _learned_tent(hass, controller_for, monkeypatch)
-    # The operator's stopgap, 08:26 on 4 Oct.
-    await hass.services.async_call(
-        "number",
-        "set_value",
-        {"entity_id": NUMBER + "p1_target_vwc", "value": 48},
-        blocking=True,
-    )
-    _see(hass, fake)
-
-    # P1 begins at 44, under its 48 ceiling, and the ramp reaches 48.2 still taking water.
-    sent = await _day(hass, c, fake, room, entry_vwc=44.0, ramp=(2.1, 2.1))
-
-    assert room.state[1]["learn"]["outcome"] == "reached"
-    # Nothing moved in P0 or P1: the 2 points came after the ramp had reached its 48.
-    assert sent == [
-        ("P2", NUMBER + "p1_target_vwc", 50.0),
-        ("P2", NUMBER + "field_capacity", 52.0),
-    ]
-    assert _value(hass, "p1_target_vwc") == 50.0
-    assert _value(hass, "field_capacity") == 52.0

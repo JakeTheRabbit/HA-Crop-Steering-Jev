@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import jev_bridge
 import jev_kit as K
 import pytest
-import test_auto_setpoints_ratchet as ratchet
 import test_auto_setpoints_runtime as asr
 from jev import council
 from jev.brain import Brain
@@ -25,6 +24,20 @@ from jev.setpoint_memory import SetpointMemory
 
 NIGHT = datetime(2026, 9, 27, 23, 0)  # an hour after lights-off (lights 10:00-22:00)
 Z1 = K.params(p2_shot_size=5.0, p2_threshold=30.5, p3_emergency_floor=20.7, p1_target=36.5, field_capacity=40.0)
+
+# F2 zone 2 on 4 Oct 2026, before the operator's stopgap, and its learner block as controller 3.8.0 wrote it
+# (tests_ha/fixtures/entry_3_8_learned_tent.json); kept here from the retired ratchet-guard tests.
+Z2 = dict(p1_target_vwc=29.5, field_capacity=50.0, p2_vwc_threshold=27.5, p3_emergency_vwc_threshold=20.0,
+          p2_shot_size=6.0)
+SAVED_BY_3_8_0 = {
+    "peak_adj": 0.0, "jev": {"day": None, "nudged": [], "asked": None, "last": None, "changed": None},
+    "peak": 65.54, "gain": 1.368, "day_rate": 1.621, "night_rate": 0.815, "day_n": 8, "night_n": 8,
+    "day_acc": [56.7, 35], "night_acc": [6.5, 8], "hold_days": 0, "day": "2026-10-03", "ramp_start": 44.0,
+    "ramp": [{"pct": 2.0, "rise": 2.1, "settled": 46.1, "flat": False},
+             {"pct": 2.0, "rise": 1.8, "settled": 47.9, "flat": False}],
+    "pending": None, "outcome": "reached", "stalled_at": None, "last_change": "22:02 p2_shot_size 5.5 -> 6",
+    "prev_peak": None, "prev_hold": 0, "veto": None,
+}
 
 
 def _sp(**over):
@@ -278,7 +291,7 @@ def test_the_outcome_asks_whether_water_or_ec_moved_the_way_the_change_meant():
 # Setpoints learner keeps the rest. Until 4 Oct 2026 the learner wrote nothing at all once the judge ran, so nothing
 # wrote the P1 target: zone 2 sat at 29.5 from 26 Sep while its probe read 42-44 % at lights-on, and P1 never ramped.
 JUDGE = {"cf_account_id": "acc", "cf_api_token": "tok"}
-Z2 = {f"number.crop_steering_zone_1_{s}": (str(v), {}) for s, v in ratchet.Z2.items()}  # zone 2, as the rig's zone 1
+Z2 = {f"number.crop_steering_zone_1_{s}": (str(v), {}) for s, v in Z2.items()}  # zone 2, as the rig's zone 1
 LIGHTS_ON = datetime(2026, 10, 4, 10, 0)
 LEARNER, JUDGED = ("p1_target_vwc", "field_capacity", "p3_emergency_vwc_threshold"), (SHOT, THRESHOLD)
 
@@ -292,7 +305,7 @@ def ramp_clock(monkeypatch):
 def _zone_2(auto="on", plan=False, numbers=Z2):
     """Zone 2 with what its learner had learned by 4 Oct, loaded from the block controller 3.8.0 saved."""
     c, fake, room = asr._rig(auto=auto, numbers=numbers, options=JUDGE)
-    room.state[1]["learn"] = c._apply_saved_zone(c._fresh_zone(), {"learn": ratchet.SAVED_BY_3_8_0})["learn"]
+    room.state[1]["learn"] = c._apply_saved_zone(c._fresh_zone(), {"learn": SAVED_BY_3_8_0})["learn"]
     room.strategy_required = plan
     return c, fake, room
 
@@ -331,31 +344,6 @@ def _never_ask_the_hourly_judge(monkeypatch):
     monkeypatch.setattr(asr.controller.jev_policy, "call", boom)
 
 
-def test_under_the_judge_the_learner_writes_the_p1_target_and_field_capacity_from_its_learned_peak(ramp_clock):
-    c, fake, room = _zone_2()
-    assert jev_bridge.owns_setpoints(c)
-    _day(c, fake, room)
-    # Lights-on: nothing has reached anything yet, so 29.5 holds. Then P1 began at 44 %, over its 29.5 % ceiling:
-    # the target was stale, so the same grow-day it goes to 2 over that reading, in the supervisor's 6-point
-    # steps. Not to the learned 65.54 + 1: a stale peak (zone 3's ratchet) must not be reached in a day.
-    assert _sent(fake, "p1_target_vwc") == [35.5, 41.5, 46.0]
-    assert _sent(fake, "field_capacity")[-1] == 48.0
-    assert any(" auto p1_target_vwc 41.5 -> 46" in line for line in c._activity)
-
-
-@pytest.mark.parametrize("ramp, written", [
-    ((2.1, 2.1), [50.0]),  # 44 -> 46.1 -> 48.2: it reached its 48 still taking water, so 2 more
-    ((2.1, 0.5), []),  # 44 -> 46.1 -> 46.6: it stopped taking water under 48, so 48 holds
-])
-def test_after_the_operators_stopgap_zone_2_climbs_two_points_only_after_a_ramp_that_reached_48(
-        ramp_clock, ramp, written):
-    c, fake, room = _zone_2(numbers={**Z2, "number.crop_steering_zone_1_p1_target_vwc": ("48", {})})
-    _day(c, fake, room, entry_vwc=44.0, ramp=ramp)  # under its 48 ceiling: not stale, so it ramps
-    assert room.state[1]["learn"]["outcome"] == ("reached" if written else "short")
-    assert _sent(fake, "p1_target_vwc") == written
-    assert _sent(fake, "field_capacity") == [w + 2.0 for w in written]
-
-
 def test_the_learner_never_writes_the_judges_levers_even_to_keep_its_ladder(ramp_clock, monkeypatch):
     _never_ask_the_hourly_judge(monkeypatch)
     c, fake, room = _zone_2(numbers={**Z2, "number.crop_steering_zone_1_p3_emergency_vwc_threshold": ("26", {})})
@@ -363,17 +351,6 @@ def test_the_learner_never_writes_the_judges_levers_even_to_keep_its_ladder(ramp
     assert _sent(fake, THRESHOLD) == [] and _sent(fake, SHOT) == []  # its band wanted 57.3: not its lever
     assert _sent(fake, "p3_emergency_vwc_threshold") == [24.5]  # the floor goes 3 under the JUDGE's 27.5
     assert fake.sets["sensor.crop_steering_zone_1_auto_setpoints"][1]["jev"] == "disabled"
-
-
-def test_under_the_judge_the_p1_fail_over_drops_the_target_and_touches_nothing_else(ramp_clock, monkeypatch):
-    _never_ask_the_hourly_judge(monkeypatch)  # nor is it asked to veto the plateau
-    numbers = {**asr.NUMBERS, "number.crop_steering_zone_1_p2_vwc_threshold": ("30", {})}
-    c, fake, room = asr._rig(numbers=numbers, options=JUDGE)
-    vwc, now = asr._flat_ramp(c, fake, room)  # 30 -> 33.8, then two flat shots
-    asr._tick(c, fake, room, vwc, now + timedelta(minutes=1))
-    assert room.state[1]["learn"]["outcome"] == "plateau"
-    assert _sent(fake, "p1_target_vwc") == [34.0, 33.7]  # a target the zone has met: the engine hands over to P2
-    assert _sent(fake, THRESHOLD) == [] and _sent(fake, SHOT) == []
 
 
 @pytest.mark.parametrize("why", ["switch off", "plan owns the room"])
@@ -393,7 +370,9 @@ def test_the_published_attributes_say_which_writer_owns_which_lever(ramp_clock):
     assert sorted(attrs["managed"]) == sorted(number + s for s in LEARNER + JUDGED)
     owners = attrs["managed_by"]
     assert {owners[number + s] for s in JUDGED} == {"Jev's Setpoints judge, one notch a night"}
-    assert owners[number + "p1_target_vwc"] == owners[number + "field_capacity"] == "Auto setpoints learner"
+    # the zone's own highest readings set these two, not the learner (6 Oct 2026)
+    assert owners[number + "p1_target_vwc"] == "the zone's highest reading of the grow-day before"
+    assert owners[number + "field_capacity"] == "the zone's highest reading of this grow-day or the one before"
     assert owners[number + "p3_emergency_vwc_threshold"].startswith("Auto setpoints learner, only to keep it")
     # without the judge the learner owns the threshold too, and the shot size is nobody's
     c, fake, room = asr._rig()
