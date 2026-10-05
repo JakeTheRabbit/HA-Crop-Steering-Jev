@@ -71,7 +71,7 @@ automatic writer. With the switch off, or under a plan, neither writes anything.
 | Zone number | Written by | How |
 |---|---|---|
 | P2 shot size, P2 re-water threshold | Jev's Setpoints judge | One notch a night, inside a range around the operator's value (the Setpoints row above). |
-| P1 target, field capacity | The base engine's Auto Setpoints learner | The P1 target from the peak the zone has shown it reaches. Up by at most 2 points a grow-day, and only once that day's ramp reached the target; down at once when a ramp stops lifting the probe. Field capacity follows the sensor: the zone's highest reading 20 minutes or more after a shot, today or yesterday, never under the P1 target + 2, also while the zone waters without its probe. When the probe moves it by a point or more, the P1 target, the re-water threshold and the rescue floor move by the same points (the threshold's move re-centres the Setpoints judge's range). |
+| P1 target, field capacity | The zone's own highest readings (the controller) | The P1 target is the highest reading of the grow-day before, kept at lights-on, with no limit on how far it moves. Field capacity is the higher of today's and the day before's highest readings. When field capacity moves by a point or more, the re-water threshold and the rescue floor move by the same points (the threshold's move re-centres the Setpoints judge's range). Also while the zone waters without its probe. |
 | P3 rescue floor | The learner | Only to keep it 3 points under the judge's re-water threshold, when the ladder would otherwise invert. |
 
 The old hourly P2 check stays off while the Setpoints judge runs. Each zone's
@@ -79,25 +79,14 @@ The old hourly P2 check stays off while the Setpoints judge runs. Each zone's
 in `managed_by`.
 
 Two runs of the learner shaped this. From 22 to 26 Sep 2026, writing every target alone, it took zone 3's P1
-target from 40.9 to 74.5, its field capacity from 42.9 to 76.5 and its re-water threshold from 37.4 to 69.6: each
-"reached" day raised the learned peak to whatever the extra ramp water achieved, and every target followed it.
-From 26 Sep it wrote nothing at all while the judge ran, so nobody wrote the P1 target: after a sump flood on
-29 Sep moved zone 2's probe up 15 to 20 points, its target sat at 29.5 under a probe reading 42 to 44 % at
-lights-on, every day started above the P1 ceiling, and P1 never ramped (4 Oct). So the learner keeps its own
-numbers under the judge, with two limits on raising the P1 target:
+target from 40.9 to 74.5. From 26 Sep it wrote nothing at all while the judge ran, so nobody wrote the P1
+target: after a sump flood on 29 Sep moved zone 2's probe up 15 to 20 points, its target sat at 29.5 under a
+probe reading 42 to 44 % at lights-on and P1 never ramped (4 Oct). Since 6 Oct the learner writes neither the P1
+target nor field capacity: they follow the zone's own highest readings, as the owner set out, and P1 ends by the
+rise rule (core.decide): reach the target, give one more shot, and hand over only when a shot no longer raises
+the zone's highest reading by 0.5 points (or at the maximum P1 shots). The ramp judge does not run on F2.
 
-- **Only after a ramp that reached it, 2 points at most.** A learned P1 target rises at most 2 points a grow-day
-  above the ceiling (the lower of the P1 target and field capacity) its day began with, and only once that day's
-  ramp has reached the target (or plateaued, and the plateau was believed). Until then, and all day after a ramp
-  that stalled, ended short or looked suspect, the target holds.
-- **A stale target catches up to the zone, not to the learned peak.** A zone that enters P1 already at or above its
-  ceiling has a stale target, not a learned one. The learner may raise it the same day to 2 points over the
-  reading P1 began at, and never above the learned peak plus one point (in the setpoint supervisor's 6-point
-  steps, a minute apart). Not straight to the learned peak: zone 3's was still the ratchet's 79.21 on 4 Oct, against
-  the operator's reset target of 41.
-
-In a room without the judge, where the learner also owns the re-water threshold, it leaves the threshold where it
-is while the P1 target is held.
+In a room without the judge, the learner also owns the re-water threshold.
 
 ## Failing safe
 
