@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.10.0 - 2026-10-06
+
+- A zone whose pore EC runs high is now flushed whenever its table drains, even when its probe reads very wet.
+- Field capacity now follows what the probe reads, and goes up the same day the probe reads higher.
+- When it moves, the P1 target, the re-water point and the rescue floor move with it, so the dryback stays the same.
+- Bug fixes and improvements.
+
 ## 3.9.0 - 2026-10-05
 
 - Each zone's P1 target and field capacity are kept up to date again, rising at most 2 points a day and only after a morning ramp reached them.

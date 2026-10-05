@@ -9,6 +9,49 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.0] - 2026-10-06
+
+Pair: **controller 3.10.0**. Class **C3**. Two pull requests, both asked for by the owner for F2 zone 2 on 5 and 6
+October 2026: #37, a zone with high pore EC is flushed whenever its table drains, whatever its moisture reading; and
+#38, field capacity follows the sensor. Both change the controller only; the integration carries the version, the
+error-code text and What's new.
+
+### 🌱 In plain English
+
+- **High EC gets flushed.** On 5 October F2 zone 2's pore EC sat at 7 against a target of 4.5 and its plants were
+  yellowing, yet it got no flush all day. Every flush needed the moisture reading under field capacity minus 2, and
+  zone 2's probe reads far above its field capacity. Now a high-EC zone is flushed whenever the feed is weaker than its
+  slab and its table is draining. The daily water limit and the 45 minutes each flush gets to drain still apply. A
+  table that is not draining (the "moisture rising with no water" alert) now holds flushes as well as the daily
+  minimum.
+- **Field capacity follows the probe.** It is now the zone's highest reading 20 minutes or more after a shot, today or
+  yesterday, and never lower than the P1 target + 2. When the probe reads higher, field capacity goes up the same day.
+  Until now it was only ever the P1 target + 2, which may rise 2 points a day, so zone 2 sat at 63 to 68 after every
+  shot against a field capacity of 54. It also follows on a zone watering without its probe.
+- **Everything under field capacity moves with it.** When the probe moves field capacity by a point or more, the P1
+  target, the P2 re-water point and the rescue (P3 emergency) floor move by the same points, so the dryback under
+  full stays the size it was set. P0 and the overnight dryback are percentages of the day's peak and follow by
+  themselves. Zone 2: field capacity 54 to 68, P1 target 52 to 65.5, re-water 27.5 to 41.5, rescue 20 to 34.
+
+### 🔧 Technical notes
+
+- Engine (#37, both copies): `ZoneSnapshot.backed_up`. The capped EC corrections (`p0_ec_flush`, `p1_flush`,
+  `p2_dilute`) need dilutive feed and `not backed_up`; the cap-exempt `flush_high_ec` and `p2_rescue` keep
+  `vwc < field_capacity - 2`. A dilutive zone that reads full falls through to the capped rules instead of the early
+  BLOCK return. In P2, a rescue that cannot fire no longer skips the dilute.
+- Controller (#37): the CS-310 hold also passes `backed_up=True`. Catalog text for CS-310 and CS-311, ERROR_CODES.md
+  and the dashboard bundles follow.
+- Controller (#38): `auto_setpoints.track_full` (learner keys `full_date`, `full_day`, `full_prev`) is fed every loop
+  from the probe, before Jev's probe judge can set it aside. `field_capacity(target, seen)` is
+  `max(target + 2, seen)` within 40 to 90, written by the learner pass and, for blind zones, by `_follow_fc`. Until
+  anything is tracked, the last `plateau_hist` value seeds it. When `seen` (not the target + 2 floor) moves field
+  capacity by `FC_SHIFT_MIN` (1 point) or more, the P1 target, `p2_vwc_threshold` and `p3_emergency_vwc_threshold`
+  move by the same points (never above the learner's peak, nor within 2 of field capacity; nothing but field
+  capacity when the ladder is or would be inverted), and the learner's `day_ceiling` and `p1_entry` move with the
+  target so its brake does not pull it back. Jev's bridge re-centres the Setpoints judge's range on the moved
+  threshold.
+- State file: three new learner keys. A 3.9.0 file loads with them empty; 3.9.0 ignores them after a rollback.
+
 ## [3.9.0] - 2026-10-05
 
 Pair: **controller 3.9.0**. Class **C3**. Eight pull requests, merged into `testing` together at the owner's
