@@ -3955,9 +3955,10 @@ class Controller:
                 continue
             room._blind_since.pop(zone, None)
             snaps[zone] = snap
-            try:  # CS-310: never pour the daily minimum into a table that isn't draining
+            try:  # CS-310: never pour the daily minimum, or an EC flush, into a table that isn't draining
                 if self._watch_backup(room, zone, snap, now):
                     p = params[zone] = dataclasses.replace(p, min_daily_volume=0.0)
+                    snap = snaps[zone] = dataclasses.replace(snap, backed_up=True)
             except Exception as e:
                 log("backup watch error", room.slug, zone, e)
             if snap.ec is None:

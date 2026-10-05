@@ -105,6 +105,20 @@ def test_a_backed_up_zone_gets_no_daily_minimum(rig):  # noqa: F811
     assert pub[1]["fire"] and pub[1]["reason"].kind == "min_daily"  # the same zone, not held
 
 
+def test_a_backed_up_zone_gets_no_ec_flush(rig):  # noqa: F811
+    # Flushes no longer wait for the reading to drop under field capacity - 2 (5 Oct 2026, F2 Zone 2 read 70 against
+    # 54 and got none); what stops one is this hold: a flush poured into a table that isn't draining floods it.
+    c, fake, room = rig
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        probe(fake, zone, 50, ec=10.0)  # over max_ec 9, feed 3: the anti-lockout flush is due
+        room.state[zone].update(phase="P2", last_shot=now - timedelta(minutes=60), last_daily_reset=date(2026, 9, 23))
+    room._backed_up = {1: now}
+    pub = c._loop_room(room, now)
+    assert not pub[1]["fire"] and "table not draining" in pub[1]["reason"]
+    assert pub[2]["fire"] and pub[2]["reason"].kind == "flush_high_ec"  # the zone that drains is flushed
+
+
 # ------------------------------------------------------------------ CS-311, the sump pump standing still
 SUMP = "sensor.f2_sump_pump_power"
 
