@@ -145,7 +145,8 @@ def test_the_p0_ec_flush_is_gated_like_every_other_flush():
     base = dict(phase="P0", vwc=50, ec=6, feed_ec=3, dryback_pct=5)
     assert decide(S(**base), p)[2] is True
     assert decide(S(**{**base, "feed_ec": 8}), p)[2] is False  # feed saltier than the slab
-    assert decide(S(**{**base, "vwc": 69}), p)[2] is False  # slab already full
+    assert decide(S(**{**base, "vwc": 69}), p)[2] is True  # a full slab is where a flush works
+    assert decide(S(**{**base, "backed_up": True}), p)[2] is False  # the table is not draining
     assert decide(S(**{**base, "minutes_since_shot": 3}), p)[2] is False  # a flush just went in
 
 

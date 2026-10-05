@@ -196,15 +196,16 @@ def test_anti_lockout_flush_any_phase():
         )
         is True
     )
-    # BLOCK when the flush can't help: feed not dilutive, or slab saturated.
+    # BLOCK when the flush can't help: feed not dilutive, or a table that is not draining.
     assert (
         fire(S(phase="P2", vwc=50, ec=10, feed_ec=10), P(max_ec=9, field_capacity=70))
         is False
     )
-    assert (
-        fire(S(phase="P2", vwc=69, ec=10, feed_ec=3), P(max_ec=9, field_capacity=70))
-        is False
-    )
+    blocked = decide(S(phase="P2", vwc=50, ec=10, feed_ec=3, backed_up=True), P(max_ec=9, field_capacity=70))
+    assert blocked[2] is False and "table not draining" in blocked[4]
+    # A slab reading full gets no cap-exempt anti-lockout flush, but the capped dilute still flushes it.
+    full = decide(S(phase="P2", vwc=69, ec=10, feed_ec=3), P(max_ec=9, field_capacity=70))
+    assert full[2] is True and full[4].kind == "p2_dilute" and full[4].cap_exempt is False
 
 
 def test_p2_rescue_flush_not_blocked():
@@ -289,12 +290,18 @@ def test_f6_p1_ceiling_ec_flush_gate():
         P(**base),
     )
     assert s[2] is False
-    # (c) slab full (vwc >= fc-2) even with dilutive feed -> must NOT flush
+    # (c) slab full (vwc >= fc-2) with dilutive feed -> flushes: the runoff carries the salt out
     full = decide(
         S(phase="P1", vwc=69, ec=8, ec_smooth=8, feed_ec=3, minutes_since_shot=20),
         P(**base),
     )
-    assert full[2] is False
+    assert full[2] is True and full[4].kind == "p1_flush"
+    # (c') ...but not into a table that is not draining
+    stuck = decide(
+        S(phase="P1", vwc=69, ec=8, ec_smooth=8, feed_ec=3, minutes_since_shot=20, backed_up=True),
+        P(**base),
+    )
+    assert stuck[2] is False
     # (d) dilutive feed + slab room -> flush fires and stays P1
     y = decide(
         S(phase="P1", vwc=66, ec=8, ec_smooth=8, feed_ec=3, minutes_since_shot=20),

@@ -119,6 +119,8 @@ class ZoneSnapshot:
     #                               the watchdog and the minimum-daily floor. Phases still move.
     hours_since_lights_on: float | None = None  # hours since this photoperiod's lights-on; None = unknown, and the
     #                                             min-daily floor then front-stacks (fires until met, as before).
+    backed_up: bool = False  # the caller saw this zone's moisture rise with no water going in (CS-310): its table is
+    #                          not draining, so no EC correction pours more water into it.
 
 
 def floor_share(s: ZoneSnapshot, p: ZoneParams) -> float:
@@ -253,14 +255,21 @@ def decide(s: ZoneSnapshot, p: ZoneParams):
     ec_gap = max(p.p2_min_interval_min, EC_SETTLE_MIN) if settled else p.p2_min_interval_min
     ec_gap_ok = s.minutes_since_shot >= ec_gap
     settle_ok = not settled or s.minutes_since_shot >= EC_SETTLE_MIN
-    # an EC correction also needs water that can dilute: feed below pore EC, and room left in the slab
-    flush_ok = ec_known and s.feed_ec < ec and s.vwc < p.field_capacity - 2.0
+    # An EC correction needs water that can dilute (feed below pore EC) and a table that drains (not backed up):
+    # the runoff carries the salt out, so a full slab is where a flush works. The capped corrections (P0 flush,
+    # P1 flush, P2 dilute) need nothing more: the daily budget and the settle gap bound them. The cap-exempt
+    # flushes (anti-lockout, P2 rescue) also need the reading under field capacity - 2, so that a probe reading
+    # above that setpoint cannot run them outside the budget for ever (5 Oct 2026: F2 zone 2 read 70 against a
+    # field capacity of 54, and that test had stopped every flush while its pore EC sat at 7).
+    dilutive = ec_known and s.feed_ec < ec and not s.backed_up
+    flush_ok = dilutive and s.vwc < p.field_capacity - 2.0
 
     # PRIORITY 1 — ANTI-LOCKOUT: high pore EC FLUSHES in ANY phase, never locks out. While steering is held
     # the flush waits too (it steers to max_ec, a setpoint the plan manages); the blocks below still apply.
-    if ec_known and ec >= p.max_ec:
-        if not flush_ok:
-            why = "feed not dilutive" if s.feed_ec >= ec else "slab saturated"
+    # A slab that reads full gets no anti-lockout flush; the capped corrections below still flush it.
+    if ec_known and ec >= p.max_ec and (flush_ok or not dilutive):
+        if not dilutive:
+            why = "table not draining" if s.backed_up else "feed not dilutive"
             reason = treason + (" | " if treason else "") + f"BLOCK high EC {ec:.1f} — {why} (self-clears)"
             return phase, round(p2_thr, 1), False, 0.0, Reason(reason, "block_high_ec")
         if ec_gap_ok:
@@ -279,11 +288,11 @@ def decide(s: ZoneSnapshot, p: ZoneParams):
         if phase == "P0":
             # P0 is the morning dryback: it fires only a genuine EC flush, gated like every other flush.
             if (ec_known and p.ec_target_p0 > 0 and ec / p.ec_target_p0 > 2.5
-                    and flush_ok and ec_gap_ok):
+                    and dilutive and ec_gap_ok):
                 fire, size, ir, kind = True, 10.0, f"P0 EC flush {ec:.1f}", "p0_ec_flush"
         elif phase == "P1":
             p1_ceiling = min(p.p1_target, p.field_capacity)
-            ec_high = ec_known and ec > p.ec_target_p1 * 1.15 and flush_ok
+            ec_high = ec_known and ec > p.ec_target_p1 * 1.15 and dilutive
             ramp = s.vwc < p1_ceiling
             if s.minutes_since_shot >= p.p1_time_between_min and (ramp or (ec_high and settle_ok)):
                 raw = min(p.p1_initial + p.p1_incr * s.shot_count,
@@ -294,12 +303,9 @@ def decide(s: ZoneSnapshot, p: ZoneParams):
                     ir, kind = f"P1 flush/runoff EC {ec:.1f} (at ceiling {p1_ceiling:.0f})", "p1_flush"
                 fire, size = True, ec_adjust(raw, ec, p.ec_target_p1)
         elif phase == "P2":
-            if ec_known and ec >= p.max_ec - 1.0:
-                if flush_ok and ec_gap_ok:
-                    fire, size, ir, kind = True, p.p2_shot_size * 1.5, f"P2 rescue flush EC {ec:.1f}", "p2_rescue"
-                elif s.vwc < p2_thr:
-                    fire, size, ir, kind = True, ec_adjust(p.p2_shot_size, ec, p.ec_target_p2), f"P2 top-up VWC {s.vwc:.0f}<{p2_thr:.0f}", "p2_topup"
-            elif ec_known and p.ec_target_p2 > 0 and ec / p.ec_target_p2 > 1.2 and flush_ok and ec_gap_ok:
+            if ec_known and ec >= p.max_ec - 1.0 and flush_ok and ec_gap_ok:
+                fire, size, ir, kind = True, p.p2_shot_size * 1.5, f"P2 rescue flush EC {ec:.1f}", "p2_rescue"
+            elif ec_known and p.ec_target_p2 > 0 and ec / p.ec_target_p2 > 1.2 and dilutive and ec_gap_ok:
                 fire, size, ir, kind = True, p.p2_shot_size * 1.5, f"P2 dilute EC {ec:.1f}", "p2_dilute"
             elif s.vwc < p2_thr:
                 fire, size, ir, kind = True, ec_adjust(p.p2_shot_size, ec, p.ec_target_p2), f"P2 top-up VWC {s.vwc:.0f}<{p2_thr:.0f}", "p2_topup"
