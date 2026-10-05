@@ -1901,8 +1901,8 @@ class Controller:
             return False
         st = room.state[zone]
         seen = self._fc_seen(st)
-        if seen is None:
-            return False
+        if seen is None or seen < p.p1_target + 2.05:
+            return False  # the sensor is not above the target + 2: nothing to follow, the learner keeps field capacity
         fc = auto_setpoints.field_capacity(p.p1_target, seen)
         delta = round(fc - p.field_capacity, 1)
         if abs(delta) < 0.1:

@@ -183,13 +183,12 @@ def test_a_small_move_or_one_from_the_target_floor_moves_field_capacity_only(rig
     fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")
     fake.set_state("sensor.crop_steering_vwc_zone_2", "unavailable")
     room.state[1]["learn"]["full_prev"] = 54.6  # 0.6 over: field capacity only
-    fake.set_state("number.crop_steering_zone_2_field_capacity", "50")  # under the target + 2 floor
-    room.state[2]["learn"]["full_prev"] = 45.0  # the sensor is under the floor: the floor sets it, nothing moves
+    fake.set_state("number.crop_steering_zone_2_field_capacity", "56")
+    room.state[2]["learn"]["full_prev"] = 45.0  # zone 1 on 6 Oct: the sensor under the target + 2, nothing to follow
     c._loop_room(room, now)
     assert _writes(fake, 1) == {"field_capacity": [54.6], "p1_target_vwc": [], "p2_vwc_threshold": [],
                                 "p3_emergency_vwc_threshold": []}
-    assert _writes(fake, 2) == {"field_capacity": [54.0], "p1_target_vwc": [], "p2_vwc_threshold": [],
-                                "p3_emergency_vwc_threshold": []}
+    assert _writes(fake, 2) == {s: [] for s in LADDER}  # field capacity is not pulled down to the target + 2
 
 
 def test_a_move_that_would_invert_the_ladder_moves_field_capacity_only(rig):  # noqa: F811
