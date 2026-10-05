@@ -19,6 +19,13 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.11.0 - 2026-10-06
+
+- Each morning a zone's P1 target is its highest reading of the day before, with no limit on how far it moves.
+- The morning ramp now goes to the target, gives one more shot, and stops only when a shot no longer raises the reading.
+- Field capacity, the re-water point and the rescue floor move together with the highest reading.
+- Bug fixes and improvements.
+
 ## 3.10.0 - 2026-10-06
 
 - A zone whose pore EC runs high is now flushed whenever its table drains, even when its probe reads very wet.

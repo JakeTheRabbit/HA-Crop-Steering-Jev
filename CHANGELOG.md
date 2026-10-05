@@ -9,6 +9,42 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.0] - 2026-10-06
+
+Pair: **controller 3.11.0**. Class **C3**. One pull request, #40, the owner's rules for a zone's P1 and its setpoints
+(6 October 2026): the P1 target is the highest reading of the grow-day before, field capacity rises with the sensor
+and what sits under it moves with it, the 2-points-a-day limit is gone, and P1 ends when a shot at the target no
+longer raises the zone's highest reading. The engine and the controller change; the integration carries the version
+and What's new.
+
+### 🌱 In plain English
+
+- **Tomorrow's P1 target is today's highest reading.** At lights-on the controller keeps the grow-day's highest VWC
+  reading, and that is the new day's P1 target, however far it is from the old one. The limit of 2 points a day is
+  gone.
+- **Field capacity rises with the sensor.** It is the higher of today's and yesterday's highest readings, so it goes
+  up the same day the probe reads higher. When it moves by a point or more, the P2 re-water point and the rescue
+  floor move by the same points.
+- **P1 ends when the slab stops taking water.** The ramp runs to the P1 target, then gives one more shot. If that
+  shot did not raise the zone's highest reading by half a point, the slab is full and the zone goes to P2. If it
+  did, another shot follows, until one does not. The maximum P1 shots still cap it.
+- **Pore EC no longer holds P1 open.** P2's dilute shots correct a high pore EC.
+
+### 🔧 Technical notes
+
+- Engine (#40, both copies): `ZoneSnapshot.p1_reached`, `p1_peak_before_shot`, `p1_extra_shots`; `P1_RISE_PTS`
+  0.5. P1 fires `p1_ramp` below the ceiling and `p1_extra` (cap-exempt) at or over it, and hands over at the
+  maximum shots, or once an extra shot is in, a full P1 interval has passed and the peak rose by less than 0.5
+  ("P1 full: ..."). The EC exits, the P1 flush and the budget-spent exit are gone.
+- Controller (#40): zone key `peak_prev` (kept at lights-on); `_vwc_maxima` / `_follow_fc` write field capacity =
+  max(today's peak, `peak_prev`) and the P1 target = `peak_prev`, and move the re-water threshold and rescue floor
+  with field capacity. The learner writes neither, its 2-point limit (`DAY_RISE_PTS`, `day_ceiling`, `p1_entry`,
+  `stale_target`) and 3.10.0's settled-reading tracker are removed, and so is `p1_ec_gate`. The P1 rule's state
+  (`p1_reached`, `p1_peak_before`, `p1_extra`) is latched, counted and persisted. A zone on the blind path keeps its peak at lights-on too. Until the first lights-on
+  after the update, the grow-day in progress stands in for the day before only once its P1 is over.
+- State file: four new zone keys; a 3.10.0 file loads with them empty and its retired learner keys are dropped;
+  3.10.0 ignores the new keys after a rollback.
+
 ## [3.10.0] - 2026-10-06
 
 Pair: **controller 3.10.0**. Class **C3**. Two pull requests, both asked for by the owner for F2 zone 2 on 5 and 6
