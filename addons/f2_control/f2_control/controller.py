@@ -350,8 +350,8 @@ CRITICAL_CODES = frozenset({"CS-201", "CS-202", "CS-203", "CS-204", "CS-207", "C
 # filling from a stopped sump, 28 Sep 21:19 and 29 Sep 12:09) and nothing else. Cleared after BACKUP_CLEAR_MIN
 # without a rise.
 BACKUP_RISE_PTS, BACKUP_WINDOW_MIN, BACKUP_GRACE_MIN, BACKUP_CLEAR_MIN = 3.0, 60.0, 45.0, 60.0
-# Field capacity follows the sensor (_follow_fc). When the sensor moves it by this many points or more, the P1 target,
-# the P2 re-water threshold and the rescue (P3 emergency) floor move with it; a smaller move is field capacity only.
+# Field capacity follows the zone's highest readings (_follow_fc). When it moves by this many points or more, the P2
+# re-water threshold and the rescue (P3 emergency) floor move with it; a smaller move is field capacity only.
 FC_SHIFT_MIN = 1.0
 # CS-311: the sump pump a room drains to (option sump_power_sensor) drawing no power for SUMP_SILENT_H while the
 # room is on. F2's ran every 1 to 1.5 hours, day and night, 22-28 Sep 2026 (its longest gap 2.37 h) and then not
@@ -839,6 +839,10 @@ class Controller:
             "water_history": None,
             "water_history_legacy_excluded_l": 0.0,
             "learn": auto_setpoints.fresh(),
+            "peak_prev": None,  # the highest VWC of the grow-day before, kept at lights-on (_vwc_maxima)
+            "p1_reached": False,  # the P1 rule (core.decide): this P1 has read at or over its target
+            "p1_peak_before": None,  # ...the zone's peak right before its last P1 shot
+            "p1_extra": 0,  # ...and the P1 shots fired since the target was reached
             **zone_history.fresh(),
         }
 
@@ -904,6 +908,22 @@ class Controller:
             excluded = float(d.get("water_history_legacy_excluded_l", 0.0))
             if math.isfinite(excluded) and excluded >= 0:
                 s["water_history_legacy_excluded_l"] = excluded
+        except (TypeError, ValueError):
+            pass
+        if isinstance(d.get("p1_reached"), bool):  # the P1 rule's state, absent before 3.11.0
+            s["p1_reached"] = d["p1_reached"]
+        try:
+            before = float(d.get("p1_peak_before"))
+            if math.isfinite(before) and 0.0 < before <= 100.0:
+                s["p1_peak_before"] = before
+        except (TypeError, ValueError):
+            pass
+        if isinstance(d.get("p1_extra"), int) and not isinstance(d.get("p1_extra"), bool) and 0 <= d["p1_extra"] <= 100:
+            s["p1_extra"] = d["p1_extra"]
+        try:  # absent before 3.11.0: None, and the grow-day in progress stands in (_vwc_maxima)
+            prev = float(d.get("peak_prev"))
+            if math.isfinite(prev) and 0.0 < prev <= 100.0:
+                s["peak_prev"] = prev
         except (TypeError, ValueError):
             pass
         s.update(zone_history.restore(d))
@@ -1245,6 +1265,10 @@ class Controller:
         return {
             "phase": s.get("phase"),
             "peak": s.get("peak"),
+            "peak_prev": s.get("peak_prev"),
+            "p1_reached": bool(s.get("p1_reached")),
+            "p1_peak_before": s.get("p1_peak_before"),
+            "p1_extra": int(s.get("p1_extra") or 0),
             "shots": s.get("shots"),
             "daily_vol": s.get("daily_vol"),
             "water_history": s.get("water_history"),
@@ -1709,6 +1733,10 @@ class Controller:
             uptime_min=(now - self._start).total_seconds() / 60.0,
             feed_ec=(feed_ec if feed_ec is not None else 3.0),
             new_grow_day=new_grow_day,
+            # the P1 rule (core.decide): reached the target, the peak before the last shot, shots since reaching it
+            p1_reached=bool(st.get("p1_reached")),
+            p1_peak_before_shot=st.get("p1_peak_before"),
+            p1_extra_shots=int(st.get("p1_extra") or 0),
             ec_settled=ec_settled,
             # a held plan holds the steering; decide() then fires only the rescues (PLAN_HOLD_EXEMPT)
             steering_held=bool(strategy_block(getattr(room, "strategy_snapshot", None), zone)),
@@ -1773,8 +1801,7 @@ class Controller:
         ec_rules = snap.ec if ec_rules is None else ec_rules
         auto_setpoints.new_day(learn, self._grow_day_start(room, now).isoformat(), snap.vwc)
         auto_setpoints.tick(learn, snap.vwc, st["phase"], now.timestamp(), lights_on,
-                            snap.dryback_rate, self._minutes_since_shot(st, now),
-                            ceiling=min(p.p1_target, p.field_capacity))  # the engine's own P1 ceiling
+                            snap.dryback_rate, self._minutes_since_shot(st, now))
         enabled = self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False)
         planned = bool(getattr(room, "strategy_required", False))
         jev_state = room.__dict__.setdefault("_jev_state", {})
@@ -1841,22 +1868,21 @@ class Controller:
                 start_vwc=learn["ramp_start"] if learn["ramp_start"] is not None else snap.vwc,
             )
             if self._follow_fc(room, zone, p, now):
-                pass  # field capacity (and what sits under it) moved this pass; the learner acts on the next one
+                pass  # the setpoints moved with the zone's highest readings; the learner acts on the next pass
             else:
-                want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged,
-                                             full=self._fc_seen(st))
+                want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged)
+                for suffix in ("p1_target_vwc", "field_capacity"):  # the zone's highest readings set these
+                    want.pop(suffix, None)
                 for suffix, value, _why in setpoint_supervisor.writes(current, want):
                     self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
-            if st["phase"] == "P1" and learn["outcome"] == "plateau":
-                gate = auto_setpoints.p1_ec_gate(ec_rules, p.ec_target_p1, p.ec_target_p2)
-                if gate is not None:  # let the hand-over through; see p1_ec_gate
-                    mode = "veg" if self._veg(room, zone) else "gen"
-                    self._auto_write(room, zone, f"ec_target_{mode}_p1", p.ec_target_p1, gate, learn, now)
         state, attrs = auto_setpoints.status(learn, enabled)
         if enabled and planned:
             state, attrs["frozen_reason"] = "frozen", "an armed grow plan owns this room's targets"
         who = dict.fromkeys(auto_setpoints.MANAGED, "Auto setpoints learner")
-        who["p3_emergency_vwc_threshold"] += ", only to keep it 3 points under the re-water threshold"
+        who["p1_target_vwc"] = "the zone's highest reading of the grow-day before"
+        who["field_capacity"] = "the zone's highest reading of this grow-day or the one before"
+        who["p3_emergency_vwc_threshold"] += (", only to keep it 3 points under the re-water threshold; "
+                                              "moves with field capacity")
         who.update(dict.fromkeys(judged, "Jev's Setpoints judge, one notch a night"))
         if jev != "disabled":  # the old per-hour judge, which only ever runs without the Setpoints judge
             who.update(dict.fromkeys(auto_setpoints.JEV_MANAGED, "Jev's hourly P2 check"))
@@ -1869,70 +1895,70 @@ class Controller:
         )
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
 
-    def _fc_seen(self, st):
-        """The zone's measured full level (auto_setpoints.measured_full). Until a whole grow-day has been tracked (the
-        update that brings this in, at night, sees only the night's readings), the plateau its last grow-day recorded
-        stands in for the grow-day before: the sensor's own reading either way."""
-        learn = st.get("learn") if isinstance(st.get("learn"), dict) else None
-        seen = auto_setpoints.measured_full(learn) if learn else None
-        if learn is None or learn.get("full_prev") is None:
-            hist = [e for e in st.get("plateau_hist") or [] if isinstance(e, dict) and e.get("value")]
-            seed = float(hist[-1]["value"]) if hist else None
-            if seed is not None:
-                seen = seed if seen is None else max(seen, seed)
-        return seen
+    def _vwc_maxima(self, st):
+        """-> (field capacity, P1 target) from the zone's highest readings, or (None, None) with no reading yet.
+
+        `peak` is the highest VWC since this grow-day's lights-on (the engine's own daily peak); `peak_prev` is the
+        grow-day before's, kept at lights-on. Field capacity is the higher of the two. The P1 target is the day
+        before's: until the first lights-on that keeps it (the update), the grow-day in progress stands in for it,
+        but only once its P1 is over. In P0 or P1 its peak is part of a morning and would pull both down."""
+        today = st.get("peak") or 0.0
+        prev = st.get("peak_prev")
+        if prev is None or prev <= 0.0:
+            if today <= 0.0 or st.get("phase") in ("P0", "P1"):
+                return None, None
+            return today, today
+        return max(today, prev), prev
 
     def _follow_fc(self, room, zone, p, now):
-        """Field capacity follows the sensor, and what sits under it moves with it -> True when anything was written.
+        """The zone's setpoints follow its own highest readings -> True when anything was written.
 
-        The owner, 6 Oct 2026: "the FC needs to increase as the sensor does", "the p2 dryback and shit needs to move
-        as well to be in line with the new FC", "the rescue floor should increase too", "the system needs to do this
-        shit automatically". Field capacity is auto_setpoints.field_capacity: the zone's measured full level, never
-        under the P1 target + 2. When the measured level (not that floor) moves it by FC_SHIFT_MIN or more, the P1
-        target, the P2 re-water threshold and the rescue floor move by the same points, so the gaps chosen under full
-        are kept. The learner's brake moves with them (its day ceiling and P1 entry), so it does not pull the target
-        back, and the target never goes above the peak the learner has seen nor within 2 of field capacity. Jev's
-        Setpoints judge takes a moved threshold as the new centre of its range (jev_bridge). A move that would invert
-        the ladder (rescue + 3 <= threshold < P1 target <= field capacity) moves field capacity only. Runs for every
-        zone, its probe trusted or not, under the room's Auto setpoints switch and never while a grow plan owns it."""
+        The owner, 6 Oct 2026: "the P1 target should be the VWC MAX the previous days actual field capacity, the
+        highest value that the VWC got to during the day is the next days p1 target", "the FC needs to increase as
+        the sensor does", "the p2 dryback and shit needs to move as well to be in line with the new FC", "the rescue
+        floor should increase too", "the system needs to do this shit automatically". So:
+          - field capacity = the highest reading of this grow-day or the one before (_vwc_maxima);
+          - the P1 target = the highest reading of the grow-day before, with no limit on how far it moves;
+          - when field capacity moves by FC_SHIFT_MIN or more, the P2 re-water threshold and the rescue (P3
+            emergency) floor move by the same points, so the dryback under full keeps its size. Jev's Setpoints judge
+            takes a moved threshold as the new centre of its range (jev_bridge).
+        Nothing is written that would leave the ladder inverted (rescue + 3 <= threshold < P1 target <= field
+        capacity): then field capacity alone moves if that is valid, else nothing. Within the engine's bounds. Runs for
+        every zone, its probe trusted or not, under the room's Auto setpoints switch, never while a grow plan owns it."""
         if not self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False):
             return False
         if getattr(room, "strategy_required", False):
             return False
         st = room.state[zone]
-        seen = self._fc_seen(st)
-        if seen is None or seen < p.p1_target + 2.05:
-            return False  # the sensor is not above the target + 2: nothing to follow, the learner keeps field capacity
-        fc = auto_setpoints.field_capacity(p.p1_target, seen)
+        seen, yday = self._vwc_maxima(st)
+        if seen is None:
+            return False
+        lo_hi = setpoint_supervisor.BOUNDS
+        fc = round(max(lo_hi["field_capacity"][0], min(lo_hi["field_capacity"][1], seen)), 1)
+        target = round(max(lo_hi["p1_target_vwc"][0], min(lo_hi["p1_target_vwc"][1], yday, fc)), 1)
+        thr = self._zone_num(room, zone, "p2_vwc_threshold", None, optional=True)
+        if thr is None:
+            return False
         delta = round(fc - p.field_capacity, 1)
-        if abs(delta) < 0.1:
+        new_thr, rescue = thr, p.p3_emergency_floor
+        if abs(delta) >= FC_SHIFT_MIN:
+            new_thr = round(max(lo_hi["p2_vwc_threshold"][0], min(lo_hi["p2_vwc_threshold"][1], thr + delta)), 1)
+            rescue = round(max(lo_hi["p3_emergency_vwc_threshold"][0],
+                               min(lo_hi["p3_emergency_vwc_threshold"][1], p.p3_emergency_floor + delta)), 1)
+        if rescue + 3.0 <= new_thr < target <= fc:
+            writes = [("field_capacity", p.field_capacity, fc), ("p1_target_vwc", p.p1_target, target),
+                      ("p2_vwc_threshold", thr, new_thr), ("p3_emergency_vwc_threshold", p.p3_emergency_floor, rescue)]
+        elif p.p3_emergency_floor + 3.0 <= thr < p.p1_target <= fc:
+            writes = [("field_capacity", p.field_capacity, fc)]
+        else:
             return False
         learn = st["learn"] if isinstance(st.get("learn"), dict) else {}
-        writes = [("field_capacity", p.field_capacity, fc)]
-        thr = self._zone_num(room, zone, "p2_vwc_threshold", None, optional=True)
-        ladder = thr is not None and p.p3_emergency_floor + 3.0 <= thr < p.p1_target <= p.field_capacity
-        if seen >= p.p1_target + 2.05 and abs(delta) >= FC_SHIFT_MIN and ladder:  # never "repairs" a ladder
-            bounds = setpoint_supervisor.BOUNDS
-            peak = learn.get("peak")
-            target = p.p1_target + delta
-            if peak is not None:
-                target = min(target, peak + learn.get("peak_adj", 0.0))
-            target = round(max(bounds["p1_target_vwc"][0], min(fc - 2.0, target)), 1)
-            new_thr = round(max(bounds["p2_vwc_threshold"][0], min(target - 2.0, thr + delta)), 1)
-            rescue = round(max(bounds["p3_emergency_vwc_threshold"][0],
-                               min(new_thr - 3.0, p.p3_emergency_floor + delta)), 1)
-            if (rescue + 3.0 <= new_thr < target <= fc and new_thr <= bounds["p2_vwc_threshold"][1]
-                    and rescue <= bounds["p3_emergency_vwc_threshold"][1] and target <= bounds["p1_target_vwc"][1]):
-                writes += [("p1_target_vwc", p.p1_target, target), ("p2_vwc_threshold", thr, new_thr),
-                           ("p3_emergency_vwc_threshold", p.p3_emergency_floor, rescue)]
-                moved = target - p.p1_target
-                for key in ("day_ceiling", "p1_entry"):  # the brake counts from the moved scale
-                    if learn.get(key) is not None:
-                        learn[key] = round(learn[key] + moved, 2)
+        wrote = False
         for suffix, old, value in writes:
             if abs(value - old) >= 0.05:
-                self._auto_write(room, zone, suffix, old, value, learn, now, by="auto (field capacity)")
-        return True
+                self._auto_write(room, zone, suffix, old, value, learn, now, by="auto (highest reading)")
+                wrote = True
+        return wrote
 
     def _auto_write(self, room, zone, suffix, old, value, learn, now, by="auto"):
         entity = f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}"
@@ -2865,6 +2891,10 @@ class Controller:
                 log(f"[{room.slug}] Z{zone} {words}")
         except Exception as e:  # a record is never worth a delivered shot the counters miss
             log("zone history error", room.slug, zone, e)
+        if st.get("phase") == "P1":  # the P1 rule (core.decide): did this shot raise the peak?
+            st["p1_peak_before"] = st.get("peak")
+            if st.get("p1_reached"):
+                st["p1_extra"] = int(st.get("p1_extra") or 0) + 1
         st["shots"] += 1
         st["last_shot"] = now
         st["last_shot_is_anchor"] = False  # water was delivered: this one is an irrigation
@@ -2879,6 +2909,8 @@ class Controller:
     def _record_phase(self, room, zone, st, was, new, now, how):
         """Keep the zone's history on a phase change by anyone (the engine, a Jev judge, the operator's Set Phase):
         P1 handing over to P2 is the day's plateau. A history error never stops the phase change."""
+        if new == "P1":  # the P1 rule (core.decide) starts again
+            st["p1_reached"], st["p1_peak_before"], st["p1_extra"] = False, None, 0
         try:
             entry = zone_history.phase_changed(st, was, new, day=self._grow_day_start(room, now).isoformat(), how=how)
             if entry is not None:
@@ -3860,7 +3892,9 @@ class Controller:
             new_phase, why = "P0", "a new grow-day (no moisture reading)"
         if new_phase and new_phase != st["phase"]:
             if new_phase == "P0":
-                st["daily_vol"], st["shots"] = 0.0, 0
+                if (st.get("peak") or 0.0) > 0.0:  # the grow-day ending: tomorrow's P1 target (_vwc_maxima)
+                    st["peak_prev"] = st["peak"]
+                st["daily_vol"], st["shots"], st["peak"] = 0.0, 0, 0.0  # _snapshot takes the peak from the next reading
                 st["ec_offset"], st["last_ec_steer"] = 0.0, None
                 st["ec_integral"], st["ec_prev_err"] = 0.0, 0.0
                 st["last_daily_reset"] = gds
@@ -4007,14 +4041,6 @@ class Controller:
                     self._save_state()
                 except Exception as e:  # a record never stops the room being decided and watered
                     log("zone history error", room.slug, zone, e)
-            if snap is not None:  # field capacity follows the sensor, read before any judge sets the probe aside
-                try:
-                    if not isinstance(st.get("learn"), dict):
-                        st["learn"] = auto_setpoints.fresh()
-                    auto_setpoints.track_full(st["learn"], self._grow_day_start(room, now).isoformat(), snap.vwc,
-                                              self._minutes_since_shot(st, now))
-                except Exception as e:
-                    log("field capacity tracking error", room.slug, zone, e)
             jev_dirs = {}
             distrusted = room.__dict__.setdefault("_jev_distrusted", {})
             distrusted.pop(zone, None)
@@ -4035,6 +4061,8 @@ class Controller:
                 continue
             room._blind_since.pop(zone, None)
             snaps[zone] = snap
+            if st["phase"] == "P1" and snap.vwc >= min(p.p1_target, p.field_capacity):
+                st["p1_reached"] = True  # the P1 rule (core.decide): the target has been read this P1
             try:  # CS-310: never pour the daily minimum, or an EC flush, into a table that isn't draining
                 if self._watch_backup(room, zone, snap, now):
                     p = params[zone] = dataclasses.replace(p, min_daily_volume=0.0)
@@ -4068,6 +4096,8 @@ class Controller:
                 self._notify_event("phase", room, zone, st["phase"], new_phase, str(reason).split(" | ")[0])
                 self._record_phase(room, zone, st, st["phase"], new_phase, now, str(reason).split(" | ")[0])
                 if new_phase == "P0":
+                    if (st.get("peak") or 0.0) > 0.0:  # the grow-day ending: tomorrow's P1 target (_vwc_maxima)
+                        st["peak_prev"] = st["peak"]
                     st["daily_vol"], st["shots"], st["peak"] = 0.0, 0, snap.vwc
                     st["ec_offset"], st["last_ec_steer"] = 0.0, None
                     st["ec_integral"], st["ec_prev_err"] = (
@@ -4078,6 +4108,8 @@ class Controller:
                     room._vmax_wetup[zone] = []  # fresh wet-up curve for today's ramp
                 if new_phase == "P1":
                     st["shots"] = 0
+                    # entering P1 already at the target: the shot decide() fires on this tick is the extra shot
+                    st["p1_reached"] = snap.vwc >= min(p.p1_target, p.field_capacity)
                 st["phase"] = new_phase
                 st["last_phase_change"] = now
                 self._save_state()

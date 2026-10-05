@@ -65,15 +65,16 @@ def test_at_max_ec_a_table_that_is_not_draining_is_blocked_with_its_reason():
     assert fire is False and reason.kind == "block_high_ec" and "table not draining" in reason
 
 
-def test_p1_at_its_ceiling_keeps_flushing_while_pore_ec_is_high():
-    s = snap(phase="P1", vwc=68.0, shot_count=2, phase_minutes=70, minutes_since_shot=50, daily_vol=40.0,
-             hours_since_lights_on=2.0, hours_to_lights_off=10.0)
-    phase, _, fire, _, reason = decide(s, Z2())
-    assert phase == "P1" and fire is True and reason.kind == "p1_flush"
-    _, _, fire, _, reason = decide(snap(phase="P1", vwc=68.0, shot_count=2, phase_minutes=70, minutes_since_shot=50,
-                                        daily_vol=40.0, hours_since_lights_on=2.0, hours_to_lights_off=10.0,
-                                        backed_up=True), Z2())
-    assert not (fire and reason.kind == "p1_flush")
+def test_p1_at_its_ceiling_with_high_pore_ec_gets_its_extra_shot_and_p2_dilutes():
+    # P1 no longer flushes on pore EC: at its ceiling the zone gets its one extra shot (scaled up by the EC, as
+    # every P1 shot is), and once that shot no longer raises the peak, P2's dilute is what corrects the EC.
+    p1 = dict(phase="P1", vwc=68.0, shot_count=2, phase_minutes=70, minutes_since_shot=50, daily_vol=40.0,
+              hours_since_lights_on=2.0, hours_to_lights_off=10.0)
+    phase, _, fire, size, reason = decide(snap(**p1), Z2())
+    assert phase == "P1" and fire is True and reason.kind == "p1_extra" and "flush" not in reason
+    assert size == 7.6  # 2x the 3.8 ramp shot: pore EC 7.1 against a P1 target of 4.5
+    phase, _, fire, _, reason = decide(snap(**p1, p1_extra_shots=1, p1_peak_before_shot=71.7), Z2())
+    assert phase == "P2" and fire is True and reason.kind == "p2_dilute"
 
 
 def test_settled_ec_still_paces_the_dilute():

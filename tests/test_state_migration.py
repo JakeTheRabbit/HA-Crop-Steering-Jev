@@ -317,57 +317,61 @@ def test_the_anchor_flag_round_trips_and_junk_is_tolerated(tmp_path):
     )  # invalid metadata cannot establish that an old timestamp was an anchor
 
 
-def test_a_learned_zone_saved_before_the_ratchet_guard_loads_with_its_keys_empty(
-    tmp_path,
-):
-    """3.8.0's learner block has no day_ceiling, p1_entry or stale_target: everything it
-    learned loads as it was, and the guard counts from the first pass that runs."""
+def test_a_learned_zone_saved_by_3_10_0_loads_without_the_retired_limit_keys(tmp_path):
+    """3.9.0 and 3.10.0 saved the 2-points-a-day limit's keys (day_ceiling, p1_entry,
+    stale_target) and the settled-reading keys (full_date, full_day, full_prev) in the learner
+    block. The limit is gone (6 Oct 2026): those keys are dropped on load, everything else the
+    learner had learned loads as it was."""
     learned = {
         "peak": 65.54,
         "gain": 1.368,
-        "day_rate": 1.621,
-        "night_rate": 0.815,
-        "day_n": 8,
-        "night_n": 8,
-        "hold_days": 0,
-        "day": "2026-10-03",
+        "day": "2026-10-05",
         "outcome": "reached",
         "ramp": [{"pct": 2.0, "rise": 1.8, "settled": 47.9, "flat": False}],
     }
-    p = tmp_path / "state.json"
-    p.write_text(json.dumps({"default": {"2": {"learn": learned}}}), encoding="utf-8")
-    c = _make([2], p)
-    c._load_state()
-    learn = c.rooms[0].state[2]["learn"]
-    assert {k: learn[k] for k in learned} == learned
-    assert learn["day_ceiling"] is None and learn["p1_entry"] is None
-    assert learn["stale_target"] is None
-
-
-def test_a_learned_zone_saved_before_field_capacity_followed_the_sensor_loads_with_its_keys_empty(
-    tmp_path,
-):
-    """3.9.0's learner block has no full_date, full_day or full_prev: everything it learned loads
-    as it was, and the zone's measured full level is tracked from the first reading after.
-    """
-    learned = {
-        "peak": 65.54,
-        "day": "2026-10-05",
-        "outcome": "reached",
+    retired = {
         "day_ceiling": 50.0,
         "p1_entry": 48.1,
         "stale_target": False,
+        "full_date": "2026-10-05T10:00:00+13:00",
+        "full_day": 39.6,
+        "full_prev": None,
     }
     p = tmp_path / "state.json"
-    p.write_text(json.dumps({"default": {"2": {"learn": learned}}}), encoding="utf-8")
+    p.write_text(
+        json.dumps({"default": {"2": {"learn": {**learned, **retired}}}}),
+        encoding="utf-8",
+    )
     c = _make([2], p)
     c._load_state()
     learn = c.rooms[0].state[2]["learn"]
     assert {k: learn[k] for k in learned} == learned
+    assert not set(retired) & set(learn)
+
+
+def test_an_old_zone_loads_with_the_day_befores_peak_and_the_p1_rule_empty(tmp_path):
+    """Before 3.11.0 a zone kept no peak_prev (the grow-day before's highest reading, the next
+    P1 target) and no P1 rule state: it loads with them empty, its own peak as it was.
+    """
+    p = tmp_path / "state.json"
+    p.write_text(
+        json.dumps({"default": {"2": {"phase": "P3", "peak": 71.48, "shots": 7}}}),
+        encoding="utf-8",
+    )
+    c = _make([2], p)
+    c._load_state()
+    st = c.rooms[0].state[2]
+    assert (st["phase"], st["peak"], st["shots"]) == ("P3", 71.48, 7)
     assert (
-        learn["full_date"] is None
-        and learn["full_day"] is None
-        and learn["full_prev"] is None
+        st["peak_prev"],
+        st["p1_reached"],
+        st["p1_peak_before"],
+        st["p1_extra"],
+    ) == (
+        None,
+        False,
+        None,
+        0,
     )
 
 

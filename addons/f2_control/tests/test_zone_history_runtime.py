@@ -109,14 +109,15 @@ def test_a_probe_out_at_lights_off_still_opens_the_night(rig):
 def test_the_engine_handing_p1_over_records_the_plateau(rig):
     c, fake, room = rig
     now = Clock.now()
-    room.state[1].update(phase="P1", shots=6, last_shot=now - timedelta(minutes=16), last_daily_reset=now.date(),
-                         ec_settled=4.5, ec_settled_at=now - timedelta(hours=2))
+    # at its target, and the extra shot after it did not raise the peak (the owner's P1 rule, 6 Oct 2026)
+    room.state[1].update(phase="P1", shots=6, peak=61.0, p1_reached=True, p1_extra=1, p1_peak_before=61.0,
+                         last_shot=now - timedelta(minutes=16), last_daily_reset=now.date())
     _loop(c, fake, room, now, 61.0)
     st = room.state[1]
     assert st["phase"] == "P2"
     [entry] = st["plateau_hist"]
     assert (entry["date"], entry["value"], entry["shots"]) == ("2026-09-23", 61.0, 6)
-    assert entry["how"].startswith("P1 recovered 61>=60")
+    assert entry["how"].startswith("P1 full: the last shot raised the peak 0.0")
 
 
 def test_jevs_ramp_judge_handing_over_records_the_plateau(rig):
