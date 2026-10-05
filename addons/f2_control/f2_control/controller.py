@@ -1837,7 +1837,10 @@ class Controller:
                 p1_shot_pct=p.p1_initial, p1_gap_min=p.p1_time_between_min,
                 start_vwc=learn["ramp_start"] if learn["ramp_start"] is not None else snap.vwc,
             )
-            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged)
+            seen = self._fc_seen(st)
+            want = auto_setpoints.wanted(learn, current, snap.vwc, st["phase"], ctx, others=judged, full=seen)
+            if "field_capacity" not in want and seen is not None:  # the target is held today; FC still follows
+                want["field_capacity"] = auto_setpoints.field_capacity(p.p1_target, seen)
             for suffix, value, _why in setpoint_supervisor.writes(current, want):
                 self._auto_write(room, zone, suffix, current[suffix], value, learn, now)
             if st["phase"] == "P1" and learn["outcome"] == "plateau":
@@ -1861,6 +1864,32 @@ class Controller:
             managed=[number + s for s in who], managed_by={number + s: w for s, w in who.items()},
         )
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
+
+    def _fc_seen(self, st):
+        """The zone's measured full level (auto_setpoints.measured_full), or, before anything has been tracked (the
+        update that brings this in), the plateau its last grow-day recorded: the sensor's own reading either way."""
+        learn = st.get("learn") if isinstance(st.get("learn"), dict) else None
+        seen = auto_setpoints.measured_full(learn) if learn else None
+        if seen is None:
+            hist = [e for e in st.get("plateau_hist") or [] if isinstance(e, dict) and e.get("value")]
+            seen = float(hist[-1]["value"]) if hist else None
+        return seen
+
+    def _follow_fc(self, room, zone, p, now):
+        """A zone without a trusted probe (dead, or set aside by Jev) skips the learner, but its field capacity still
+        follows what the sensor has read, under the same switch and plan rules as the learner."""
+        if not self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False):
+            return
+        if getattr(room, "strategy_required", False):
+            return
+        st = room.state[zone]
+        seen = self._fc_seen(st)
+        if seen is None:
+            return
+        value = auto_setpoints.field_capacity(p.p1_target, seen)
+        if abs(value - p.field_capacity) >= 0.1:
+            learn = st["learn"] if isinstance(st.get("learn"), dict) else {}
+            self._auto_write(room, zone, "field_capacity", p.field_capacity, value, learn, now)
 
     def _auto_write(self, room, zone, suffix, old, value, learn, now, by="auto"):
         entity = f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}"
@@ -3935,6 +3964,14 @@ class Controller:
                     self._save_state()
                 except Exception as e:  # a record never stops the room being decided and watered
                     log("zone history error", room.slug, zone, e)
+            if snap is not None:  # field capacity follows the sensor, read before any judge sets the probe aside
+                try:
+                    if not isinstance(st.get("learn"), dict):
+                        st["learn"] = auto_setpoints.fresh()
+                    auto_setpoints.track_full(st["learn"], self._grow_day_start(room, now).isoformat(), snap.vwc,
+                                              self._minutes_since_shot(st, now))
+                except Exception as e:
+                    log("field capacity tracking error", room.slug, zone, e)
             jev_dirs = {}
             distrusted = room.__dict__.setdefault("_jev_distrusted", {})
             distrusted.pop(zone, None)
@@ -4067,6 +4104,10 @@ class Controller:
         for zone, p in blind:
             st = room.state[zone]
             self._publish_waiting_for(room, zone, None, p, now)  # no probe: nothing to compare
+            try:  # field capacity follows the sensor even while the zone waters without it
+                self._follow_fc(room, zone, p, now)
+            except Exception as e:
+                log("field capacity error", room.slug, zone, e)
             # A dead probe must NOT freeze the daily cycle: still honour the time-based
             # phase forces (lights-off -> P3, P3 -> P0 at the new photoperiod). Only the
             # VWC-driven transitions are paused while blind.

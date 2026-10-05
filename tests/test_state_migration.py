@@ -344,6 +344,33 @@ def test_a_learned_zone_saved_before_the_ratchet_guard_loads_with_its_keys_empty
     assert learn["stale_target"] is None
 
 
+def test_a_learned_zone_saved_before_field_capacity_followed_the_sensor_loads_with_its_keys_empty(
+    tmp_path,
+):
+    """3.9.0's learner block has no full_date, full_day or full_prev: everything it learned loads
+    as it was, and the zone's measured full level is tracked from the first reading after.
+    """
+    learned = {
+        "peak": 65.54,
+        "day": "2026-10-05",
+        "outcome": "reached",
+        "day_ceiling": 50.0,
+        "p1_entry": 48.1,
+        "stale_target": False,
+    }
+    p = tmp_path / "state.json"
+    p.write_text(json.dumps({"default": {"2": {"learn": learned}}}), encoding="utf-8")
+    c = _make([2], p)
+    c._load_state()
+    learn = c.rooms[0].state[2]["learn"]
+    assert {k: learn[k] for k in learned} == learned
+    assert (
+        learn["full_date"] is None
+        and learn["full_day"] is None
+        and learn["full_prev"] is None
+    )
+
+
 def test_an_old_file_without_history_loads_with_it_empty(tmp_path):
     """3.8.0 kept no plateau or night history: its file loads as it was, history empty."""
     p = tmp_path / "state.json"
