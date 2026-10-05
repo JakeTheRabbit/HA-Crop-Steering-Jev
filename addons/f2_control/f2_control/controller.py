@@ -1900,13 +1900,15 @@ class Controller:
 
         `peak` is the highest VWC since this grow-day's lights-on (the engine's own daily peak); `peak_prev` is the
         grow-day before's, kept at lights-on. Field capacity is the higher of the two. The P1 target is the day
-        before's: until the first lights-on that keeps it (the update), the grow-day in progress stands in for it."""
+        before's: until the first lights-on that keeps it (the update), the grow-day in progress stands in for it,
+        but only once its P1 is over. In P0 or P1 its peak is part of a morning and would pull both down."""
         today = st.get("peak") or 0.0
         prev = st.get("peak_prev")
-        seen = [v for v in (today, prev) if v is not None and v > 0.0]
-        if not seen:
-            return None, None
-        return max(seen), (prev if prev is not None and prev > 0.0 else today)
+        if prev is None or prev <= 0.0:
+            if today <= 0.0 or st.get("phase") in ("P0", "P1"):
+                return None, None
+            return today, today
+        return max(today, prev), prev
 
     def _follow_fc(self, room, zone, p, now):
         """The zone's setpoints follow its own highest readings -> True when anything was written.
@@ -3890,7 +3892,9 @@ class Controller:
             new_phase, why = "P0", "a new grow-day (no moisture reading)"
         if new_phase and new_phase != st["phase"]:
             if new_phase == "P0":
-                st["daily_vol"], st["shots"] = 0.0, 0
+                if (st.get("peak") or 0.0) > 0.0:  # the grow-day ending: tomorrow's P1 target (_vwc_maxima)
+                    st["peak_prev"] = st["peak"]
+                st["daily_vol"], st["shots"], st["peak"] = 0.0, 0, 0.0  # _snapshot takes the peak from the next reading
                 st["ec_offset"], st["last_ec_steer"] = 0.0, None
                 st["ec_integral"], st["ec_prev_err"] = 0.0, 0.0
                 st["last_daily_reset"] = gds

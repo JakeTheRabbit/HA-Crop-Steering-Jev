@@ -128,6 +128,29 @@ def test_lights_on_keeps_the_grow_days_peak_as_the_day_befores(rig):  # noqa: F8
     assert st["phase"] == "P0" and st["peak_prev"] == 71.48 and st["peak"] == 40.0
 
 
+def test_a_zone_on_the_blind_path_keeps_its_grow_days_peak_at_lights_on_too(rig):  # noqa: F811
+    c, fake, room = rig
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    _room(fake, room, now, vwc=40.0)
+    for zone in (1, 2):
+        room.state[zone].update(phase="P3", peak=71.48, last_daily_reset=date(2026, 9, 22))
+    fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")  # no reading: the blind path
+    c._loop_room(room, now)
+    st = room.state[1]
+    assert st["phase"] == "P0" and st["peak_prev"] == 71.48 and st["peak"] == 0.0
+
+
+def test_an_update_in_p0_or_p1_waits_for_the_ramp_before_the_grow_day_stands_in(rig):  # noqa: F811
+    c, fake, room = rig
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    _room(fake, room, now)
+    for phase in ("P0", "P1"):  # updated after lights-on: the peak is only this morning's so far
+        room.state[1].update(phase=phase, peak=47.5, peak_prev=None)
+        assert c._vwc_maxima(room.state[1]) == (None, None)
+    room.state[1].update(phase="P2", peak=72.8)  # the ramp is done: the grow-day's peak stands in
+    assert c._vwc_maxima(room.state[1]) == (72.8, 72.8)
+
+
 def test_the_learner_never_writes_the_p1_target_or_field_capacity(rig):  # noqa: F811
     c, fake, room = rig
     now = Clock.instant = Clock(2026, 9, 23, 14, 0)
