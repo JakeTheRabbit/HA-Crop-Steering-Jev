@@ -67,12 +67,24 @@ def _zone(fake, room, now, zone=1):
     room.state[zone].update(phase="P2", last_shot=now - timedelta(minutes=30), last_daily_reset=date(2026, 9, 23))
 
 
+LADDER = ("field_capacity", "p1_target_vwc", "p2_vwc_threshold", "p3_emergency_vwc_threshold")
+
+
+def _writes(fake, zone=1):
+    """{suffix: [values written]} for the zone's four VWC setpoints."""
+    out = {s: [] for s in LADDER}
+    for dom, svc, d in fake.calls:
+        for s in LADDER:
+            if (dom, svc) == ("number", "set_value") and d.get("entity_id") == f"number.crop_steering_zone_{zone}_{s}":
+                out[s].append(d["value"])
+    return out
+
+
 def _fc_writes(fake, zone=1):
-    return [d["value"] for dom, svc, d in fake.calls
-            if (dom, svc) == ("number", "set_value") and d.get("entity_id") == f"number.crop_steering_zone_{zone}_field_capacity"]
+    return _writes(fake, zone)["field_capacity"]
 
 
-def test_the_loop_raises_field_capacity_to_what_the_sensor_settles_at(rig):  # noqa: F811
+def test_the_loop_raises_field_capacity_and_moves_everything_under_it(rig):  # noqa: F811
     c, fake, room = rig
     fake.set_state("switch.crop_steering_auto_setpoints", "on")
     now = Clock.instant = Clock(2026, 9, 23, 14, 0)
@@ -80,7 +92,9 @@ def test_the_loop_raises_field_capacity_to_what_the_sensor_settles_at(rig):  # n
         _zone(fake, room, now, zone)
         probe(fake, zone, 67.5)  # 30 minutes after its last shot: settled, and 13.5 over field capacity
     c._loop_room(room, now)
-    assert _fc_writes(fake, 1) == [67.5]
+    # the P1 target, the P2 re-water threshold and the rescue (P3 emergency) floor move the same 13.5 points
+    assert _writes(fake, 1) == {"field_capacity": [67.5], "p1_target_vwc": [65.5], "p2_vwc_threshold": [41.0],
+                                "p3_emergency_vwc_threshold": [33.5]}
 
 
 def test_before_anything_is_tracked_the_last_plateau_seeds_it(rig):  # noqa: F811
@@ -93,7 +107,9 @@ def test_before_anything_is_tracked_the_last_plateau_seeds_it(rig):  # noqa: F81
         probe(fake, zone, 45.0)
     room.state[1]["plateau_hist"] = [{"date": "2026-09-22", "value": 67.98, "how": "engine", "shots": 2}]
     c._loop_room(room, now)
-    assert _fc_writes(fake, 1) == [68.0]
+    # zone 2 on 6 Oct: 54 -> 68, so 52 -> 66, 27.5 -> 41.5, 20 -> 34
+    assert _writes(fake, 1) == {"field_capacity": [68.0], "p1_target_vwc": [66.0], "p2_vwc_threshold": [41.5],
+                                "p3_emergency_vwc_threshold": [34.0]}
 
 
 def test_a_zone_watering_without_its_probe_still_follows_the_sensor(rig):  # noqa: F811
@@ -106,7 +122,73 @@ def test_a_zone_watering_without_its_probe_still_follows_the_sensor(rig):  # noq
     room.state[1]["learn"]["full_prev"] = 67.98  # what the probe settled at before it was set aside
     fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")  # no reading: the blind path
     c._loop_room(room, now)
-    assert _fc_writes(fake, 1) == [68.0]
+    assert _writes(fake, 1) == {"field_capacity": [68.0], "p1_target_vwc": [66.0], "p2_vwc_threshold": [41.5],
+                                "p3_emergency_vwc_threshold": [34.0]}
+
+
+def test_the_learners_brake_moves_with_the_scale(rig):  # noqa: F811
+    c, fake, room = rig
+    fake.set_state("switch.crop_steering_auto_setpoints", "on")
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        _zone(fake, room, now, zone)
+        probe(fake, zone, 45.0)
+    learn = room.state[1]["learn"]
+    learn.update(full_prev=67.98, day_ceiling=50.0, p1_entry=48.1, peak=65.54)
+    fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")
+    c._loop_room(room, now)
+    # never above the peak the learner has seen, so it does not pull the target back the next pass
+    assert _writes(fake, 1)["p1_target_vwc"] == [65.5]
+    assert learn["day_ceiling"] == 63.5 and learn["p1_entry"] == 61.6  # the 13.5 points the target moved
+
+
+def test_a_drop_moves_everything_down(rig):  # noqa: F811
+    c, fake, room = rig
+    fake.set_state("switch.crop_steering_auto_setpoints", "on")
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        _zone(fake, room, now, zone)
+        fake.set_state(f"number.crop_steering_zone_{zone}_field_capacity", "70")
+        probe(fake, zone, 45.0)
+    room.state[1]["learn"]["full_prev"] = 65.0  # the probe now settles 5 points lower (reseated)
+    fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")
+    c._loop_room(room, now)
+    assert _writes(fake, 1) == {"field_capacity": [65.0], "p1_target_vwc": [47.0], "p2_vwc_threshold": [22.5],
+                                "p3_emergency_vwc_threshold": [15.0]}
+
+
+def test_a_small_move_or_one_from_the_target_floor_moves_field_capacity_only(rig):  # noqa: F811
+    c, fake, room = rig
+    fake.set_state("switch.crop_steering_auto_setpoints", "on")
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        _zone(fake, room, now, zone)
+        probe(fake, zone, 45.0)
+    fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")
+    fake.set_state("sensor.crop_steering_vwc_zone_2", "unavailable")
+    room.state[1]["learn"]["full_prev"] = 54.6  # 0.6 over: field capacity only
+    fake.set_state("number.crop_steering_zone_2_field_capacity", "50")  # under the target + 2 floor
+    room.state[2]["learn"]["full_prev"] = 45.0  # the sensor is under the floor: the floor sets it, nothing moves
+    c._loop_room(room, now)
+    assert _writes(fake, 1) == {"field_capacity": [54.6], "p1_target_vwc": [], "p2_vwc_threshold": [],
+                                "p3_emergency_vwc_threshold": []}
+    assert _writes(fake, 2) == {"field_capacity": [54.0], "p1_target_vwc": [], "p2_vwc_threshold": [],
+                                "p3_emergency_vwc_threshold": []}
+
+
+def test_a_move_that_would_invert_the_ladder_moves_field_capacity_only(rig):  # noqa: F811
+    c, fake, room = rig
+    fake.set_state("switch.crop_steering_auto_setpoints", "on")
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        _zone(fake, room, now, zone)
+        probe(fake, zone, 45.0)
+    fake.set_state("number.crop_steering_zone_1_p2_vwc_threshold", "68")  # already above the target
+    room.state[1]["learn"]["full_prev"] = 67.98
+    fake.set_state("sensor.crop_steering_vwc_zone_1", "unavailable")
+    c._loop_room(room, now)
+    assert _writes(fake, 1) == {"field_capacity": [68.0], "p1_target_vwc": [], "p2_vwc_threshold": [],
+                                "p3_emergency_vwc_threshold": []}
 
 
 def test_nothing_is_written_with_auto_setpoints_off(rig):  # noqa: F811
