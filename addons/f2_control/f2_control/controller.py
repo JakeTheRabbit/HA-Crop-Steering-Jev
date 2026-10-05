@@ -1870,13 +1870,16 @@ class Controller:
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
 
     def _fc_seen(self, st):
-        """The zone's measured full level (auto_setpoints.measured_full), or, before anything has been tracked (the
-        update that brings this in), the plateau its last grow-day recorded: the sensor's own reading either way."""
+        """The zone's measured full level (auto_setpoints.measured_full). Until a whole grow-day has been tracked (the
+        update that brings this in, at night, sees only the night's readings), the plateau its last grow-day recorded
+        stands in for the grow-day before: the sensor's own reading either way."""
         learn = st.get("learn") if isinstance(st.get("learn"), dict) else None
         seen = auto_setpoints.measured_full(learn) if learn else None
-        if seen is None:
+        if learn is None or learn.get("full_prev") is None:
             hist = [e for e in st.get("plateau_hist") or [] if isinstance(e, dict) and e.get("value")]
-            seen = float(hist[-1]["value"]) if hist else None
+            seed = float(hist[-1]["value"]) if hist else None
+            if seed is not None:
+                seen = seed if seen is None else max(seen, seed)
         return seen
 
     def _follow_fc(self, room, zone, p, now):

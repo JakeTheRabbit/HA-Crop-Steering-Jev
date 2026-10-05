@@ -112,6 +112,22 @@ def test_before_anything_is_tracked_the_last_plateau_seeds_it(rig):  # noqa: F81
                                 "p3_emergency_vwc_threshold": [34.0]}
 
 
+def test_installed_at_night_the_plateau_still_stands_in_for_yesterday(rig):  # noqa: F811
+    # The update lands at night: the first readings tracked are the night's (zone 2, 39.6 at 04:00 on 6 Oct). They
+    # must not hide yesterday's plateau until a whole grow-day has been tracked.
+    c, fake, room = rig
+    fake.set_state("switch.crop_steering_auto_setpoints", "on")
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    for zone in (1, 2):
+        _zone(fake, room, now, zone)
+        room.state[zone]["last_shot"] = now - timedelta(hours=7)  # settled: tracked tonight
+        probe(fake, zone, 39.6)
+    room.state[1]["plateau_hist"] = [{"date": "2026-09-22", "value": 67.98, "how": "engine", "shots": 2}]
+    c._loop_room(room, now)
+    assert room.state[1]["learn"]["full_day"] == 39.6
+    assert _writes(fake, 1)["field_capacity"] == [68.0]
+
+
 def test_a_zone_watering_without_its_probe_still_follows_the_sensor(rig):  # noqa: F811
     c, fake, room = rig
     fake.set_state("switch.crop_steering_auto_setpoints", "on")
