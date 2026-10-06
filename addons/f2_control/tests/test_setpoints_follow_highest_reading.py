@@ -8,7 +8,9 @@ determined by reaching the p1 target, giving an extra shot, if it doesnt rise mo
 more, do another shot until it stops rising". So:
   - at lights-on the grow-day's peak (the highest VWC since the last lights-on) is kept as the day before's;
   - field capacity = the higher of today's peak and the day before's; the P1 target = the day before's, with no
-    limit on how far it moves; the re-water threshold and the rescue floor move with field capacity;
+    limit on how far it moves; the re-water threshold and the rescue floor move with field capacity, within each
+    number's own min and max, the ladder written so it holds after every write; nothing is written until a
+    lights-on has kept a day before;
   - the learner writes neither; the P1 rule (core.decide) is fed the latch, the peak before each P1 shot and the
     count of shots after the target.
 Numbers: F2 zone 2 and zone 3 on 6 Oct 2026 (their 5 Oct peaks 71.48 and 73.4).
@@ -45,15 +47,48 @@ def _room(fake, room, now, vwc=45.0):
         probe(fake, zone, vwc)
 
 
-def test_before_the_first_lights_on_the_grow_day_in_progress_stands_in_for_the_day_before(rig):  # noqa: F811
+def test_until_a_lights_on_keeps_a_day_before_nothing_is_written(rig):  # noqa: F811
     c, fake, room = rig
     now = Clock.instant = Clock(2026, 9, 23, 14, 0)
     _room(fake, room, now)
-    room.state[1]["peak"] = 71.48  # zone 2's highest reading since lights-on
+    for phase in ("P0", "P1", "P2", "P3"):  # updated mid-grow-day: today's peak is no stand-in for the day before
+        room.state[1].update(phase=phase, peak=51.39, peak_prev=None)
+        assert c._vwc_maxima(room.state[1]) == (None, None)
+    room.state[1].update(phase="P2", peak=51.39)  # 6 Oct: zone 2's ramp stopped at its shot limit
     c._loop_room(room, now)
-    # 68 -> 71.5 is 3.5 points: the re-water threshold and the rescue floor move the same 3.5
-    assert _writes(fake, 1) == {"field_capacity": [71.5], "p1_target_vwc": [71.5], "p2_vwc_threshold": [45.0],
-                                "p3_emergency_vwc_threshold": [37.5]}
+    assert _writes(fake, 1) == {s: [] for s in LADDER}  # field capacity stays 68, never follows a short ramp down
+
+
+def test_a_floor_under_the_numbers_own_minimum_stops_there_and_a_falling_ladder_moves_from_the_bottom(rig):  # noqa: F811
+    c, fake, room = rig
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    _room(fake, room, now)
+    _ladder(fake, 1, 71.5, 71.5, 45.5, 38.0)  # zone 2 on 6 Oct, its day before 71.48
+    fake.set_state("number.crop_steering_zone_1_p3_emergency_vwc_threshold", "38.0", {"min": 20.0, "max": 65.0})
+    room.state[1].update(peak=35.0, peak_prev=51.39)  # the next lights-on: that day's ramp stopped at 51.4
+    c._loop_room(room, now)
+    # 71.5 -> 51.4 is 20.1 down: the floor would be 17.9, under the number's own minimum, so it stops at 20
+    assert _writes(fake, 1) == {"field_capacity": [51.4], "p1_target_vwc": [51.4], "p2_vwc_threshold": [25.4],
+                                "p3_emergency_vwc_threshold": [20.0]}
+    order = [d["entity_id"].rsplit("zone_1_", 1)[1] for dom, svc, d in fake.calls
+             if (dom, svc) == ("number", "set_value") and d["entity_id"].rsplit("zone_1_", 1)[-1] in LADDER]
+    assert order == ["p3_emergency_vwc_threshold", "p2_vwc_threshold", "p1_target_vwc", "field_capacity"]
+
+
+def test_a_refused_write_stops_the_rest_so_the_ladder_is_never_left_inverted(rig, monkeypatch):  # noqa: F811
+    c, fake, room = rig
+    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
+    _room(fake, room, now)
+    _ladder(fake, 1, 71.5, 71.5, 45.5, 38.0)
+    room.state[1].update(peak=35.0, peak_prev=51.39)
+    refused = "number.crop_steering_zone_1_p2_vwc_threshold"
+    monkeypatch.setattr(controller, "ha_call",
+                        lambda domain, service, **data: data.get("entity_id") != refused and fake.ha_call(
+                            domain, service, **data))
+    c._loop_room(room, now)
+    # the floor moved first; the threshold was refused, so the P1 target and field capacity wait for the next loop
+    assert _writes(fake, 1) == {"field_capacity": [], "p1_target_vwc": [], "p2_vwc_threshold": [],
+                                "p3_emergency_vwc_threshold": [17.9]}
 
 
 def test_the_p1_target_is_the_day_befores_peak_and_field_capacity_the_higher_of_both(rig):  # noqa: F811
@@ -138,17 +173,6 @@ def test_a_zone_on_the_blind_path_keeps_its_grow_days_peak_at_lights_on_too(rig)
     c._loop_room(room, now)
     st = room.state[1]
     assert st["phase"] == "P0" and st["peak_prev"] == 71.48 and st["peak"] == 0.0
-
-
-def test_an_update_in_p0_or_p1_waits_for_the_ramp_before_the_grow_day_stands_in(rig):  # noqa: F811
-    c, fake, room = rig
-    now = Clock.instant = Clock(2026, 9, 23, 14, 0)
-    _room(fake, room, now)
-    for phase in ("P0", "P1"):  # updated after lights-on: the peak is only this morning's so far
-        room.state[1].update(phase=phase, peak=47.5, peak_prev=None)
-        assert c._vwc_maxima(room.state[1]) == (None, None)
-    room.state[1].update(phase="P2", peak=72.8)  # the ramp is done: the grow-day's peak stands in
-    assert c._vwc_maxima(room.state[1]) == (72.8, 72.8)
 
 
 def test_the_learner_never_writes_the_p1_target_or_field_capacity(rig):  # noqa: F811
