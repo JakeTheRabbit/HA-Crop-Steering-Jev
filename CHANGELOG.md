@@ -9,6 +9,30 @@ notes**, the entity- and code-level detail for developers and AI agents working 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.11.1] - 2026-10-06
+
+Pair: **controller 3.11.1**. Class **C3**. One pull request, #42, the fix to 3.11.0's first live afternoon on F2
+(6 October 2026), which left zone 2 with its re-water point under its rescue floor. The controller changes; the
+integration carries the version and What's new.
+
+### 🌱 In plain English
+
+- **The four moisture setpoints stay in line.** When field capacity falls, the re-water point and the rescue floor
+  fall with it. A value under the lowest a setting allows is now held at that lowest value, and the four are written
+  in an order that keeps them in line after every write. On 6 October zone 2's new rescue floor, 17.9, was refused
+  under its minimum of 20 after its re-water point had already moved to 25.4.
+- **Nothing moves until a lights-on has kept the day before's highest reading.** Updated after lights-on, 3.11.0
+  used the day in progress instead, and zone 2's field capacity followed a ramp that had stopped at its shot limit
+  down from 67.5 to 51.4.
+
+### 🔧 Technical notes
+
+- Controller (#42): `_follow_fc` clamps each value to `setpoint_supervisor.BOUNDS` and to the per-zone number's own
+  `min` and `max`; it writes top-down when field capacity rises and bottom-up when it falls, and the first refused
+  write stops the rest. `_auto_write` returns whether it wrote and records its de-duplication only on success.
+  `_vwc_maxima` has no stand-in: `(None, None)` until `peak_prev` exists.
+- No state-file, option or entity change.
+
 ## [3.11.0] - 2026-10-06
 
 Pair: **controller 3.11.0**. Class **C3**. One pull request, #40, the owner's rules for a zone's P1 and its setpoints

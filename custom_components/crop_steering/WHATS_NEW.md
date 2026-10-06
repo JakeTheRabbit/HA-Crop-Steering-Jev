@@ -19,6 +19,12 @@ for the people who build the system:
 `tests/test_whats_new.py` checks the shape and the plain words, and that the newest section is the
 version being released.
 
+## 3.11.1 - 2026-10-06
+
+- The re-water point and the rescue floor now always stay in the right order under field capacity, even when they all move down together.
+- After an update, the targets wait for the next lights-on before they follow the highest reading.
+- Bug fixes and improvements.
+
 ## 3.11.0 - 2026-10-06
 
 - Each morning a zone's P1 target is its highest reading of the day before, with no limit on how far it moves.

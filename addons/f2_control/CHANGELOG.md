@@ -1,3 +1,7 @@
+# 3.11.1
+
+Pair with integration 3.11.1. **C3.** The ladder fix (#42). The four setpoints that follow the zone's highest readings stay inside each number's own min and max as well as the engine's bounds, are written top-down when field capacity rises and bottom-up when it falls, and a refused write stops the rest, so the ladder never inverts (6 Oct: F2 zone 2's floor of 17.9 was refused under 20 after its threshold had moved). Nothing moves until a lights-on has kept a day before (`peak_prev`): the day in progress is no stand-in. No state-file change.
+
 # 3.11.0
 
 Pair with integration 3.11.0. **C3.** The owner's P1 rules (#40). The P1 target is the zone's highest reading of the grow-day before (zone key `peak_prev`, kept at lights-on), with no 2-points-a-day limit; field capacity is the higher of today's and the day before's highest readings, and the re-water threshold and rescue floor move with it. P1 ends when a shot at the target no longer raises the zone's highest reading by 0.5 (the engine's `p1_extra` shots), or at the maximum shots; pore EC no longer holds P1 open. A zone on the blind path keeps its peak at lights-on too; until the first lights-on after the update, the grow-day in progress stands in for the day before only once its P1 is over. The learner writes neither the P1 target nor field capacity. New zone keys `peak_prev`, `p1_reached`, `p1_peak_before`, `p1_extra`; a 3.10.0 state file loads with them empty, and 3.10.0 ignores them after a rollback.
