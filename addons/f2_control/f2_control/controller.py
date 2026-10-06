@@ -1896,19 +1896,18 @@ class Controller:
         ha_set(f"sensor.crop_steering_{room.prefix}zone_{zone}_auto_setpoints", state, attrs)
 
     def _vwc_maxima(self, st):
-        """-> (field capacity, P1 target) from the zone's highest readings, or (None, None) with no reading yet.
+        """-> (field capacity, P1 target) from the zone's highest readings, or (None, None) until a lights-on has
+        kept a day before.
 
         `peak` is the highest VWC since this grow-day's lights-on (the engine's own daily peak); `peak_prev` is the
-        grow-day before's, kept at lights-on. Field capacity is the higher of the two. The P1 target is the day
-        before's: until the first lights-on that keeps it (the update), the grow-day in progress stands in for it,
-        but only once its P1 is over. In P0 or P1 its peak is part of a morning and would pull both down."""
-        today = st.get("peak") or 0.0
+        grow-day before's, kept at lights-on. Field capacity is the higher of the two; the P1 target is the day
+        before's. Until the first lights-on after the update keeps one, nothing is written: the grow-day in progress
+        is no stand-in for it (6 Oct 2026, updated after lights-on: F2 zone 2's ramp stopped at its shot limit at
+        51.4, and field capacity followed it down from 67.5)."""
         prev = st.get("peak_prev")
         if prev is None or prev <= 0.0:
-            if today <= 0.0 or st.get("phase") in ("P0", "P1"):
-                return None, None
-            return today, today
-        return max(today, prev), prev
+            return None, None
+        return max(st.get("peak") or 0.0, prev), prev
 
     def _follow_fc(self, room, zone, p, now):
         """The zone's setpoints follow its own highest readings -> True when anything was written.
@@ -1923,8 +1922,12 @@ class Controller:
             emergency) floor move by the same points, so the dryback under full keeps its size. Jev's Setpoints judge
             takes a moved threshold as the new centre of its range (jev_bridge).
         Nothing is written that would leave the ladder inverted (rescue + 3 <= threshold < P1 target <= field
-        capacity): then field capacity alone moves if that is valid, else nothing. Within the engine's bounds. Runs for
-        every zone, its probe trusted or not, under the room's Auto setpoints switch, never while a grow plan owns it."""
+        capacity): then field capacity alone moves if that is valid, else nothing. Within the engine's bounds and each
+        number's own min and max, which Home Assistant enforces (6 Oct 2026: a rescue floor of 17.9 was refused under
+        the entity's 20, after the threshold had already moved, and zone 2's ladder was left inverted). The ladder is
+        written from the top when it moves up and from the bottom when it moves down, so it holds after every write,
+        and a refused write stops the rest. Runs for every zone, its probe trusted or not, under the room's Auto
+        setpoints switch, never while a grow plan owns it."""
         if not self._on(f"switch.crop_steering_{room.prefix}auto_setpoints", False):
             return False
         if getattr(room, "strategy_required", False):
@@ -1933,21 +1936,35 @@ class Controller:
         seen, yday = self._vwc_maxima(st)
         if seen is None:
             return False
-        lo_hi = setpoint_supervisor.BOUNDS
-        fc = round(max(lo_hi["field_capacity"][0], min(lo_hi["field_capacity"][1], seen)), 1)
-        target = round(max(lo_hi["p1_target_vwc"][0], min(lo_hi["p1_target_vwc"][1], yday, fc)), 1)
+
+        def bounded(suffix, value):
+            lo, hi = setpoint_supervisor.BOUNDS[suffix]
+            attrs = ha_get(f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}")[1] or {}
+            try:
+                lo = max(lo, float(attrs["min"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+            try:
+                hi = min(hi, float(attrs["max"]))
+            except (KeyError, TypeError, ValueError):
+                pass
+            return round(max(lo, min(hi, value)), 1)
+
+        fc = bounded("field_capacity", seen)
+        target = bounded("p1_target_vwc", min(yday, fc))
         thr = self._zone_num(room, zone, "p2_vwc_threshold", None, optional=True)
         if thr is None:
             return False
         delta = round(fc - p.field_capacity, 1)
         new_thr, rescue = thr, p.p3_emergency_floor
         if abs(delta) >= FC_SHIFT_MIN:
-            new_thr = round(max(lo_hi["p2_vwc_threshold"][0], min(lo_hi["p2_vwc_threshold"][1], thr + delta)), 1)
-            rescue = round(max(lo_hi["p3_emergency_vwc_threshold"][0],
-                               min(lo_hi["p3_emergency_vwc_threshold"][1], p.p3_emergency_floor + delta)), 1)
+            new_thr = bounded("p2_vwc_threshold", thr + delta)
+            rescue = bounded("p3_emergency_vwc_threshold", p.p3_emergency_floor + delta)
         if rescue + 3.0 <= new_thr < target <= fc:
             writes = [("field_capacity", p.field_capacity, fc), ("p1_target_vwc", p.p1_target, target),
                       ("p2_vwc_threshold", thr, new_thr), ("p3_emergency_vwc_threshold", p.p3_emergency_floor, rescue)]
+            if delta < 0:
+                writes.reverse()
         elif p.p3_emergency_floor + 3.0 <= thr < p.p1_target <= fc:
             writes = [("field_capacity", p.field_capacity, fc)]
         else:
@@ -1956,24 +1973,28 @@ class Controller:
         wrote = False
         for suffix, old, value in writes:
             if abs(value - old) >= 0.05:
-                self._auto_write(room, zone, suffix, old, value, learn, now, by="auto (highest reading)")
+                if not self._auto_write(room, zone, suffix, old, value, learn, now, by="auto (highest reading)"):
+                    return wrote  # refused: what is still to move waits for the next loop, the ladder holds
                 wrote = True
         return wrote
 
     def _auto_write(self, room, zone, suffix, old, value, learn, now, by="auto"):
+        """Write one per-zone number -> False when it was not written (no such number, or Home Assistant refused)."""
         entity = f"number.crop_steering_{room.prefix}zone_{zone}_{suffix}"
         if ha_get(entity)[0] in (None, "unknown", "unavailable", ""):
-            return  # no per-zone number on this install: room-level values are the operator's, never ours
+            return False  # no per-zone number on this install: room-level values are the operator's, never ours
         written = room.__dict__.setdefault("_auto_written", {})
         last = written.get((zone, suffix))
         if last and last[0] == value and (now - last[1]).total_seconds() < 300:
-            return  # HA has not reflected the last write yet: do not spam it
+            return True  # HA has not reflected the last write yet: do not spam it
+        if not ha_call("number", "set_value", entity_id=entity, value=value):
+            return False
         written[(zone, suffix)] = (value, now)
-        ha_call("number", "set_value", entity_id=entity, value=value)
         learn["last_change"] = f"{now.strftime('%H:%M')} {suffix} {old:g} -> {value:g}"
         tag = "" if room.prefix == "" else f"{room.slug} "
         self._activity.insert(0, f"{now.strftime('%H:%M')} {tag}Z{zone} {by} {suffix} {old:g} -> {value:g}"[:120])
         log(f"[{room.slug}] Z{zone} {by} {suffix} {old:g} -> {value:g}")
+        return True
 
     # ---------- room status (On / Off) ----------
     def _room_active(self, room):
