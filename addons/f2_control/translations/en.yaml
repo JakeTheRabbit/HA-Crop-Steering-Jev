@@ -109,6 +109,23 @@ configuration:
     description: >-
       Route the Jev calls through an AI Gateway (for logs and rate limits), e.g. default.
       Leave blank to call Workers AI directly.
+  claude_base_url:
+    name: Claude endpoint (judge, tried first)
+    description: >-
+      An Anthropic-compatible endpoint that answers /v1/messages, e.g. https://api.anthropic.com or
+      a 9router on your network such as http://192.168.1.10:20128. With this and the key below set,
+      Claude is the judge and is tried before TypeSafe and Cloudflare. Leave blank to use those alone.
+  claude_api_key:
+    name: Claude API key
+    description: >-
+      The API key the endpoint above takes (an Anthropic key, or a 9router client key). Stored as a
+      password. Irrigation never waits on this call: if the endpoint does not answer, the next route
+      is tried and the controller carries on without a verdict.
+  claude_model:
+    name: Claude model
+    description: >-
+      The model id as the endpoint names it: claude-haiku-5-5 (default) at Anthropic, or e.g.
+      cc/claude-haiku-5-5 through a 9router.
   typesafe_api_key:
     name: TypeSafe API key (Jev, direct)
     description: >-

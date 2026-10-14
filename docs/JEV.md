@@ -90,10 +90,12 @@ In a room without the judge, the learner also owns the re-water threshold.
 
 ## Failing safe
 
-Jev is optional at every level: no TypeSafe key and no Cloudflare credentials, `jev_enabled` off, a judge left out of
+Jev is optional at every level: no Claude endpoint, no TypeSafe key and no Cloudflare credentials, `jev_enabled` off, a judge left out of
 `jev_judges`, the daily budget spent, every route down, or an answer that fails to parse: each means that judge's
-decisions are the base engine's, unchanged. Jev is reached over every route it has, TypeSafe direct first and then
-Cloudflare's `/ai/run`; each is tried up to `jev_retries` times inside 60 seconds while its failure may pass (a busy
+decisions are the base engine's, unchanged. The judge is reached over every route it has: Claude (Haiku unless
+`claude_model` says otherwise) at `claude_base_url` first, then TypeSafe direct, then Cloudflare's `/ai/run`. Claude
+is asked the same questions in the same words and answers through one strict tool in the same shape TypeSafe
+answers in, so every judge, the council and the envelope read the two alike. Each route is tried up to `jev_retries` times inside 60 seconds while its failure may pass (a busy
 or failing server, a timeout), and a refused key moves straight on. A question that waited more than five minutes
 behind failing calls is dropped unasked, because its evidence is stale, and an answer is as old as its question.
 When an answer that did not act is unsure (under `jev_unsure_below`, or two phrasings that disagree), Jev is asked
@@ -108,8 +110,9 @@ Add-on options (the controller app):
 
 | Option | Default | What it does |
 |---|---|---|
-| `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Tried first when set; Cloudflare, when set too, is the second route. |
-| `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Or Jev through Cloudflare Workers AI: the account, a token with Workers AI access, and the AI Gateway (optional). With neither a TypeSafe key nor these, Jev is off. |
+| `claude_base_url`, `claude_api_key`, `claude_model` | empty, empty, `claude-haiku-5-5` | Claude as the judge: an Anthropic-compatible endpoint that answers `/v1/messages` (`https://api.anthropic.com`, or a 9router on the LAN such as `http://192.168.1.10:20128`), its API key, and the model id as that endpoint names it (`cc/claude-haiku-5-5` through a 9router). Tried first when the endpoint and key are set. |
+| `typesafe_api_key` | empty | A TypeSafe API key (`apikey_...`): Jev straight from TypeSafe (`api.typesafe.ai/v1/systemone`, model `jev-latest`). Tried after Claude when set; Cloudflare, when set too, is the route after that. |
+| `cf_account_id`, `cf_api_token`, `cf_gateway_id` | empty | Or Jev through Cloudflare Workers AI: the account, a token with Workers AI access, and the AI Gateway (optional). With no Claude endpoint, no TypeSafe key and none of these, the judge is off. |
 | `jev_enabled` | on | Off runs the plain engine even with Cloudflare set. |
 | `jev_judges` | all | The judges that may act, e.g. `dawn,ramp,salt,dusk,probe,shot,night,zones,stage,setpoints,alerts`. Setpoints also needs the room's **Auto setpoints** switch on; while it runs, it owns the P2 shot size and re-water threshold, and the base engine's own Auto Setpoints learner the P1 target and field capacity. |
 | `jev_daily_calls` | 5000 | The day's call budget across rooms. |

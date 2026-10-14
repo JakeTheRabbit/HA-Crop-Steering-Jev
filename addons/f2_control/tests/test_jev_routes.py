@@ -175,3 +175,130 @@ def test_an_answer_is_as_old_as_its_question():
     asked = now["t"]
     assert a.submit("k", {}, {}) and a.result("k").at == asked
 
+
+
+# ---------------------------------------------------------------------- Claude (Haiku) as the judge
+CHOICE = {"type": "choice", "instructions": "Did the shot land?",
+          "criteria": {"landed": "rose and held", "not_reaching_zone": "no rise, no EC move", "insufficient_evidence": "no"}}
+NOUL = {"type": "noul", "instructions": "Is the probe believable?", "criteria": {"true": "tracks water", "false": "flat"}}
+SCORE = {"type": "score", "instructions": "How stacked is pore EC?", "criteria": ["under", "in band", "over"]}
+QUESTIONS = {"landing__v0": CHOICE, "landing__v1": CHOICE, "probe__v0": NOUL, "salt__v0": SCORE}
+
+
+def _claude_reply(answers, usage=None):
+    body = {"content": [{"type": "text", "text": ""}, {"type": "tool_use", "name": "answer", "input": answers}],
+            "stop_reason": "tool_use", "usage": usage or {"input_tokens": 5400, "output_tokens": 240}}
+
+    class Resp:
+        status_code, text = 200, json.dumps(body)
+
+        @staticmethod
+        def json():
+            return body
+
+    return Resp
+
+
+def _requests(resp, posts):
+    class Requests:
+        @staticmethod
+        def post(url, json=None, headers=None, timeout=None):
+            posts.append((url, json, headers, timeout))
+            return resp
+
+    return Requests
+
+
+def test_claude_is_asked_through_one_strict_tool_and_answers_in_typesafes_shape(monkeypatch):
+    posts = []
+    reply = _claude_reply({
+        "landing__v0": {"choice": "landed", "probabilities": {"landed": 0.8, "not_reaching_zone": 0.1, "insufficient_evidence": 0.1}, "confidence": 0.8},
+        "landing__v1": {"choice": "landed", "probabilities": {"landed": 0.9, "not_reaching_zone": 0.05, "insufficient_evidence": 0.05}, "confidence": 0.85},
+        "probe__v0": {"noul": 0.92},
+        "salt__v0": {"score": 2, "probabilities": {"0": 0.05, "1": 0.15, "2": 0.8}, "confidence": 0.7},
+    })
+    monkeypatch.setattr(client, "requests", _requests(reply, posts))
+    answers, usage, error = client.call_claude("http://192.168.1.10:20128/", "sk-key", {"zone": "Zone 1"}, QUESTIONS,
+                                               gateway="cc/claude-haiku-5-5", timeout=20.0)
+    assert error is None and usage == {"input_tokens": 5400, "output_tokens": 240}
+    url, body, headers, timeout = posts[0]
+    assert url == "http://192.168.1.10:20128/v1/messages" and headers["x-api-key"] == "sk-key" and timeout == 20.0
+    assert body["model"] == "cc/claude-haiku-5-5" and body["stream"] is False
+    assert body["tool_choice"] == {"type": "tool", "name": "answer", "disable_parallel_tool_use": True}
+    tool = body["tools"][0]
+    assert tool["strict"] is True and tool["input_schema"]["required"] == list(QUESTIONS)
+    assert tool["input_schema"]["properties"]["landing__v0"]["properties"]["choice"]["enum"] == list(CHOICE["criteria"])
+    assert tool["input_schema"]["properties"]["salt__v0"]["properties"]["probabilities"]["required"] == ["0", "1", "2"]
+    assert json.loads(body["messages"][0]["content"]) == {"state": {"zone": "Zone 1"}, "questions": QUESTIONS}
+    # the council reads these exactly as it reads TypeSafe's
+    from jev.council import combine
+    landing = combine(answers, "landing")
+    assert landing.kind == "choice" and landing.label == "landed" and landing.agreed and landing.n == 2
+    assert round(landing.prob, 2) == 0.85 and landing.confidence == 0.8
+    assert combine(answers, "probe").label is True and combine(answers, "probe").prob == 0.92
+    assert combine(answers, "salt").label == 2 and combine(answers, "salt").prob == 0.8
+
+
+def test_the_default_model_is_haiku(monkeypatch):
+    posts = []
+    monkeypatch.setattr(client, "requests", _requests(_claude_reply({"probe__v0": {"noul": 0.5}}), posts))
+    assert client.call_claude("https://api.anthropic.com", "k", {}, {"probe__v0": NOUL})[2] is None
+    assert posts[0][1]["model"] == "claude-haiku-5-5" == client.CLAUDE_MODEL
+
+
+def test_claudes_answers_are_checked_and_normalised(monkeypatch):
+    """A choice outside the criteria is no answer; probabilities are made to sum to 1, or put on the choice when
+    Claude gave none; a noul is clamped to 0..1."""
+    reply = _claude_reply({
+        "landing__v0": {"choice": "flooded", "probabilities": {}, "confidence": 0.9},  # not a criteria key
+        "landing__v1": {"choice": "landed", "probabilities": {"landed": 2, "not_reaching_zone": 1, "insufficient_evidence": 1}, "confidence": 0.6},
+        "probe__v0": {"noul": 1.7},
+        "salt__v0": {"score": 1, "probabilities": None, "confidence": 0.75},
+    })
+    monkeypatch.setattr(client, "requests", _requests(reply, []))
+    answers, _usage, error = client.call_claude("http://x", "k", {}, QUESTIONS)
+    assert error is None and "landing__v0" not in answers
+    assert answers["landing__v1"]["probabilities"] == {"landed": 0.5, "not_reaching_zone": 0.25, "insufficient_evidence": 0.25}
+    assert answers["probe__v0"] == {"type": "noul", "noul": 1.0}
+    assert answers["salt__v0"]["probabilities"] == {"0": 0.0, "1": 0.75, "2": 0.0}
+
+
+def test_a_reply_without_the_tool_call_is_no_answer_and_not_retried(monkeypatch):
+    body = {"content": [{"type": "text", "text": "The shot landed."}], "stop_reason": "end_turn", "usage": {}}
+
+    class Resp:
+        status_code, text = 200, json.dumps(body)
+
+        @staticmethod
+        def json():
+            return body
+
+    monkeypatch.setattr(client, "requests", _requests(Resp, []))
+    assert client.call_claude("http://x", "k", {}, QUESTIONS)[2] == client.NO_TOOL_CALL
+    assert not retryable(client.NO_TOOL_CALL)
+
+
+def test_claude_http_errors_read_like_the_other_routes(monkeypatch):
+    class Resp:
+        status_code, text = 403, '{"error":{"message":"This API key is not allowed to use model \\"cc/claude-sonnet-4-6\\""}}'
+
+    monkeypatch.setattr(client, "requests", _requests(Resp, []))
+    error = client.call_claude("http://x", "k", {}, QUESTIONS)[2]
+    assert error.startswith("HTTP 403: ") and not retryable(error)
+    Resp.status_code = 503
+    assert retryable(client.call_claude("http://x", "k", {}, QUESTIONS)[2])
+
+
+def test_claude_is_the_first_route_when_its_endpoint_and_key_are_set():
+    import jev_bridge
+
+    opts = {"claude_base_url": "http://192.168.1.10:20128", "claude_api_key": "sk-key", "claude_model": "cc/claude-haiku-5-5",
+            "typesafe_api_key": "apikey_x"}
+    found = jev_bridge.routes(opts, ("acct", "tok", "gw"))
+    assert [r.name for r in found] == ["Claude", "TypeSafe", "Cloudflare"]
+    assert found[0].fn is client.call_claude and (found[0].account, found[0].token, found[0].gateway) == (
+        "http://192.168.1.10:20128", "sk-key", "cc/claude-haiku-5-5")
+    # an empty model means the client's default; half a Claude setting is no route at all
+    assert jev_bridge.routes({**opts, "claude_model": ""}, ("", "", ""))[0].gateway is None
+    assert [r.name for r in jev_bridge.routes({"claude_base_url": "http://x", "typesafe_api_key": "apikey_x"}, ("", "", ""))] == ["TypeSafe"]
+    assert [r.name for r in jev_bridge.routes({"claude_api_key": "sk", "typesafe_api_key": "apikey_x"}, ("", "", ""))] == ["TypeSafe"]

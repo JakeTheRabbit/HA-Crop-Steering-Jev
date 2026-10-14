@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timedelta
 
 from jev.brain import Brain
-from jev.client import Asker, Route, Routes, call, call_typesafe
+from jev.client import Asker, Route, Routes, call, call_claude, call_typesafe
 from jev.context import Shot, ZoneContext, ZoneHistory, response, words_response
 from jev.doctrine import stage_intent
 from jev.judges.dawn import DawnJudge
@@ -42,10 +42,15 @@ def judges():
 
 
 def routes(options, cf):
-    """Every route Jev has, in the order they are tried: TypeSafe direct when its key is set, then Cloudflare's
+    """Every route the judge has, in the order they are tried: Claude (Haiku unless `claude_model` says otherwise) at
+    `claude_base_url` when that and its key are set, then TypeSafe direct when its key is set, then Cloudflare's
     /ai/run when its account and token are."""
     account, token, gateway = cf
     found = []
+    base = str(options.get("claude_base_url") or "").strip()
+    key = str(options.get("claude_api_key") or "").strip()
+    if base and key:
+        found.append(Route("Claude", call_claude, base, key, str(options.get("claude_model") or "").strip() or None))
     typesafe = str(options.get("typesafe_api_key") or "").strip()
     if typesafe:
         found.append(Route("TypeSafe", call_typesafe, "typesafe", typesafe))
@@ -55,8 +60,9 @@ def routes(options, cf):
 
 
 def build(options, cf, state_path, log):
-    """The brain, or None when Jev is off (no route: no TypeSafe key and no Cloudflare credentials; or `jev_enabled`
-    false). Every route it has is used, TypeSafe first, each retried while a failure may pass (jev.client.Routes)."""
+    """The brain, or None when Jev is off (no route: no Claude endpoint, no TypeSafe key and no Cloudflare credentials;
+    or `jev_enabled` false). Every route it has is used, Claude first, each retried while a failure may pass
+    (jev.client.Routes)."""
     found = routes(options, cf)
     if options.get("jev_enabled", True) is False or not found:
         return None

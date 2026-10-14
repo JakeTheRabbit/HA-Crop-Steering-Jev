@@ -1,5 +1,5 @@
-"""Asking Jev (TypeSafe System One) without ever making the loop wait, over every route the app has to it:
-TypeSafe's own API and Cloudflare's AI REST API.
+"""Asking the judge without ever making the loop wait, over every route the app has to one: Claude (Haiku by
+default) at any Anthropic-compatible endpoint, TypeSafe's own API for Jev, and Cloudflare's AI REST API for Jev.
 
 `Asker.submit()` queues a question set and returns at once; a single background worker calls Jev and
 stores the answers under the caller's key. The control loop only ever reads `Asker.result()`: an answer
@@ -10,6 +10,7 @@ pass.
 """
 from __future__ import annotations
 
+import json
 import queue
 import threading
 import time
@@ -97,13 +98,163 @@ def call_typesafe(account, token, state, questions, gateway=None, timeout=20.0):
     return answers, usage, None
 
 
+CLAUDE_MODEL = "claude-haiku-5-5"
+CLAUDE_SYSTEM = (
+    "You are the judge inside a crop-steering irrigation controller for rockwool and coco. The user message is JSON "
+    "with STATE, the facts the controller computed (readings, comparisons, history), and QUESTIONS, each with its "
+    "instructions, the doctrine to judge by, and its criteria. Judge only from the facts given and the doctrine in each "
+    "question; invent nothing and do no arithmetic the facts have not already done. Answer every question by calling "
+    "the answer tool, and nothing else. A choice question: pick one criteria key, give every key a probability (they "
+    "sum to 1) and a confidence from 0 to 1; when the facts are insufficient, pick the key that says so where there is "
+    "one, and spread the probabilities. A noul question: the probability from 0 to 1 that criteria.true holds rather "
+    "than criteria.false. A score question: criteria lists the levels from 0 upward; give the level as score, a "
+    "probability per level (they sum to 1) and a confidence. Probabilities are calibrated beliefs: 0.9 means wrong one "
+    "time in ten. A question is asked in two phrasings on purpose; answer each on its own merits."
+)
+NO_TOOL_CALL = "no answer tool call in the response"
+
+
+def _probabilities(keys):
+    return {"type": "object", "additionalProperties": False, "required": keys,
+            "properties": {k: {"type": "number"} for k in keys}}
+
+
+def answer_tool(questions):
+    """The strict tool Claude answers with: one property per question, shaped like TypeSafe's answer to that kind of
+    question (council.combine reads both alike)."""
+    props = {}
+    for name, q in questions.items():
+        kind, crit = q.get("type"), q.get("criteria")
+        if kind == "choice" and isinstance(crit, dict) and crit:
+            keys = [str(k) for k in crit]
+            props[name] = {"type": "object", "additionalProperties": False,
+                           "required": ["choice", "probabilities", "confidence"],
+                           "properties": {"choice": {"type": "string", "enum": keys},
+                                          "probabilities": _probabilities(keys), "confidence": {"type": "number"}}}
+        elif kind == "noul":
+            props[name] = {"type": "object", "additionalProperties": False, "required": ["noul"],
+                           "properties": {"noul": {"type": "number"}}}
+        elif kind == "score" and isinstance(crit, list) and crit:
+            levels = [str(i) for i in range(len(crit))]
+            props[name] = {"type": "object", "additionalProperties": False,
+                           "required": ["score", "probabilities", "confidence"],
+                           "properties": {"score": {"type": "number"}, "probabilities": _probabilities(levels),
+                                          "confidence": {"type": "number"}}}
+    return {"name": "answer", "description": "Your answer to every question, keyed by the question's name.",
+            "strict": True,
+            "input_schema": {"type": "object", "additionalProperties": False, "required": list(props),
+                             "properties": props}}
+
+
+def _unit(v, default):
+    try:
+        return min(1.0, max(0.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _weight(v):
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _spread(raw, keys, label, confidence):
+    """Probabilities over `keys` that sum to 1 (Claude's are read as weights); all on `label` when it gave none."""
+    probs = {k: _weight(raw.get(k) if isinstance(raw, dict) else None) for k in keys}
+    total = sum(probs.values())
+    if total <= 0:
+        return {k: (confidence if k == label else 0.0) for k in keys}
+    return {k: p / total for k, p in probs.items()}
+
+
+def _shape(q, a):
+    """One of Claude's answers in TypeSafe's shape, or None when it is not an answer to this question."""
+    if not isinstance(a, dict):
+        return None
+    kind, crit = q.get("type"), q.get("criteria")
+    if kind == "noul":
+        p = _unit(a.get("noul"), None)
+        return None if p is None else {"type": "noul", "noul": p}
+    if kind == "choice":
+        keys = [str(k) for k in crit] if isinstance(crit, dict) else []
+        label = str(a.get("choice"))
+        if label not in keys:
+            return None
+        conf = _unit(a.get("confidence"), 1.0)
+        return {"type": "choice", "choice": label, "probabilities": _spread(a.get("probabilities"), keys, label, conf),
+                "confidence": conf}
+    if kind == "score":
+        levels = [str(i) for i in range(len(crit))] if isinstance(crit, list) else []
+        try:
+            score = float(a.get("score"))
+        except (TypeError, ValueError):
+            return None
+        level = str(int(round(score)))
+        if level not in levels:
+            return None
+        conf = _unit(a.get("confidence"), 1.0)
+        return {"type": "score", "score": score, "probabilities": _spread(a.get("probabilities"), levels, level, conf),
+                "confidence": conf}
+    return None
+
+
+def parse_claude(payload, questions):
+    """Claude answers by calling the `answer` tool: (answers in TypeSafe's shape, usage). Anything else: (None, None)."""
+    content = payload.get("content") if isinstance(payload, dict) else None
+    if not isinstance(content, list):
+        return None, None
+    call = next((b for b in content if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "answer"),
+                None)
+    if call is None or not isinstance(call.get("input"), dict):
+        return None, None
+    answers = {}
+    for name, q in questions.items():
+        shaped = _shape(q, call["input"].get(name))
+        if shaped is not None:
+            answers[name] = shaped
+    if not answers:
+        return None, None
+    usage = payload.get("usage") or {}
+    return answers, {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")}
+
+
+def call_claude(base_url, token, state, questions, gateway=None, timeout=20.0):
+    """One evaluation by Claude at an Anthropic-compatible endpoint (`base_url`, e.g. a 9router or the Claude API
+    itself; `token` is its API key; `gateway` names the model, CLAUDE_MODEL when empty) -> (answers, usage, error).
+    Never raises. One try: Routes retries. The questions go in as TypeSafe sees them and the answers come back in
+    TypeSafe's shape, through one strict tool, so every judge reads them unchanged."""
+    if requests is None:
+        return None, None, NO_REQUESTS
+    headers = {"x-api-key": token, "anthropic-version": "2023-06-01", "accept": "application/json"}
+    body = {"model": gateway or CLAUDE_MODEL, "max_tokens": 2048, "stream": False, "system": CLAUDE_SYSTEM,
+            "tools": [answer_tool(questions)],
+            "tool_choice": {"type": "tool", "name": "answer", "disable_parallel_tool_use": True},
+            "messages": [{"role": "user", "content": json.dumps({"state": state, "questions": questions},
+                                                                 ensure_ascii=False, default=str)}]}
+    try:
+        resp = requests.post(base_url.rstrip("/") + "/v1/messages", json=body, headers=headers, timeout=timeout)
+    except Exception as e:  # noqa: BLE001 - a network fault of any kind is a missing answer
+        return None, None, f"{type(e).__name__}: {e}"[:200]
+    if resp.status_code != 200:
+        return None, None, f"HTTP {resp.status_code}: {resp.text[:160]}"
+    try:
+        answers, usage = parse_claude(resp.json(), questions)
+    except ValueError:
+        return None, None, NOT_JSON
+    if answers is None:
+        return None, None, NO_TOOL_CALL
+    return answers, usage, None
+
+
 def retryable(error):
     """A rate limit, a server error or a network fault may pass, so it is worth another try. A refused key, a bad
     request or a reply that does not parse will not pass by waiting."""
     if error.startswith("HTTP "):
         code = error[5:8]
         return code == "429" or code.startswith("5")
-    return error not in (NO_REQUESTS, NOT_JSON, NO_ANSWERS)
+    return error not in (NO_REQUESTS, NOT_JSON, NO_ANSWERS, NO_TOOL_CALL)
 
 
 @dataclass

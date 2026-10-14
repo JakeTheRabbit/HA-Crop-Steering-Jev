@@ -196,7 +196,7 @@ Crop Steering comes in two parts, and automatic watering needs both. They carry 
 | **The controller app** | Home Assistant OS or Supervised, where it installs from the app store (amd64, aarch64 or armv7) and brings its own Python 3.12. Home Assistant Container and Core have no app store: there you run the controller yourself (see the [install guide](https://github.com/JakeTheRabbit/HA-Crop-Steering-Jev/blob/main/docs/INSTALL.md)). |
 | **HACS** | 1.6.0 or newer for the guided download, or copy `custom_components/crop_steering` into Home Assistant by hand. |
 | **Hardware** | A switch Home Assistant can control for each zone's valve (and your pump and main line, if you have them), and a moisture probe per zone. EC probes and tank sensors are optional but recommended. |
-| **A Jev key** (optional) | A TypeSafe API key, or a Cloudflare account with Workers AI. Without one, this is the original engine. |
+| **A judge key** (optional) | A Claude API key (Anthropic, or a 9router on your network, Haiku by default), a TypeSafe API key, or a Cloudflare account with Workers AI. Without one, this is the original engine. |
 | **AI assistant connector** (optional) | Node.js 22 or newer, on the computer that runs your AI assistant. |
 | **Account** | A Home Assistant administrator, to set up rooms and change plans. |
 
@@ -210,11 +210,12 @@ Crop Steering comes in two parts, and automatic watering needs both. They carry 
    [![Open your Home Assistant instance and start setting up Crop Steering.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=crop_steering)
 3. **Add the app repository**, then install **Crop Steering Controller (Jev)**. Do not start it yet.
    [![Open your Home Assistant instance and add this app repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FJakeTheRabbit%2FHA-Crop-Steering-Jev)
-4. **Give Jev a key.** In Settings → Apps → Crop Steering Controller (Jev) → Configuration, set either:
+4. **Give the judge a key.** In Settings → Apps → Crop Steering Controller (Jev) → Configuration, set one of:
+   - `claude_base_url` and `claude_api_key`: an Anthropic-compatible endpoint (`https://api.anthropic.com`, or a 9router on your network) and its key; `claude_model` is `claude-haiku-5-5` unless your endpoint names it differently (`cc/claude-haiku-5-5` through a 9router), or
    - `typesafe_api_key`: a TypeSafe API key (it starts with `apikey_`), or
    - `cf_account_id` and `cf_api_token`: your Cloudflare account ID and an API token with the **Workers AI** permission (dash.cloudflare.com → My Profile → API Tokens → Create Token → the Workers AI template).
 
-   Without either, the controller runs as the original engine and everything else still works.
+   With more than one set, Claude is tried first, then TypeSafe, then Cloudflare. Without any, the controller runs as the original engine and everything else still works.
 5. **Tell Jev when flowering started.** `jev_flower_start` is the room's first day of 12/12: a date such as `2026-08-22`, or an `input_datetime` helper. `jev_flower_days` is the cultivar's flowering length (56 unless you change it). This is how Jev knows today's stage.
 6. **Start the app**, then open **Crop Steering** in the sidebar. Map your valves, pump and probes in **Equipment › Setup**, check the readings in **Equipment › Probes**, and keep watering switched off until every probe reads correctly. Do a catch test.
 7. **Switch watering on** in the top bar. Jev joins in as each decision comes up. To let it tune setpoints as well, use **Turn auto on…** in **Plan › Targets**.

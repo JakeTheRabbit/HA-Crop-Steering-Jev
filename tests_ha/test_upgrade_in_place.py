@@ -285,6 +285,36 @@ async def test_3_8_0_app_options_keep_their_jev_budget_and_take_the_new_defaults
     assert (c.jev.asker.warn_pct, c.jev.asker.transport.tries) == (80, 3)
 
 
+async def test_claude_at_a_lan_endpoint_becomes_the_first_route_ahead_of_the_owners_typesafe_key(
+    hass, controller_for, monkeypatch
+):
+    """The 3.8.0 options plus the three Claude settings: the judge is asked at the LAN endpoint first and
+    TypeSafe stays as the route after it; the owner's budget and the other settings do not move."""
+    import functools
+
+    import jev_bridge
+    from jev.client import Asker, call_claude
+
+    monkeypatch.setattr(jev_bridge, "Asker", functools.partial(Asker, threaded=False))
+    await _upgrade(hass, "entry_2_17_wizard.json")
+    options = {
+        **fixture("options_3_8_0_f2.json")["options"],
+        "claude_base_url": "http://192.168.73.55:20128",
+        "claude_api_key": "sk-test",
+        "claude_model": "cc/claude-haiku-5-5",
+    }
+    c, _fake, _clock = controller_for(options)
+    assert c.jev is not None and c.jev.routes == ["Claude", "TypeSafe"]
+    first = c.jev.asker.transport.routes[0]
+    assert first.fn is call_claude
+    assert (first.account, first.token, first.gateway) == (
+        "http://192.168.73.55:20128",
+        "sk-test",
+        "cc/claude-haiku-5-5",
+    )
+    assert c.jev.asker.daily_budget == 2000
+
+
 # ------------------------------------------------------------------ an env-file era install
 async def test_an_env_era_install_with_only_front_and_back_probes_still_loads_and_fuses(
     hass,
